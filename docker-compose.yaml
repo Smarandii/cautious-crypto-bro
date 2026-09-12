@@ -16,7 +16,6 @@ services:
       context: .
       target: test
     profiles: ["test"]
-    command: ["/app/.venv/bin/pytest", "-v"]
 
 volumes:
   app_state:

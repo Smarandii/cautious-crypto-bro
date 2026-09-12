@@ -1,30 +1,29 @@
 # Cautious Crypto Bro
 
-Live Telegram trading ideas → structured `TradingIntent` → human approval → Bybit Demo order.
+Telegram → OpenRouter → `TradingIntent` → human approval → Bybit Demo.
 
 ## Run
 
 ```bash
 cp .env.example .env
-# Fill .env. TELEGRAM_SOURCE_CHANNELS is a JSON array, e.g. [-1002132062264]
+# Fill .env; TELEGRAM_SOURCE_CHANNELS is a JSON array.
 
-docker compose build
-docker compose --profile test run --rm --build test
-docker compose run --rm app   # first Telegram login / foreground run
-```
-
-After login:
-
-```bash
-docker compose up -d app
+docker compose run --rm app
+docker compose up -d --build app
 docker compose logs -f app
 ```
 
-Runtime state (Telethon session + SQLite) lives in the `app_state` Docker volume.
+## Verify
+
+```bash
+docker compose --profile test run --rm --build test
+docker compose run --rm -T --entrypoint /app/.venv/bin/python app scripts/smoke_bybit_trade.py --execute
+```
+
+The smoke command creates a real Demo order. Runtime state lives in the `app_state` Docker volume.
 
 ## Invariants
 
-- Demo trading only.
+- Bybit Demo only.
 - The LLM produces intents; only deterministic code places orders.
-- Missing or ambiguous trade parameters are rejected rather than invented.
-- Required intent fields: symbol, side, entry, stop loss, take profit.
+- Missing or ambiguous trade parameters are rejected.

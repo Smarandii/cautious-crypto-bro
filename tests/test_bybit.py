@@ -42,3 +42,25 @@ def test_clock_sync_compensates_for_local_drift() -> None:
         assert executor._clock_offset_ms == 19_000
     finally:
         executor.close()
+
+
+def test_auth_timestamp_applies_clock_offset() -> None:
+    executor = BybitDemoExecutor(
+        api_key="key",
+        api_secret="secret",
+        notional_usdt=100,
+    )
+
+    try:
+        executor._clock_offset_ms = 19_000
+
+        with (
+            patch.object(executor, "_sync_clock"),
+            patch(
+                "cautious_crypto_bro.bybit._wall_clock_ms",
+                return_value=100_000,
+            ),
+        ):
+            assert executor._auth_timestamp() == "119000"
+    finally:
+        executor.close()
