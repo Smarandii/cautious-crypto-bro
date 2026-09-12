@@ -1,6 +1,6 @@
 # Cautious Crypto Bro
 
-Telegram → OpenRouter → `TradingIntent` → human approval → Bybit Demo.
+Telegram text/images → OpenRouter → `TradingIntent` → human approval → Bybit Demo.
 
 ## Run
 
