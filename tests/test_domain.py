@@ -25,6 +25,7 @@ def test_valid_long_limit_intent() -> None:
         summary="Long BTC from support.", confidence=0.95,
     )
     assert intent.symbol == "BTCUSDT"
+    assert "status" not in intent.model_dump()
 
 
 def test_long_geometry_rejects_stop_above_entry() -> None:

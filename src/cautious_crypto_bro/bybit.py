@@ -261,8 +261,7 @@ class BybitDemoExecutor:
         self._sync_clock()
 
         return str(
-            int(time.time() * 1000)
-            + self._clock_offset_ms
+            _wall_clock_ms() + self._clock_offset_ms
         )
 
     def _private_post(

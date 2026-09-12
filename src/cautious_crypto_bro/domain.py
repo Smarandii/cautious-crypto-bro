@@ -100,7 +100,10 @@ class TradingIntent(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    status: IntentStatus = IntentStatus.PENDING
+    status: IntentStatus = Field(
+        default=IntentStatus.PENDING,
+        exclude=True,
+    )
 
     @model_validator(mode="after")
     def validate_trade_geometry(self) -> "TradingIntent":

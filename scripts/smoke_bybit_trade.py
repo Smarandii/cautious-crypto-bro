@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import httpx
 
-from cautious_crypto_bro.bybit import BybitDemoExecutor
+from cautious_crypto_bro.bybit import DEMO_BASE_URL, BybitDemoExecutor
 from cautious_crypto_bro.config import get_settings
 from cautious_crypto_bro.domain import (
     Entry,
@@ -16,9 +16,6 @@ from cautious_crypto_bro.domain import (
     SourceMessage,
     TradingIntent,
 )
-
-
-DEMO_BASE_URL = "https://api-demo.bybit.com"
 
 
 def current_price(symbol: str) -> Decimal:
