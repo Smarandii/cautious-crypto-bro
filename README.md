@@ -9,7 +9,7 @@ cp .env.example .env
 # Fill .env. TELEGRAM_SOURCE_CHANNELS is a JSON array, e.g. [-1002132062264]
 
 docker compose build
-docker compose --profile test run --rm test
+docker compose --profile test run --rm --build test
 docker compose run --rm app   # first Telegram login / foreground run
 ```
 
