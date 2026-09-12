@@ -39,6 +39,11 @@ class SourceMessage(BaseModel):
     def telegram_url(self) -> str | None:
         if self.channel_username:
             return f"https://t.me/{self.channel_username.lstrip('@')}/{self.message_id}"
+
+        channel_id = str(self.channel_id)
+        if channel_id.startswith("-100"):
+            return f"https://t.me/c/{channel_id[4:]}/{self.message_id}"
+
         return None
 
 
@@ -99,9 +104,8 @@ class TradingIntent(BaseModel):
 
     @model_validator(mode="after")
     def validate_trade_geometry(self) -> "TradingIntent":
-        normalized = self.symbol.upper().replace("/", "").replace("-", "")
-        object.__setattr__(self, "symbol", normalized)
-        if not normalized.endswith("USDT"):
+        self.symbol = self.symbol.upper().replace("/", "").replace("-", "")
+        if not self.symbol.endswith("USDT"):
             raise ValueError("MVP supports only USDT linear symbols")
 
         reference = self.entry.price

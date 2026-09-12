@@ -71,7 +71,6 @@ class ApprovalBot:
         if callback.from_user.id != self._approver_user_id:
             await callback.answer("Not authorized", show_alert=True)
             return
-        await callback.answer()
 
         intent_id = UUID(callback_data.intent_id)
         intent = await self._store.get_intent(intent_id)
@@ -91,6 +90,8 @@ class ApprovalBot:
             await callback.answer("Intent was already handled", show_alert=True)
             return
 
+        await callback.answer("Executing on Bybit Demo…")
+
         try:
             order_id = await self._executor.execute(intent)
         except Exception as exc:
@@ -109,7 +110,6 @@ class ApprovalBot:
         if callback.from_user.id != self._approver_user_id:
             await callback.answer("Not authorized", show_alert=True)
             return
-        await callback.answer()
 
         intent_id = UUID(callback_data.intent_id)
         intent = await self._store.get_intent(intent_id)
@@ -119,6 +119,8 @@ class ApprovalBot:
         if not await self._store.mark_skipped(intent_id, callback.from_user.id):
             await callback.answer("Intent was already handled", show_alert=True)
             return
+
+        await callback.answer("Skipped")
         await self._edit_card(callback, intent, "\n\n<b>SKIPPED</b>")
 
     async def _edit_card(self, callback: CallbackQuery, intent: TradingIntent, suffix: str) -> None:
