@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+*.session
+*.session-journal
+data
+build
+dist
+*.egg-info
+cautious-crypto-bro-architecture.svg
