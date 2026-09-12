@@ -7,32 +7,53 @@ from datetime import datetime, timezone
 from telethon import TelegramClient, events
 from telethon.tl.custom.message import Message
 
-from .domain import SourceMessage
+from .domain import ImageAttachment, IncomingPost, SourceMessage
 
 logger = logging.getLogger(__name__)
-MessageHandler = Callable[[SourceMessage], Awaitable[None]]
+
+MessageHandler = Callable[[IncomingPost], Awaitable[None]]
 
 
 class TelegramSource:
-    def __init__(self, *, api_id: int, api_hash: str, session_name: str,
-                 channels: list[str | int], on_message: MessageHandler) -> None:
-        self._client = TelegramClient(session_name, api_id, api_hash)
+    def __init__(
+        self,
+        *,
+        api_id: int,
+        api_hash: str,
+        session_name: str,
+        channels: list[str | int],
+        on_message: MessageHandler,
+    ) -> None:
+        self._client = TelegramClient(
+            session_name,
+            api_id,
+            api_hash,
+        )
         self._channels = channels
         self._on_message = on_message
 
     async def start(self) -> None:
         await self._client.start()
+
         entities = []
+
         for channel in self._channels:
             entity = await self._client.get_entity(channel)
             entities.append(entity)
-            logger.info("Watching Telegram source: %s", channel)
+
+            logger.info(
+                "Watching Telegram source: %s",
+                channel,
+            )
 
         @self._client.on(events.NewMessage(chats=entities))
-        async def handle(event: events.NewMessage.Event) -> None:
-            source = self._convert(event.message)
-            if source is not None:
-                await self._on_message(source)
+        async def handle(
+            event: events.NewMessage.Event,
+        ) -> None:
+            post = await self._convert(event.message)
+
+            if post is not None:
+                await self._on_message(post)
 
     async def run_until_disconnected(self) -> None:
         await self._client.run_until_disconnected()
@@ -40,27 +61,98 @@ class TelegramSource:
     async def disconnect(self) -> None:
         await self._client.disconnect()
 
-    @staticmethod
-    def _convert(message: Message) -> SourceMessage | None:
-        # First vertical slice supports text and media captions only.
-        text = (message.message or "").strip()
-        if not text:
-            logger.info("Ignoring message %s: no text/caption in MVP", message.id)
-            return None
+    async def _convert(
+        self,
+        message: Message,
+    ) -> IncomingPost | None:
         chat = message.chat
+
         if chat is None:
             return None
 
-        published_at = message.date
-        if published_at.tzinfo is None:
-            published_at = published_at.replace(tzinfo=timezone.utc)
+        text = (message.message or "").strip()
+        media_type = self._image_media_type(message)
 
-        return SourceMessage(
+        if not text and media_type is None:
+            logger.info(
+                "Ignoring message %s: no text or supported image",
+                message.id,
+            )
+            return None
+
+        images: tuple[ImageAttachment, ...] = ()
+
+        if media_type is not None:
+            try:
+                data = await message.download_media(file=bytes)
+            except Exception:
+                logger.exception(
+                    "Failed to download image from message %s",
+                    message.id,
+                )
+                return None
+
+            if not data:
+                logger.warning(
+                    "Telegram returned empty image for message %s",
+                    message.id,
+                )
+                return None
+
+            images = (
+                ImageAttachment(
+                    media_type=media_type,
+                    data=bytes(data),
+                ),
+            )
+
+        published_at = message.date
+
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(
+                tzinfo=timezone.utc,
+            )
+
+        source = SourceMessage(
             channel_id=message.chat_id,
-            channel_title=getattr(chat, "title", None) or str(message.chat_id),
-            channel_username=getattr(chat, "username", None),
+            channel_title=(
+                getattr(chat, "title", None)
+                or str(message.chat_id)
+            ),
+            channel_username=getattr(
+                chat,
+                "username",
+                None,
+            ),
             message_id=message.id,
             published_at=published_at,
             received_at=datetime.now(timezone.utc),
             text=text,
         )
+
+        return IncomingPost(
+            source=source,
+            images=images,
+        )
+
+    @staticmethod
+    def _image_media_type(
+        message: Message,
+    ) -> str | None:
+        if message.photo is not None:
+            return "image/jpeg"
+
+        file = message.file
+        media_type = (
+            getattr(file, "mime_type", None)
+            if file is not None
+            else None
+        )
+
+        if (
+            isinstance(media_type, str)
+            and media_type.startswith("image/")
+        ):
+            return media_type
+
+        return None

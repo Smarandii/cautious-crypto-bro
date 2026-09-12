@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import UUID, uuid4
@@ -45,6 +46,18 @@ class SourceMessage(BaseModel):
             return f"https://t.me/c/{channel_id[4:]}/{self.message_id}"
 
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class ImageAttachment:
+    media_type: str
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class IncomingPost:
+    source: SourceMessage
+    images: tuple[ImageAttachment, ...] = ()
 
 
 class Entry(BaseModel):
