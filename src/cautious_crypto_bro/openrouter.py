@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
+
 import httpx
 
 from .domain import IntentExtraction, SourceMessage, TradingIntent
@@ -53,6 +56,12 @@ class OpenRouterIntentExtractor:
                 )},
             ],
             "temperature": 0,
+            "max_tokens": 512,
+            "reasoning": {"effort": "none"},
+            "provider": {
+                "sort": "latency",
+                "require_parameters": True,
+            },
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -62,7 +71,24 @@ class OpenRouterIntentExtractor:
                 },
             },
         }
-        response = await self._client.post("/chat/completions", json=payload)
+        started = time.monotonic()
+        try:
+            async with asyncio.timeout(20):
+                response = await self._client.post("/chat/completions", json=payload)
+        except TimeoutError:
+            elapsed = time.monotonic() - started
+            raise RuntimeError(
+                f"OpenRouter inference exceeded 20s ({elapsed:.1f}s)"
+            ) from None
+
+        elapsed = time.monotonic() - started
+        logger.info(
+            "OpenRouter inference for %s/%s completed in %.2fs",
+            source.channel_id,
+            source.message_id,
+            elapsed,
+        )
+
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
         extraction = IntentExtraction.model_validate_json(content)
