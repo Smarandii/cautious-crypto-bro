@@ -1,0 +1,26 @@
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    env_file:
+      - .env
+    environment:
+      # Keep mutable application state out of the source tree.
+      TELEGRAM_SESSION_NAME: /state/cautious_crypto_bro
+      DATABASE_PATH: /state/cautious_crypto_bro.sqlite3
+    volumes:
+      - app_state:/state
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  test:
+    build:
+      context: .
+      target: test
+    profiles: ["test"]
+    command: ["/app/.venv/bin/pytest", "-v"]
+
+volumes:
+  app_state:
