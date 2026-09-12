@@ -60,6 +60,7 @@ async def async_main() -> None:
         await source.disconnect()
         await bot.close()
         await extractor.close()
+        executor.close()
 
 
 def main() -> None:
