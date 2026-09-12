@@ -16,7 +16,6 @@ dependencies = [
 [dependency-groups]
 dev = [
   "pytest>=8.4,<9",
-  "pytest-asyncio>=1.1,<2",
 ]
 
 [project.scripts]
@@ -31,5 +30,4 @@ packages = ["src/cautious_crypto_bro"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-asyncio_mode = "auto"
 testpaths = ["tests"]

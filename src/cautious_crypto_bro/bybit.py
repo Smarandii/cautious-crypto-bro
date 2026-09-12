@@ -23,6 +23,9 @@ class BybitDemoExecutor:
     def _execute_sync(self, intent: TradingIntent) -> str:
         market_price = self._last_price(intent.symbol)
         sizing_price = Decimal(str(intent.entry.price)) if intent.entry.type is EntryType.LIMIT else market_price
+        if intent.entry.type is EntryType.MARKET:
+            self._validate_market_geometry(intent, market_price)
+
         qty = self._quantity_for_notional(intent.symbol, sizing_price)
 
         params: dict[str, object] = {
@@ -74,6 +77,16 @@ class BybitDemoExecutor:
         if min_notional and qty * price < min_notional:
             raise TradeExecutionError(f"Configured notional too small: {qty * price} < minNotionalValue {min_notional}")
         return qty
+
+    @staticmethod
+    def _validate_market_geometry(intent: TradingIntent, market_price: Decimal) -> None:
+        stop_loss = Decimal(str(intent.stop_loss))
+        take_profit = Decimal(str(intent.take_profit))
+
+        if intent.side is Side.LONG and not stop_loss < market_price < take_profit:
+            raise TradeExecutionError("Market price is outside LONG stop/target geometry")
+        if intent.side is Side.SHORT and not take_profit < market_price < stop_loss:
+            raise TradeExecutionError("Market price is outside SHORT stop/target geometry")
 
     @staticmethod
     def _fmt(value: Decimal) -> str:

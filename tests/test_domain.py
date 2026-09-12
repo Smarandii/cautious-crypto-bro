@@ -45,3 +45,14 @@ def test_limit_requires_price() -> None:
 def test_market_rejects_price() -> None:
     with pytest.raises(ValidationError):
         Entry(type=EntryType.MARKET, price=100)
+
+def test_private_channel_url() -> None:
+    private_source = source().model_copy(
+        update={
+            "channel_id": -1002132062264,
+            "channel_username": None,
+            "message_id": 11482,
+        }
+    )
+
+    assert private_source.telegram_url == "https://t.me/c/2132062264/11482"

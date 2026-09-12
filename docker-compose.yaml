@@ -3,16 +3,12 @@ services:
     build:
       context: .
       target: runtime
-    env_file:
-      - .env
+    env_file: .env
     environment:
-      # Keep mutable application state out of the source tree.
       TELEGRAM_SESSION_NAME: /state/cautious_crypto_bro
       DATABASE_PATH: /state/cautious_crypto_bro.sqlite3
     volumes:
       - app_state:/state
-    stdin_open: true
-    tty: true
     restart: unless-stopped
 
   test:
