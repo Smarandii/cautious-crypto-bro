@@ -41,6 +41,13 @@ class Settings(BaseSettings):
         ge=1,
         le=3,
     )
+    openrouter_provider_cooldown_hours: int = Field(
+        default=12,
+        ge=1,
+        le=168,
+    )
+
+    redis_url: str = "redis://redis:6379/0"
 
     bybit_api_key: str
     bybit_api_secret: str

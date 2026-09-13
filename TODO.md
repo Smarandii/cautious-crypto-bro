@@ -1,17 +1,5 @@
 # TODO
 
-## Provider circuit breaker
-
-Replace static OpenRouter provider exclusions with runtime health tracking.
-
-- Cool down provider-attributable failures for ~12 hours.
-- Retry with cooled-down providers added to `provider.ignore`.
-- Restore providers automatically after expiry.
-- Persist provider, failure reason and expiry in SQLite.
-- Keep static `nextbit` / `parasail` exclusions until this is proven.
-
-Redis is unnecessary while the app has one instance.
-
 ## Retryable source processing
 
 A source is persisted before extraction/planning finishes, so a transient

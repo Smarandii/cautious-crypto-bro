@@ -16,8 +16,56 @@ from .domain import (
     IntentExtraction,
     TradingIntent,
 )
+from .runtime_store import (
+    ProviderCooldownStore,
+)
 
 logger = logging.getLogger(__name__)
+
+STATIC_IGNORED_PROVIDERS = (
+    "nextbit",
+    "parasail",
+)
+
+
+class OpenRouterProviderFailure(
+    ValueError
+):
+    def __init__(
+        self,
+        provider: str,
+        message: str,
+    ) -> None:
+        super().__init__(
+            message
+        )
+        self.provider = provider
+
+
+def _response_provider(
+    response_data: dict[
+        str,
+        object,
+    ],
+) -> str | None:
+    provider = response_data.get(
+        "provider"
+    )
+
+    if not isinstance(
+        provider,
+        str,
+    ):
+        return None
+
+    provider = provider.strip()
+
+    return (
+        provider
+        if provider
+        else None
+    )
+
 
 SYSTEM_PROMPT = """
 You are a conservative crypto trading-signal parser.
@@ -166,6 +214,17 @@ def _completion_content(
             "is invalid"
         )
 
+    provider = (
+        _response_provider(
+            response_data
+        )
+    )
+
+    provider_label = (
+        provider
+        or "unknown"
+    )
+
     provider_error = (
         choice.get("error")
     )
@@ -175,28 +234,26 @@ def _completion_content(
     )
 
     if finish_reason == "length":
-        provider = (
-            response_data.get("provider")
-            or "unknown"
+        message = (
+            "OpenRouter completion was truncated: "
+            f"provider={provider_label}, "
+            "finish_reason=length"
         )
 
+        if provider is not None:
+            raise OpenRouterProviderFailure(
+                provider,
+                message,
+            )
+
         raise ValueError(
-            "OpenRouter completion was truncated: "
-            f"provider={provider}, "
-            "finish_reason=length"
+            message
         )
 
     if (
         provider_error is not None
         or finish_reason == "error"
     ):
-        provider = (
-            response_data.get(
-                "provider"
-            )
-            or "unknown"
-        )
-
         error_code = None
         error_message = None
 
@@ -213,11 +270,21 @@ def _completion_content(
                 )
             )
 
-        raise ValueError(
+        message = (
             "OpenRouter provider failure: "
-            f"provider={provider}, "
+            f"provider={provider_label}, "
             f"code={error_code}, "
             f"message={error_message}"
+        )
+
+        if provider is not None:
+            raise OpenRouterProviderFailure(
+                provider,
+                message,
+            )
+
+        raise ValueError(
+            message
         )
 
     message = choice.get(
@@ -258,12 +325,31 @@ class OpenRouterIntentExtractor:
         base_url: str,
         inference_timeout_seconds: float = 45,
         max_attempts: int = 2,
+        provider_cooldown_store: (
+            ProviderCooldownStore
+            | None
+        ) = None,
+        provider_cooldown_seconds: int = (
+            12 * 60 * 60
+        ),
     ) -> None:
+        if provider_cooldown_seconds <= 0:
+            raise ValueError(
+                "provider_cooldown_seconds "
+                "must be positive"
+            )
+
         self._model = model
         self._inference_timeout_seconds = (
             inference_timeout_seconds
         )
         self._max_attempts = max_attempts
+        self._provider_cooldown_store = (
+            provider_cooldown_store
+        )
+        self._provider_cooldown_seconds = (
+            provider_cooldown_seconds
+        )
 
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
@@ -278,6 +364,81 @@ class OpenRouterIntentExtractor:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    async def _active_provider_cooldowns(
+        self,
+    ) -> tuple[str, ...]:
+        if (
+            self._provider_cooldown_store
+            is None
+        ):
+            return ()
+
+        try:
+            return await (
+                self._provider_cooldown_store
+                .get_openrouter_provider_cooldowns()
+            )
+        except Exception:
+            logger.exception(
+                "Failed to read OpenRouter "
+                "provider cooldowns"
+            )
+            return ()
+
+    async def _cooldown_provider(
+        self,
+        failure: OpenRouterProviderFailure,
+        ignored_providers: set[str],
+    ) -> None:
+        provider = (
+            failure.provider
+            .strip()
+            .casefold()
+        )
+
+        if not provider:
+            return
+
+        # Always exclude it for this extraction,
+        # even if Redis temporarily fails.
+        ignored_providers.add(
+            provider
+        )
+
+        if (
+            self._provider_cooldown_store
+            is None
+        ):
+            return
+
+        try:
+            await (
+                self._provider_cooldown_store
+                .cooldown_openrouter_provider(
+                    provider,
+                    str(failure),
+                    self._provider_cooldown_seconds,
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist OpenRouter "
+                "provider cooldown for %s",
+                provider,
+            )
+            return
+
+        logger.warning(
+            "OpenRouter provider %s cooled "
+            "down for %.1f hour(s): %s",
+            provider,
+            (
+                self._provider_cooldown_seconds
+                / 3600
+            ),
+            failure,
+        )
 
     async def extract(
         self,
@@ -314,10 +475,9 @@ class OpenRouterIntentExtractor:
                 "sort": "latency",
                 "require_parameters": True,
                 "allow_fallbacks": True,
-                "ignore": [
-                    "nextbit",
-                    "parasail",
-                ],
+                "ignore": list(
+                    STATIC_IGNORED_PROVIDERS
+                ),
             },
             "response_format": {
                 "type": "json_schema",
@@ -333,10 +493,44 @@ class OpenRouterIntentExtractor:
 
         last_error: Exception | None = None
 
+        ignored_providers = {
+            provider.casefold()
+            for provider
+            in STATIC_IGNORED_PROVIDERS
+        }
+
         for attempt in range(
             1,
             self._max_attempts + 1,
         ):
+            ignored_providers.update(
+                provider.casefold()
+                for provider
+                in (
+                    await self
+                    ._active_provider_cooldowns()
+                )
+            )
+
+            provider_options = (
+                payload["provider"]
+            )
+
+            assert isinstance(
+                provider_options,
+                dict,
+            )
+
+            provider_options["ignore"] = (
+                sorted(
+                    ignored_providers
+                )
+            )
+
+            response_provider: (
+                str | None
+            ) = None
+
             started = time.monotonic()
 
             try:
@@ -351,6 +545,21 @@ class OpenRouterIntentExtractor:
                 response.raise_for_status()
 
                 response_data = response.json()
+
+                if not isinstance(
+                    response_data,
+                    dict,
+                ):
+                    raise ValueError(
+                        "OpenRouter response "
+                        "is not a JSON object"
+                    )
+
+                response_provider = (
+                    _response_provider(
+                        response_data
+                    )
+                )
 
                 content = _completion_content(
                     response_data
@@ -468,10 +677,25 @@ class OpenRouterIntentExtractor:
                 # indicates a broken structured-output
                 # response rather than a useful intent.
                 if len(content) > 20_000:
-                    raise ValueError(
+                    message = (
                         "OpenRouter returned unexpectedly "
                         "large structured output "
                         f"({len(content)} characters)"
+                    )
+
+                    if (
+                        response_provider
+                        is not None
+                    ):
+                        raise (
+                            OpenRouterProviderFailure(
+                                response_provider,
+                                message,
+                            )
+                        )
+
+                    raise ValueError(
+                        message
                     )
 
                 extraction = (
@@ -480,7 +704,7 @@ class OpenRouterIntentExtractor:
                     )
                 )
 
-            except TimeoutError as exc:
+            except TimeoutError:
                 elapsed = (
                     time.monotonic()
                     - started
@@ -493,10 +717,32 @@ class OpenRouterIntentExtractor:
                 )
 
             except ValidationError as exc:
-                last_error = RuntimeError(
+                message = (
                     "OpenRouter returned invalid "
                     "structured output"
                 )
+
+                if (
+                    response_provider
+                    is not None
+                ):
+                    failure = (
+                        OpenRouterProviderFailure(
+                            response_provider,
+                            message,
+                        )
+                    )
+
+                    last_error = failure
+
+                    await self._cooldown_provider(
+                        failure,
+                        ignored_providers,
+                    )
+                else:
+                    last_error = RuntimeError(
+                        message
+                    )
 
                 logger.warning(
                     "Invalid OpenRouter structured output "
@@ -508,13 +754,13 @@ class OpenRouterIntentExtractor:
                     exc,
                 )
 
-            except (
-                KeyError,
-                TypeError,
-                ValueError,
-                httpx.RequestError,
-            ) as exc:
+            except OpenRouterProviderFailure as exc:
                 last_error = exc
+
+                await self._cooldown_provider(
+                    exc,
+                    ignored_providers,
+                )
 
             except httpx.HTTPStatusError as exc:
                 status = (
@@ -527,6 +773,54 @@ class OpenRouterIntentExtractor:
                 ):
                     raise
 
+                last_error = exc
+
+                if status >= 500:
+                    try:
+                        error_data = (
+                            exc.response.json()
+                        )
+                    except ValueError:
+                        error_data = None
+
+                    if isinstance(
+                        error_data,
+                        dict,
+                    ):
+                        provider = (
+                            _response_provider(
+                                error_data
+                            )
+                        )
+
+                        if provider is not None:
+                            failure = (
+                                OpenRouterProviderFailure(
+                                    provider,
+                                    (
+                                        "OpenRouter HTTP "
+                                        f"{status} provider "
+                                        "failure: "
+                                        f"provider={provider}"
+                                    ),
+                                )
+                            )
+
+                            last_error = failure
+
+                            await (
+                                self._cooldown_provider(
+                                    failure,
+                                    ignored_providers,
+                                )
+                            )
+
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                httpx.RequestError,
+            ) as exc:
                 last_error = exc
 
             else:

@@ -10,6 +10,9 @@ from .execution import ExecutionPlanner
 from .openrouter import (
     OpenRouterIntentExtractor,
 )
+from .runtime_store import (
+    RedisRuntimeStore,
+)
 from .service import SignalService
 from .storage import IntentStore
 from .telegram_source import (
@@ -39,6 +42,11 @@ async def async_main() -> None:
     )
     await store.initialize()
 
+    runtime_store = RedisRuntimeStore(
+        settings.redis_url
+    )
+    await runtime_store.initialize()
+
     extractor = (
         OpenRouterIntentExtractor(
             api_key=(
@@ -55,6 +63,14 @@ async def async_main() -> None:
             ),
             max_attempts=(
                 settings.openrouter_inference_max_attempts
+            ),
+            provider_cooldown_store=(
+                runtime_store
+            ),
+            provider_cooldown_seconds=(
+                settings.openrouter_provider_cooldown_hours
+                * 60
+                * 60
             ),
         )
     )
@@ -130,6 +146,7 @@ async def async_main() -> None:
         await source.disconnect()
         await bot.close()
         await extractor.close()
+        await runtime_store.close()
         executor.close()
 
 
