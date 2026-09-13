@@ -23,8 +23,21 @@ Decide whether ONE Telegram post, including any attached images,
 contains one complete, immediately actionable trade proposal
 representable by the supplied schema.
 
-MVP rules:
+Context rules:
 - use the text/caption and attached images together
+- global guidance contains interpretation rules that apply to all traders
+- channel-specific guidance explains conventions used by this trader
+- channel-specific guidance is more specific than global guidance when
+  interpreting trader terminology or chart conventions
+- the current post and image are always the primary evidence
+- guidance explains conventions only; never copy example prices from
+  guidance into the current trade
+- a derived numeric value may be used only when guidance provides an
+  explicit deterministic rule and every required numeric input is clearly
+  available in the current post/image
+- otherwise do not guess
+
+MVP rules:
 - only USDT linear/perpetual-style symbols
 - required: symbol, LONG/SHORT, entry semantics, stop loss, take profit
 - MARKET only if the author clearly says enter now/at market or clearly
@@ -36,8 +49,12 @@ MVP rules:
   and clearly legible
 - never estimate prices from chart geometry, line position, vague levels,
   or unlabeled visual elements
+- never assign a visible price to stop loss or take profit merely because
+  the schema requires one
 - if the post is commentary, an update to an older idea, incomplete,
   ambiguous, or contains multiple conflicting setups, actionable=false
+- if trader guidance says a required field is often supplied later and it
+  is missing from the current post, actionable=false
 - confidence is extraction confidence, not probability of profit
 - summary is one short sentence describing the trader's stated thesis
 """.strip()
@@ -45,15 +62,44 @@ MVP rules:
 
 def _build_user_content(
     post: IncomingPost,
+    *,
+    global_guidance: str | None = None,
+    channel_guidance: str | None = None,
 ) -> str | list[dict[str, object]]:
     source = post.source
 
-    text = (
-        f"Channel: {source.channel_title}\n"
-        f"Published: {source.published_at.isoformat()}\n\n"
-        "Telegram post text/caption:\n"
-        f"{source.text or '(no caption)'}"
+    parts = [
+        f"Channel: {source.channel_title}",
+        f"Published: {source.published_at.isoformat()}",
+    ]
+
+    if global_guidance:
+        parts.extend(
+            [
+                "",
+                "Global guidance:",
+                global_guidance,
+            ]
+        )
+
+    if channel_guidance:
+        parts.extend(
+            [
+                "",
+                "Channel-specific guidance:",
+                channel_guidance,
+            ]
+        )
+
+    parts.extend(
+        [
+            "",
+            "Telegram post text/caption:",
+            source.text or "(no caption)",
+        ]
     )
+
+    text = "\n".join(parts)
 
     if not post.images:
         return text
@@ -109,6 +155,9 @@ class OpenRouterIntentExtractor:
     async def extract(
         self,
         post: IncomingPost,
+        *,
+        global_guidance: str | None = None,
+        channel_guidance: str | None = None,
     ) -> TradingIntent | None:
         source = post.source
 
@@ -121,7 +170,11 @@ class OpenRouterIntentExtractor:
                 },
                 {
                     "role": "user",
-                    "content": _build_user_content(post),
+                    "content": _build_user_content(
+                        post,
+                        global_guidance=global_guidance,
+                        channel_guidance=channel_guidance,
+                    ),
                 },
             ],
             "temperature": 0,
@@ -179,7 +232,9 @@ class OpenRouterIntentExtractor:
         ][0]["message"]["content"]
 
         extraction = (
-            IntentExtraction.model_validate_json(content)
+            IntentExtraction.model_validate_json(
+                content
+            )
         )
 
         if (

@@ -37,7 +37,17 @@ class SignalService:
             return
 
         try:
-            intent = await self._extractor.extract(post)
+            global_guidance, channel_guidance = (
+                await self._store.get_guidance(
+                    source.channel_id
+                )
+            )
+
+            intent = await self._extractor.extract(
+                post,
+                global_guidance=global_guidance,
+                channel_guidance=channel_guidance,
+            )
         except Exception:
             logger.exception(
                 "Intent extraction failed for %s/%s",

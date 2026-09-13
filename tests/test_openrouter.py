@@ -51,6 +51,41 @@ def test_image_post_builds_base64_content() -> None:
     assert content[1] == {
         "type": "image_url",
         "image_url": {
-            "url": "data:image/png;base64,AQI=",
+            "url": (
+                "data:image/png;base64,AQI="
+            ),
         },
     }
+
+
+def test_guidance_is_added_to_prompt() -> None:
+    content = _build_user_content(
+        IncomingPost(source=source()),
+        global_guidance="Global rule",
+        channel_guidance="Trader rule",
+    )
+
+    assert isinstance(content, str)
+
+    assert (
+        "Global guidance:\nGlobal rule"
+        in content
+    )
+
+    assert (
+        "Channel-specific guidance:\n"
+        "Trader rule"
+        in content
+    )
+
+    assert content.index(
+        "Global guidance:"
+    ) < content.index(
+        "Channel-specific guidance:"
+    )
+
+    assert content.index(
+        "Channel-specific guidance:"
+    ) < content.index(
+        "Telegram post text/caption:"
+    )
