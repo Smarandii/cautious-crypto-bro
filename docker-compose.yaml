@@ -27,6 +27,8 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - app_state:/state
+      - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -37,6 +39,10 @@ services:
       context: .
       target: test
     profiles: ["test"]
+    volumes:
+      - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro
+      - ./tests:/app/tests:ro
 
 volumes:
   app_state:
