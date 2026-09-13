@@ -28,6 +28,8 @@ from aiogram.utils.backoff import (
 )
 
 from .bybit import (
+    AccountOrder,
+    AccountStateSummary,
     BybitDemoExecutor,
     SymbolExposure,
 )
@@ -134,7 +136,35 @@ class ApprovalBot:
         *,
         exposure: SymbolExposure | None = None,
         exposure_error: str | None = None,
+        account_state: (
+            AccountStateSummary | None
+        ) = None,
+        account_state_error: str | None = None,
     ) -> None:
+        try:
+            await self._bot.send_message(
+                chat_id=(
+                    self._approval_chat_id
+                ),
+                text=(
+                    self._render_account_state(
+                        account_state,
+                        error=(
+                            account_state_error
+                        ),
+                    )
+                ),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            # The snapshot is informational and
+            # must never prevent delivery of the
+            # actionable approval card.
+            logger.exception(
+                "Failed to send account snapshot"
+            )
+
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -742,6 +772,339 @@ class ApprovalBot:
 
             f"{source_line}"
         )
+
+    @staticmethod
+    def _render_account_state(
+        state: AccountStateSummary | None,
+        *,
+        error: str | None = None,
+    ) -> str:
+        if state is None:
+            return (
+                "📊 <b>BYBIT DEMO — "
+                "ACCOUNT SNAPSHOT</b>\n\n"
+                "⚠️ Account state unavailable.\n"
+                "The approval card follows normally."
+            )
+
+        realized = (
+            ApprovalBot._fmt_signed(
+                state.realized_pnl_today
+            )
+        )
+
+        unrealized = (
+            ApprovalBot._fmt_signed(
+                state.unrealised_pnl
+            )
+        )
+
+        lines = [
+            "📊 <b>BYBIT DEMO — "
+            "ACCOUNT SNAPSHOT</b>",
+            "",
+            "<b>Today (UTC)</b>",
+            (
+                "Realized P&amp;L: "
+                f"<b>{realized} USDT</b>"
+            ),
+            (
+                "Unrealized P&amp;L: "
+                f"<b>{unrealized} USDT</b>"
+            ),
+            "",
+            (
+                "<b>Open positions: "
+                f"{len(state.positions)}</b>"
+            ),
+        ]
+
+        if state.positions:
+            for position in (
+                state.positions[:8]
+            ):
+                position_line = (
+                    "• "
+                    f"{html.escape(position.symbol)} "
+                    f"{html.escape(position.side.value)} "
+                    f"{ApprovalBot._fmt_decimal(position.size)}"
+                    "\n  Entry "
+                    f"{ApprovalBot._fmt_decimal(position.avg_price)}"
+                    " → Mark "
+                    f"{ApprovalBot._fmt_decimal(position.mark_price)}"
+                    " · uPnL "
+                    f"{ApprovalBot._fmt_signed(position.unrealised_pnl)}"
+                    " USDT"
+                    " · "
+                    f"{html.escape(position.status)}"
+                )
+
+                protection = []
+
+                if (
+                    position.stop_loss
+                    is not None
+                ):
+                    protection.append(
+                        "SL "
+                        + ApprovalBot._fmt_decimal(
+                            position.stop_loss
+                        )
+                    )
+
+                if (
+                    position.take_profit
+                    is not None
+                ):
+                    protection.append(
+                        "TP "
+                        + ApprovalBot._fmt_decimal(
+                            position.take_profit
+                        )
+                    )
+
+                if protection:
+                    position_line += (
+                        "\n  "
+                        + " · ".join(
+                            protection
+                        )
+                    )
+
+                lines.append(
+                    position_line
+                )
+
+            if len(state.positions) > 8:
+                lines.append(
+                    "• … +"
+                    f"{len(state.positions) - 8}"
+                    " more"
+                )
+        else:
+            lines.append("• None")
+
+        lines.extend(
+            [
+                "",
+                (
+                    "<b>Open orders: "
+                    f"{len(state.open_orders)}</b>"
+                ),
+            ]
+        )
+
+        if state.open_orders:
+            entry_count = sum(
+                1
+                for order in state.open_orders
+                if order.kind in {
+                    "ENTRY",
+                    "CONDITIONAL",
+                }
+            )
+
+            protective_count = sum(
+                1
+                for order in state.open_orders
+                if order.is_protective
+            )
+
+            reduce_count = sum(
+                1
+                for order in state.open_orders
+                if order.kind == "REDUCE"
+            )
+
+            lines.append(
+                "Entry: "
+                f"{entry_count}"
+                " · Protective: "
+                f"{protective_count}"
+                " · Reduce/close: "
+                f"{reduce_count}"
+            )
+
+            for order in (
+                state.open_orders[:6]
+            ):
+                lines.append(
+                    ApprovalBot
+                    ._render_account_order(
+                        order
+                    )
+                )
+
+            if len(state.open_orders) > 6:
+                lines.append(
+                    "• … +"
+                    f"{len(state.open_orders) - 6}"
+                    " more"
+                )
+        else:
+            lines.append("• None")
+
+        terminal = (
+            state.terminal_orders_24h
+        )
+
+        filled_count = sum(
+            1
+            for order in terminal
+            if order.status == "Filled"
+        )
+
+        cancelled_count = sum(
+            1
+            for order in terminal
+            if "Cancel" in order.status
+        )
+
+        other_count = (
+            len(terminal)
+            - filled_count
+            - cancelled_count
+        )
+
+        deactivated_count = sum(
+            1
+            for order in terminal
+            if order.status == "Deactivated"
+        )
+
+        other_count = (
+            len(terminal)
+            - filled_count
+            - cancelled_count
+            - deactivated_count
+        )
+
+        breakdown = (
+            f"Filled {filled_count}"
+            " · "
+            f"Cancelled {cancelled_count}"
+            " · "
+            f"Deactivated {deactivated_count}"
+        )
+
+        if other_count:
+            breakdown += (
+                f" · Other {other_count}"
+            )
+
+        lines.extend(
+            [
+                "",
+                (
+                    "<b>Recent terminal "
+                    "orders — last 24h: "
+                    f"{len(terminal)}</b>"
+                ),
+                breakdown,
+            ]
+        )
+
+        if terminal:
+            for order in terminal[:6]:
+                lines.append(
+                    ApprovalBot
+                    ._render_account_order(
+                        order
+                    )
+                )
+
+            if len(terminal) > 6:
+                lines.append(
+                    "• … +"
+                    f"{len(terminal) - 6}"
+                    " more"
+                )
+        else:
+            lines.append("• None")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_account_order(
+        order: AccountOrder,
+    ) -> str:
+        quantity = (
+            ApprovalBot._fmt_decimal(
+                order.quantity
+            )
+        )
+
+        kind = order.kind
+
+        if (
+            order.is_protective
+            and order.trigger_price
+            is not None
+        ):
+            price = (
+                "trigger "
+                + ApprovalBot._fmt_decimal(
+                    order.trigger_price
+                )
+            )
+
+        elif order.avg_price is not None:
+            price = (
+                ApprovalBot._fmt_decimal(
+                    order.avg_price
+                )
+            )
+
+        elif order.price is not None:
+            price = (
+                ApprovalBot._fmt_decimal(
+                    order.price
+                )
+            )
+
+        else:
+            price = "Market"
+
+        if kind == "ENTRY":
+            description = (
+                f"{html.escape(order.side.value)} "
+                f"{html.escape(order.order_type)}"
+            )
+
+        elif kind == "CONDITIONAL":
+            description = (
+                "CONDITIONAL "
+                f"{html.escape(order.side.value)}"
+            )
+
+        elif kind == "REDUCE":
+            description = (
+                "REDUCE "
+                f"{html.escape(order.side.value)}"
+            )
+
+        else:
+            description = kind
+
+        return (
+            "• "
+            f"{html.escape(order.symbol)} "
+            f"{description} "
+            f"{quantity} @ {price}"
+            " — "
+            f"{html.escape(order.status)}"
+        )
+
+    @staticmethod
+    def _fmt_signed(
+        value: Decimal,
+    ) -> str:
+        rendered = f"{value:.2f}"
+
+        if value > 0:
+            return "+" + rendered
+
+        return rendered
 
     @staticmethod
     def _render_exposure(
