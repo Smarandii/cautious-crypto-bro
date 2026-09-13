@@ -489,7 +489,7 @@ class ApprovalBot:
                     f"</b> — "
                     f"{ApprovalBot._fmt_decimal(target.close_pct)}% "
                     f"(~"
-                    f"{ApprovalBot._fmt_decimal(target.r_multiple)}R"
+                    f"{target.r_multiple:.2f}R"
                     f")"
                 )
 
