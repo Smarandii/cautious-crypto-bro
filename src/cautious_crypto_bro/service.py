@@ -148,6 +148,30 @@ class SignalService:
             )
             return
 
+        exposure = None
+        exposure_error = None
+
+        try:
+            exposure = (
+                await self._executor.exposure(
+                    intent.symbol
+                )
+            )
+        except Exception as exc:
+            exposure_error = (
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+            # Exposure awareness is informational.
+            # A temporary Bybit read failure must not
+            # discard an otherwise valid signal.
+            logger.exception(
+                "Exposure check failed for %s/%s",
+                source.channel_id,
+                source.message_id,
+            )
+
         try:
             finalized = await (
                 self._store
@@ -188,6 +212,10 @@ class SignalService:
             await self._approval_bot.send_intent(
                 intent,
                 plan,
+                exposure=exposure,
+                exposure_error=(
+                    exposure_error
+                ),
             )
         except Exception:
             # The durable intent/plan already exists.

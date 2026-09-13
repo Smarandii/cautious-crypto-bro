@@ -27,7 +27,10 @@ from aiogram.utils.backoff import (
     BackoffConfig,
 )
 
-from .bybit import BybitDemoExecutor
+from .bybit import (
+    BybitDemoExecutor,
+    SymbolExposure,
+)
 from .domain import (
     EntryType,
     ExecutionOrderType,
@@ -128,6 +131,9 @@ class ApprovalBot:
         self,
         intent: TradingIntent,
         plan: ExecutionPlan,
+        *,
+        exposure: SymbolExposure | None = None,
+        exposure_error: str | None = None,
     ) -> None:
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -167,6 +173,10 @@ class ApprovalBot:
             text=self._render(
                 intent,
                 plan,
+                exposure=exposure,
+                exposure_error=(
+                    exposure_error
+                ),
             ),
             parse_mode="HTML",
             disable_web_page_preview=True,
@@ -406,6 +416,9 @@ class ApprovalBot:
     def _render(
         intent: TradingIntent,
         plan: ExecutionPlan,
+        *,
+        exposure: SymbolExposure | None = None,
+        exposure_error: str | None = None,
     ) -> str:
         source_url = (
             intent.source.telegram_url
@@ -663,11 +676,24 @@ class ApprovalBot:
             )
         )
 
+        exposure_block = (
+            ApprovalBot
+            ._render_exposure(
+                intent,
+                exposure=exposure,
+                exposure_error=(
+                    exposure_error
+                ),
+            )
+        )
+
         return (
             f"<b>"
             f"{html.escape(intent.side.value)} "
             f"{html.escape(intent.symbol)}"
             f"</b>\n\n"
+
+            f"{exposure_block}"
 
             f"Signal entry: "
             f"<b>{html.escape(signal_entry)}</b>\n"
@@ -715,6 +741,133 @@ class ApprovalBot:
             f"{html.escape(intent.source.published_at.isoformat())}\n"
 
             f"{source_line}"
+        )
+
+    @staticmethod
+    def _render_exposure(
+        intent: TradingIntent,
+        *,
+        exposure: SymbolExposure | None,
+        exposure_error: str | None,
+    ) -> str:
+        if exposure_error is not None:
+            return (
+                "⚠️ <b>EXPOSURE CHECK "
+                "UNAVAILABLE</b>\n"
+                "Could not read the current "
+                "Bybit position/open CCB orders. "
+                "Execute remains available, but "
+                "shared-symbol exposure may "
+                "already exist.\n\n"
+            )
+
+        if exposure is None:
+            return ""
+
+        warnings: list[str] = []
+
+        for position in exposure.positions:
+            size = (
+                ApprovalBot._fmt_decimal(
+                    position.size
+                )
+            )
+            avg_price = (
+                ApprovalBot._fmt_decimal(
+                    position.avg_price
+                )
+            )
+
+            if (
+                position.side
+                is intent.side
+            ):
+                warnings.append(
+                    "⚠️ <b>EXISTING SAME-SIDE "
+                    "EXPOSURE</b>\n"
+                    f"Bybit already has "
+                    f"<b>{position.side.value} "
+                    f"{html.escape(intent.symbol)}"
+                    f"</b>: {size} @ "
+                    f"{avg_price}.\n"
+                    f"Executing this "
+                    f"{intent.side.value} will "
+                    "add to the same one-way "
+                    "position and change its "
+                    "average entry."
+                )
+            else:
+                warnings.append(
+                    "⚠️ <b>EXISTING OPPOSITE "
+                    "EXPOSURE</b>\n"
+                    f"Bybit already has "
+                    f"<b>{position.side.value} "
+                    f"{html.escape(intent.symbol)}"
+                    f"</b>: {size} @ "
+                    f"{avg_price}.\n"
+                    f"Executing this "
+                    f"{intent.side.value} may "
+                    "reduce, close, or reverse "
+                    "that position depending on "
+                    "filled quantity."
+                )
+
+        if exposure.pending_entry_orders:
+            same_side = [
+                order
+                for order
+                in exposure.pending_entry_orders
+                if (
+                    order.side
+                    is intent.side
+                )
+            ]
+
+            opposite_side = [
+                order
+                for order
+                in exposure.pending_entry_orders
+                if (
+                    order.side
+                    is not intent.side
+                )
+            ]
+
+            details: list[str] = []
+
+            if same_side:
+                details.append(
+                    f"{len(same_side)} "
+                    "same-side"
+                )
+
+            if opposite_side:
+                details.append(
+                    f"{len(opposite_side)} "
+                    "opposite-side"
+                )
+
+            warnings.append(
+                "⚠️ <b>PENDING CCB ENTRY "
+                "ORDERS</b>\n"
+                + ", ".join(details)
+                + " unfilled order(s) for "
+                + html.escape(
+                    intent.symbol
+                )
+                + " may fill later and further "
+                "change the shared one-way "
+                "position."
+            )
+
+        if not warnings:
+            return ""
+
+        return (
+            "\n\n".join(
+                warnings
+            )
+            + "\n\n"
         )
 
     @staticmethod

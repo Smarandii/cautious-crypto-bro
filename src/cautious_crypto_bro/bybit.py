@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import hashlib
 import hmac
 import json
 import logging
 import time
 from decimal import Decimal
+from urllib.parse import urlencode
 
 import httpx
 
@@ -37,6 +39,44 @@ class TradeExecutionError(
     RuntimeError
 ):
     pass
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class PositionExposure:
+    side: Side
+    size: Decimal
+    avg_price: Decimal
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class OpenOrderExposure:
+    side: Side
+    remaining_quantity: Decimal
+    order_id: str
+    order_link_id: str
+    price: Decimal | None
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class SymbolExposure:
+    symbol: str
+    positions: tuple[
+        PositionExposure,
+        ...,
+    ] = ()
+    pending_entry_orders: tuple[
+        OpenOrderExposure,
+        ...,
+    ] = ()
 
 
 class BybitDemoExecutor:
@@ -70,6 +110,15 @@ class BybitDemoExecutor:
             symbol,
         )
 
+    async def exposure(
+        self,
+        symbol: str,
+    ) -> SymbolExposure:
+        return await asyncio.to_thread(
+            self._exposure_sync,
+            symbol,
+        )
+
     async def execute(
         self,
         plan: ExecutionPlan,
@@ -90,6 +139,231 @@ class BybitDemoExecutor:
 
     def close(self) -> None:
         self._client.close()
+
+    def _exposure_sync(
+        self,
+        symbol: str,
+    ) -> SymbolExposure:
+        self._sync_clock()
+
+        position_response = (
+            self._private_get(
+                "/v5/position/list",
+                {
+                    "category": "linear",
+                    "symbol": symbol,
+                },
+            )
+        )
+
+        positions: list[
+            PositionExposure
+        ] = []
+
+        position_items = (
+            position_response
+            .get("result", {})
+            .get("list", [])
+        )
+
+        for item in position_items:
+            if not isinstance(
+                item,
+                dict,
+            ):
+                continue
+
+            size = Decimal(
+                str(
+                    item.get("size")
+                    or "0"
+                )
+            )
+
+            if size <= 0:
+                continue
+
+            avg_price_raw = (
+                item.get("avgPrice")
+            )
+
+            if (
+                avg_price_raw is None
+                or str(
+                    avg_price_raw
+                ).strip() == ""
+            ):
+                raise TradeExecutionError(
+                    "Active Bybit position "
+                    "contains no average price"
+                )
+
+            positions.append(
+                PositionExposure(
+                    side=(
+                        self._side_from_bybit(
+                            item.get("side")
+                        )
+                    ),
+                    size=size,
+                    avg_price=Decimal(
+                        str(
+                            avg_price_raw
+                        )
+                    ),
+                )
+            )
+
+        pending_orders: list[
+            OpenOrderExposure
+        ] = []
+
+        order_params: dict[
+            str,
+            object,
+        ] = {
+            "category": "linear",
+            "symbol": symbol,
+            "openOnly": 0,
+            "orderFilter": "Order",
+            "limit": 50,
+        }
+
+        while True:
+            order_response = (
+                self._private_get(
+                    "/v5/order/realtime",
+                    order_params,
+                )
+            )
+
+            result = (
+                order_response
+                .get("result", {})
+            )
+
+            order_items = (
+                result.get(
+                    "list",
+                    [],
+                )
+            )
+
+            for item in order_items:
+                if not isinstance(
+                    item,
+                    dict,
+                ):
+                    continue
+
+                order_link_id = str(
+                    item.get(
+                        "orderLinkId"
+                    )
+                    or ""
+                )
+
+                # Only warn about pending entry
+                # orders created by this app.
+                if not order_link_id.startswith(
+                    "ccb-"
+                ):
+                    continue
+
+                reduce_only = (
+                    item.get(
+                        "reduceOnly"
+                    )
+                )
+
+                if (
+                    reduce_only is True
+                    or str(
+                        reduce_only
+                    ).casefold()
+                    == "true"
+                ):
+                    continue
+
+                remaining = Decimal(
+                    str(
+                        item.get(
+                            "leavesQty"
+                        )
+                        or "0"
+                    )
+                )
+
+                if remaining <= 0:
+                    continue
+
+                price_raw = str(
+                    item.get("price")
+                    or ""
+                ).strip()
+
+                price = (
+                    None
+                    if price_raw
+                    in {
+                        "",
+                        "0",
+                        "0.0",
+                        "0.00",
+                    }
+                    else Decimal(
+                        price_raw
+                    )
+                )
+
+                pending_orders.append(
+                    OpenOrderExposure(
+                        side=(
+                            self._side_from_bybit(
+                                item.get(
+                                    "side"
+                                )
+                            )
+                        ),
+                        remaining_quantity=(
+                            remaining
+                        ),
+                        order_id=str(
+                            item.get(
+                                "orderId"
+                            )
+                            or ""
+                        ),
+                        order_link_id=(
+                            order_link_id
+                        ),
+                        price=price,
+                    )
+                )
+
+            cursor = str(
+                result.get(
+                    "nextPageCursor"
+                )
+                or ""
+            )
+
+            if not cursor:
+                break
+
+            order_params[
+                "cursor"
+            ] = cursor
+
+        return SymbolExposure(
+            symbol=symbol,
+            positions=tuple(
+                positions
+            ),
+            pending_entry_orders=tuple(
+                pending_orders
+            ),
+        )
 
     def _cancel_all_orders_sync(
         self,
@@ -767,6 +1041,115 @@ class BybitDemoExecutor:
             + self._clock_offset_ms
         )
 
+    def _private_get(
+        self,
+        path: str,
+        params: dict[
+            str,
+            object,
+        ],
+    ) -> dict:
+        query_string = urlencode(
+            [
+                (
+                    key,
+                    str(value),
+                )
+                for key, value
+                in params.items()
+            ]
+        )
+
+        for attempt in range(2):
+            timestamp = (
+                self._auth_timestamp()
+            )
+
+            payload = (
+                timestamp
+                + self._api_key
+                + str(
+                    RECV_WINDOW_MS
+                )
+                + query_string
+            )
+
+            signature = hmac.new(
+                self._api_secret.encode(),
+                payload.encode(),
+                hashlib.sha256,
+            ).hexdigest()
+
+            headers = {
+                "X-BAPI-API-KEY": (
+                    self._api_key
+                ),
+                "X-BAPI-TIMESTAMP": (
+                    timestamp
+                ),
+                "X-BAPI-RECV-WINDOW": (
+                    str(
+                        RECV_WINDOW_MS
+                    )
+                ),
+                "X-BAPI-SIGN": (
+                    signature
+                ),
+            }
+
+            try:
+                response = (
+                    self._client.get(
+                        (
+                            f"{path}?"
+                            f"{query_string}"
+                        ),
+                        headers=headers,
+                    )
+                )
+
+                response.raise_for_status()
+
+            except httpx.HTTPError as exc:
+                raise TradeExecutionError(
+                    "Bybit HTTP request "
+                    f"failed: {exc}"
+                ) from exc
+
+            data = response.json()
+            code = data.get(
+                "retCode"
+            )
+
+            if str(code) == "0":
+                return data
+
+            if (
+                str(code) == "10002"
+                and attempt == 0
+            ):
+                logger.warning(
+                    "Bybit rejected request "
+                    "timestamp; "
+                    "re-synchronizing clock"
+                )
+
+                self._sync_clock(
+                    force=True
+                )
+                continue
+
+            raise TradeExecutionError(
+                "Bybit rejected request: "
+                f"{code} "
+                f"{data.get('retMsg')}"
+            )
+
+        raise TradeExecutionError(
+            "Bybit request failed "
+            "after clock re-sync"
+        )
+
     def _private_post(
         self,
         path: str,
@@ -918,6 +1301,21 @@ class BybitDemoExecutor:
             )
 
         return data
+
+    @staticmethod
+    def _side_from_bybit(
+        side: object,
+    ) -> Side:
+        if side == "Buy":
+            return Side.LONG
+
+        if side == "Sell":
+            return Side.SHORT
+
+        raise TradeExecutionError(
+            "Unexpected Bybit position/order "
+            f"side: {side!r}"
+        )
 
     @staticmethod
     def _fmt(
