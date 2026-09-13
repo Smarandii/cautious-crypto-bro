@@ -53,8 +53,6 @@ If you need a Bybit account, this is my referral link:
 
 https://www.bybit.com/invite?ref=Y5B5E38
 
-It is a referral link.
-
 ### 2. Authorize Telegram and find source channel IDs
 
 Build the app:
