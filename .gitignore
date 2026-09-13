@@ -11,5 +11,5 @@ dist/
 *.egg-info/
 repomix-output.*
 *.patch
-
+audit-output/
 debug/
