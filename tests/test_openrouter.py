@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from cautious_crypto_bro.domain import (
     ImageAttachment,
@@ -11,7 +11,7 @@ from cautious_crypto_bro.openrouter import (
 
 
 def source() -> SourceMessage:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     return SourceMessage(
         channel_id=-1001234567890,
@@ -25,9 +25,7 @@ def source() -> SourceMessage:
 
 
 def test_text_post_keeps_text_content() -> None:
-    content = _build_user_content(
-        IncomingPost(source=source())
-    )
+    content = _build_user_content(IncomingPost(source=source()))
 
     assert isinstance(content, str)
     assert "LONG BTCUSDT" in content
@@ -51,9 +49,7 @@ def test_image_post_builds_base64_content() -> None:
     assert content[1] == {
         "type": "image_url",
         "image_url": {
-            "url": (
-                "data:image/png;base64,AQI="
-            ),
+            "url": ("data:image/png;base64,AQI="),
         },
     }
 
@@ -67,26 +63,15 @@ def test_guidance_is_added_to_prompt() -> None:
 
     assert isinstance(content, str)
 
-    assert (
-        "Global guidance:\nGlobal rule"
-        in content
-    )
+    assert "Global guidance:\nGlobal rule" in content
 
-    assert (
-        "Channel-specific guidance:\n"
-        "Trader rule"
-        in content
-    )
+    assert "Channel-specific guidance:\nTrader rule" in content
 
-    assert content.index(
-        "Global guidance:"
-    ) < content.index(
+    assert content.index("Global guidance:") < content.index(
         "Channel-specific guidance:"
     )
 
-    assert content.index(
-        "Channel-specific guidance:"
-    ) < content.index(
+    assert content.index("Channel-specific guidance:") < content.index(
         "Telegram post text/caption:"
     )
 
@@ -103,20 +88,14 @@ def test_provider_error_inside_http_success_is_rejected() -> None:
                 "finish_reason": "error",
                 "error": {
                     "code": 502,
-                    "message": (
-                        "Network connection lost."
-                    ),
+                    "message": ("Network connection lost."),
                     "metadata": {
-                        "error_type": (
-                            "provider_unavailable"
-                        ),
+                        "error_type": ("provider_unavailable"),
                     },
                 },
                 "message": {
                     "role": "assistant",
-                    "content": (
-                        '{"actionable": true'
-                    ),
+                    "content": ('{"actionable": true'),
                 },
             }
         ],
@@ -126,15 +105,9 @@ def test_provider_error_inside_http_success_is_rejected() -> None:
 
     with pytest.raises(
         ValueError,
-        match=(
-            "provider=NextBit.*"
-            "code=502.*"
-            "Network connection lost"
-        ),
+        match=("provider=NextBit.*code=502.*Network connection lost"),
     ):
-        _completion_content(
-            response
-        )
+        _completion_content(response)
 
 
 def test_truncated_completion_is_rejected() -> None:
@@ -149,10 +122,7 @@ def test_truncated_completion_is_rejected() -> None:
                 "finish_reason": "length",
                 "message": {
                     "role": "assistant",
-                    "content": (
-                        '{"actionable": true'
-                        + " " * 1000
-                    ),
+                    "content": ('{"actionable": true' + " " * 1000),
                 },
             }
         ],
@@ -162,31 +132,20 @@ def test_truncated_completion_is_rejected() -> None:
 
     with pytest.raises(
         ValueError,
-        match=(
-            "provider=Parasail.*"
-            "finish_reason=length"
-        ),
+        match=("provider=Parasail.*finish_reason=length"),
     ):
-        _completion_content(
-            response
-        )
+        _completion_content(response)
 
 
 class FakeProviderCooldownStore:
     def __init__(self) -> None:
         self.active: set[str] = set()
-        self.recorded: list[
-            tuple[str, str, int]
-        ] = []
+        self.recorded: list[tuple[str, str, int]] = []
 
     async def get_openrouter_provider_cooldowns(
         self,
     ) -> tuple[str, ...]:
-        return tuple(
-            sorted(
-                self.active
-            )
-        )
+        return tuple(sorted(self.active))
 
     async def cooldown_openrouter_provider(
         self,
@@ -194,9 +153,7 @@ class FakeProviderCooldownStore:
         reason: str,
         duration_seconds: int,
     ) -> None:
-        self.active.add(
-            provider
-        )
+        self.active.add(provider)
 
         self.recorded.append(
             (
@@ -218,22 +175,16 @@ def test_failed_provider_is_excluded_on_retry() -> None:
     )
 
     async def run() -> None:
-        store = (
-            FakeProviderCooldownStore()
-        )
+        store = FakeProviderCooldownStore()
 
         payloads = []
 
         def handler(
             request: httpx.Request,
         ) -> httpx.Response:
-            payload = json.loads(
-                request.content
-            )
+            payload = json.loads(request.content)
 
-            payloads.append(
-                payload
-            )
+            payloads.append(payload)
 
             if len(payloads) == 1:
                 return httpx.Response(
@@ -242,9 +193,7 @@ def test_failed_provider_is_excluded_on_retry() -> None:
                         "provider": "Venice",
                         "choices": [
                             {
-                                "finish_reason": (
-                                    "length"
-                                ),
+                                "finish_reason": ("length"),
                                 "message": {
                                     "content": "{}",
                                 },
@@ -265,9 +214,7 @@ def test_failed_provider_is_excluded_on_retry() -> None:
                                     json.dumps(
                                         {
                                             "actionable": False,
-                                            "reason": (
-                                                "commentary"
-                                            ),
+                                            "reason": ("commentary"),
                                             "intent": None,
                                         }
                                     )
@@ -278,66 +225,36 @@ def test_failed_provider_is_excluded_on_retry() -> None:
                 },
             )
 
-        extractor = (
-            OpenRouterIntentExtractor(
-                api_key="test",
-                model="test/model",
-                base_url=(
-                    "https://openrouter.test"
-                ),
-                inference_timeout_seconds=5,
-                max_attempts=2,
-                provider_cooldown_store=store,
-                provider_cooldown_seconds=(
-                    12 * 60 * 60
-                ),
-            )
+        extractor = OpenRouterIntentExtractor(
+            api_key="test",
+            model="test/model",
+            base_url=("https://openrouter.test"),
+            inference_timeout_seconds=5,
+            max_attempts=2,
+            provider_cooldown_store=store,
+            provider_cooldown_seconds=(12 * 60 * 60),
         )
 
         await extractor._client.aclose()
 
-        extractor._client = (
-            httpx.AsyncClient(
-                base_url=(
-                    "https://openrouter.test"
-                ),
-                transport=(
-                    httpx.MockTransport(
-                        handler
-                    )
-                ),
-            )
+        extractor._client = httpx.AsyncClient(
+            base_url=("https://openrouter.test"),
+            transport=(httpx.MockTransport(handler)),
         )
 
         try:
-            result = (
-                await extractor.extract(
-                    IncomingPost(
-                        source=source()
-                    )
-                )
-            )
+            result = await extractor.extract(IncomingPost(source=source()))
         finally:
             await extractor.close()
 
         assert result is None
         assert len(payloads) == 2
 
-        first_ignore = set(
-            payloads[0][
-                "provider"
-            ]["ignore"]
-        )
+        first_ignore = set(payloads[0]["provider"]["ignore"])
 
-        second_ignore = set(
-            payloads[1][
-                "provider"
-            ]["ignore"]
-        )
+        second_ignore = set(payloads[1]["provider"]["ignore"])
 
-        assert "venice" not in (
-            first_ignore
-        )
+        assert "venice" not in (first_ignore)
 
         assert {
             "nextbit",
@@ -345,19 +262,11 @@ def test_failed_provider_is_excluded_on_retry() -> None:
             "venice",
         } <= second_ignore
 
-        assert (
-            store.recorded[0][0]
-            == "venice"
-        )
+        assert store.recorded[0][0] == "venice"
 
-        assert (
-            store.recorded[0][2]
-            == 12 * 60 * 60
-        )
+        assert store.recorded[0][2] == 12 * 60 * 60
 
-    asyncio.run(
-        run()
-    )
+    asyncio.run(run())
 
 
 def test_invalid_output_cools_down_named_provider() -> None:
@@ -371,9 +280,7 @@ def test_invalid_output_cools_down_named_provider() -> None:
     )
 
     async def run() -> None:
-        store = (
-            FakeProviderCooldownStore()
-        )
+        store = FakeProviderCooldownStore()
 
         calls = 0
 
@@ -419,9 +326,7 @@ def test_invalid_output_cools_down_named_provider() -> None:
                                     json.dumps(
                                         {
                                             "actionable": False,
-                                            "reason": (
-                                                "commentary"
-                                            ),
+                                            "reason": ("commentary"),
                                             "intent": None,
                                         }
                                     )
@@ -432,61 +337,35 @@ def test_invalid_output_cools_down_named_provider() -> None:
                 },
             )
 
-        extractor = (
-            OpenRouterIntentExtractor(
-                api_key="test",
-                model="test/model",
-                base_url=(
-                    "https://openrouter.test"
-                ),
-                inference_timeout_seconds=5,
-                max_attempts=2,
-                provider_cooldown_store=store,
-            )
+        extractor = OpenRouterIntentExtractor(
+            api_key="test",
+            model="test/model",
+            base_url=("https://openrouter.test"),
+            inference_timeout_seconds=5,
+            max_attempts=2,
+            provider_cooldown_store=store,
         )
 
         await extractor._client.aclose()
 
-        extractor._client = (
-            httpx.AsyncClient(
-                base_url=(
-                    "https://openrouter.test"
-                ),
-                transport=(
-                    httpx.MockTransport(
-                        handler
-                    )
-                ),
-            )
+        extractor._client = httpx.AsyncClient(
+            base_url=("https://openrouter.test"),
+            transport=(httpx.MockTransport(handler)),
         )
 
         try:
-            result = (
-                await extractor.extract(
-                    IncomingPost(
-                        source=source()
-                    )
-                )
-            )
+            result = await extractor.extract(IncomingPost(source=source()))
         finally:
             await extractor.close()
 
         assert result is None
         assert calls == 2
 
-        assert (
-            store.recorded[0][0]
-            == "venice"
-        )
+        assert store.recorded[0][0] == "venice"
 
-        assert (
-            "invalid structured output"
-            in store.recorded[0][1]
-        )
+        assert "invalid structured output" in store.recorded[0][1]
 
-    asyncio.run(
-        run()
-    )
+    asyncio.run(run())
 
 
 class FakeEvaluationCache:
@@ -498,9 +377,7 @@ class FakeEvaluationCache:
         self,
         fingerprint,
     ):
-        return self.values.get(
-            fingerprint
-        )
+        return self.values.get(fingerprint)
 
     async def cache_openrouter_evaluation(
         self,
@@ -508,9 +385,7 @@ class FakeEvaluationCache:
         payload_json,
         duration_seconds,
     ):
-        self.values[
-            fingerprint
-        ] = payload_json
+        self.values[fingerprint] = payload_json
 
         self.writes.append(
             (
@@ -567,9 +442,7 @@ def test_valid_evaluation_is_reused_from_cache() -> None:
         extractor = OpenRouterIntentExtractor(
             api_key="test",
             model="test/model",
-            base_url=(
-                "https://openrouter.test"
-            ),
+            base_url=("https://openrouter.test"),
             inference_timeout_seconds=5,
             max_attempts=1,
             evaluation_cache=cache,
@@ -578,31 +451,17 @@ def test_valid_evaluation_is_reused_from_cache() -> None:
 
         await extractor._client.aclose()
 
-        extractor._client = (
-            httpx.AsyncClient(
-                base_url=(
-                    "https://openrouter.test"
-                ),
-                transport=(
-                    httpx.MockTransport(
-                        handler
-                    )
-                ),
-            )
+        extractor._client = httpx.AsyncClient(
+            base_url=("https://openrouter.test"),
+            transport=(httpx.MockTransport(handler)),
         )
 
         try:
-            item = IncomingPost(
-                source=source()
-            )
+            item = IncomingPost(source=source())
 
-            first = await extractor.extract(
-                item
-            )
+            first = await extractor.extract(item)
 
-            second = await extractor.extract(
-                item
-            )
+            second = await extractor.extract(item)
         finally:
             await extractor.close()
 
@@ -612,9 +471,7 @@ def test_valid_evaluation_is_reused_from_cache() -> None:
         assert len(cache.writes) == 1
         assert cache.writes[0][2] == 21600
 
-    asyncio.run(
-        run()
-    )
+    asyncio.run(run())
 
 
 def test_guidance_change_invalidates_evaluation_cache() -> None:
@@ -663,9 +520,7 @@ def test_guidance_change_invalidates_evaluation_cache() -> None:
         extractor = OpenRouterIntentExtractor(
             api_key="test",
             model="test/model",
-            base_url=(
-                "https://openrouter.test"
-            ),
+            base_url=("https://openrouter.test"),
             inference_timeout_seconds=5,
             max_attempts=1,
             evaluation_cache=cache,
@@ -673,23 +528,13 @@ def test_guidance_change_invalidates_evaluation_cache() -> None:
 
         await extractor._client.aclose()
 
-        extractor._client = (
-            httpx.AsyncClient(
-                base_url=(
-                    "https://openrouter.test"
-                ),
-                transport=(
-                    httpx.MockTransport(
-                        handler
-                    )
-                ),
-            )
+        extractor._client = httpx.AsyncClient(
+            base_url=("https://openrouter.test"),
+            transport=(httpx.MockTransport(handler)),
         )
 
         try:
-            item = IncomingPost(
-                source=source()
-            )
+            item = IncomingPost(source=source())
 
             await extractor.extract(
                 item,
@@ -706,6 +551,4 @@ def test_guidance_change_invalidates_evaluation_cache() -> None:
         assert calls == 2
         assert len(cache.writes) == 2
 
-    asyncio.run(
-        run()
-    )
+    asyncio.run(run())

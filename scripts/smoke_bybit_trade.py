@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from cautious_crypto_bro.bybit import BybitDemoExecutor
@@ -46,10 +46,7 @@ async def main() -> None:
     parser.add_argument(
         "--omit-tp",
         action="store_true",
-        help=(
-            "Leave trader TP empty so the "
-            "ExecutionPolicy fallback ladder is used."
-        ),
+        help=("Leave trader TP empty so the ExecutionPolicy fallback ladder is used."),
     )
 
     parser.add_argument(
@@ -86,13 +83,9 @@ async def main() -> None:
         entry_type = EntryType(args.entry_type)
 
         if args.cancel_existing:
-            cancelled = await executor.cancel_all_orders(
-                symbol
-            )
+            cancelled = await executor.cancel_all_orders(symbol)
 
-            print(
-                f"Cancelled existing orders: {cancelled}"
-            )
+            print(f"Cancelled existing orders: {cancelled}")
 
             await asyncio.sleep(1)
 
@@ -134,7 +127,7 @@ async def main() -> None:
                 range_high=float(range_high),
             )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         intent = TradingIntent(
             source=SourceMessage(
@@ -150,11 +143,7 @@ async def main() -> None:
             side=side,
             entry=entry,
             stop_loss=float(stop_loss),
-            take_profit=(
-                None
-                if args.omit_tp
-                else float(take_profit)
-            ),
+            take_profit=(None if args.omit_tp else float(take_profit)),
             summary="Synthetic Bybit Demo integration test.",
             confidence=1.0,
         )
@@ -169,29 +158,16 @@ async def main() -> None:
         print(f"Side:         {plan.side}")
         print(f"Entry type:   {entry_type}")
         print(f"Market:       {context.market_price}")
-        print(
-            "Capital:      "
-            f"{policy.trading_capital_usdt} USDT"
-        )
-        print(
-            "Risk:         "
-            f"{policy.risk_per_trade_pct}%"
-        )
-        print(
-            "Risk budget:  "
-            f"{policy.risk_budget_usdt} USDT"
-        )
+        print(f"Capital:      {policy.trading_capital_usdt} USDT")
+        print(f"Risk:         {policy.risk_per_trade_pct}%")
+        print(f"Risk budget:  {policy.risk_budget_usdt} USDT")
         print(f"Orders:       {len(plan.orders)}")
 
         for index, order in enumerate(
             plan.orders,
             start=1,
         ):
-            price = (
-                str(order.price)
-                if order.price is not None
-                else "MARKET"
-            )
+            price = str(order.price) if order.price is not None else "MARKET"
 
             print(
                 f"  {index}: "
@@ -203,18 +179,12 @@ async def main() -> None:
 
         print(f"SL:           {plan.stop_loss}")
         print(f"TP:           {plan.take_profit}")
-        print(
-            "Planned loss: "
-            f"{plan.planned_max_loss_usdt} USDT"
-        )
+        print(f"Planned loss: {plan.planned_max_loss_usdt} USDT")
         print()
 
         if not args.execute:
             print("Dry run only.")
-            print(
-                "Re-run with --execute to submit "
-                "the Bybit Demo order(s)."
-            )
+            print("Re-run with --execute to submit the Bybit Demo order(s).")
             return
 
         order_ids = await executor.execute(plan)

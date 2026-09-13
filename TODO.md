@@ -1,19 +1,31 @@
-# TODO
+# Roadmap
 
-## Trade lifecycle and performance attribution
+## Multi-intent, higher-recall extraction
 
-Exposure warnings are implemented for existing Bybit positions and pending CCB entry orders. Execution remains user-controlled even when signals will net in the shared one-way account.
+Allow one Telegram post to produce multiple independent trade candidates.
 
-Add OPEN / REDUCE / CLOSE handling for trader follow-up messages and persist fills, exits and fees so per-channel performance can be reconstructed even when same-symbol signals overlap.
+- Prefer surfacing supported candidates over rejecting an entire mixed post.
+- Existing-position screenshots should produce MARKET, not LIMIT at historical
+  average entry.
+- Updates/commentary must not automatically disqualify an otherwise complete
+  trade.
+- Keep execution-critical values strict: never invent symbol, side, entry or
+  stop.
 
-## MENSA visual structure extraction
+## Trade lifecycle
 
-Interpret advanced chart-based setups instead of requiring every price in text.
+Add OPEN / REDUCE / CLOSE handling for trader follow-up messages.
 
-- Detect entry rectangles only with reliable chart calibration.
-- Use explicit anchors / price axis to derive numeric range boundaries.
-- Derive structural stop deterministically from channel guidance.
-- Preserve the anchor as one entry order; distribute remaining entries across
-  the range.
-- Risk budget determines quantity, not stop placement.
-- Reject low-confidence geometry rather than invent prices.
+Persist fills, exits and fees so per-channel performance can be reconstructed
+when same-symbol signals overlap in the shared Bybit position.
+
+## MENSA visual structure
+
+Interpret chart entry structures only when image calibration is reliable.
+Derive structural stops deterministically from channel guidance and reject
+low-confidence geometry instead of inventing prices.
+
+## Deferred
+
+Speech-to-text and video ingestion: currently low expected value compared with
+improving text/image signal recall.

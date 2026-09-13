@@ -21,9 +21,7 @@ class IntentStore:
         self,
         database_path: Path,
     ) -> None:
-        self._database_path = (
-            database_path
-        )
+        self._database_path = database_path
 
     async def initialize(self) -> None:
         self._database_path.parent.mkdir(
@@ -31,9 +29,7 @@ class IntentStore:
             exist_ok=True,
         )
 
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             await db.executescript(
                 """
                 PRAGMA journal_mode=WAL;
@@ -163,15 +159,9 @@ class IntentStore:
                 """
             )
 
-            cursor = await db.execute(
-                "PRAGMA table_info(source_messages)"
-            )
+            cursor = await db.execute("PRAGMA table_info(source_messages)")
 
-            source_columns = {
-                row[1]
-                for row
-                in await cursor.fetchall()
-            }
+            source_columns = {row[1] for row in await cursor.fetchall()}
 
             if "status" not in source_columns:
                 await db.execute(
@@ -233,16 +223,11 @@ class IntentStore:
         lease_seconds: int,
     ) -> str | None:
         if lease_seconds <= 0:
-            raise ValueError(
-                "Source processing lease "
-                "must be positive"
-            )
+            raise ValueError("Source processing lease must be positive")
 
         claim_token = uuid4().hex
 
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             cursor = await db.execute(
                 """
                 INSERT INTO source_messages(
@@ -300,10 +285,7 @@ class IntentStore:
                     source.message_id,
                     source.model_dump_json(),
                     claim_token,
-                    (
-                        f"-{lease_seconds} "
-                        "seconds"
-                    ),
+                    (f"-{lease_seconds} seconds"),
                 ),
             )
 
@@ -319,9 +301,7 @@ class IntentStore:
         source: SourceMessage,
         claim_token: str,
     ) -> bool:
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             cursor = await db.execute(
                 """
                 UPDATE source_messages
@@ -353,14 +333,9 @@ class IntentStore:
         claim_token: str,
         error: str,
     ) -> bool:
-        error = (
-            error.strip()
-            or "unknown processing failure"
-        )[:2000]
+        error = (error.strip() or "unknown processing failure")[:2000]
 
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             cursor = await db.execute(
                 """
                 UPDATE source_messages
@@ -394,10 +369,7 @@ class IntentStore:
         plan: ExecutionPlan,
     ) -> None:
         if plan.intent_id != intent.intent_id:
-            raise ValueError(
-                "ExecutionPlan intent_id "
-                "does not match TradingIntent"
-            )
+            raise ValueError("ExecutionPlan intent_id does not match TradingIntent")
 
         now = intent.created_at.isoformat()
 
@@ -446,9 +418,7 @@ class IntentStore:
         intent: TradingIntent,
         plan: ExecutionPlan,
     ) -> None:
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             await self._insert_intent_with_plan(
                 db,
                 intent,
@@ -464,12 +434,8 @@ class IntentStore:
     ) -> bool:
         source = intent.source
 
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
-            await db.execute(
-                "BEGIN IMMEDIATE"
-            )
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
 
             try:
                 cursor = await db.execute(
@@ -489,10 +455,7 @@ class IntentStore:
                     ),
                 )
 
-                if (
-                    await cursor.fetchone()
-                    is None
-                ):
+                if await cursor.fetchone() is None:
                     await db.rollback()
                     return False
 
@@ -539,12 +502,8 @@ class IntentStore:
         self,
         intent_id: UUID,
     ) -> TradingIntent | None:
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
-            db.row_factory = (
-                aiosqlite.Row
-            )
+        async with aiosqlite.connect(self._database_path) as db:
+            db.row_factory = aiosqlite.Row
 
             cursor = await db.execute(
                 """
@@ -560,27 +519,15 @@ class IntentStore:
         if row is None:
             return None
 
-        intent = (
-            TradingIntent.model_validate_json(
-                row["payload_json"]
-            )
-        )
+        intent = TradingIntent.model_validate_json(row["payload_json"])
 
-        return intent.model_copy(
-            update={
-                "status": IntentStatus(
-                    row["status"]
-                )
-            }
-        )
+        return intent.model_copy(update={"status": IntentStatus(row["status"])})
 
     async def get_execution_plan(
         self,
         intent_id: UUID,
     ) -> ExecutionPlan | None:
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             cursor = await db.execute(
                 """
                 SELECT payload_json
@@ -595,20 +542,14 @@ class IntentStore:
         if row is None:
             return None
 
-        return (
-            ExecutionPlan.model_validate_json(
-                row[0]
-            )
-        )
+        return ExecutionPlan.model_validate_json(row[0])
 
     async def claim_for_execution(
         self,
         intent_id: UUID,
         user_id: int,
     ) -> bool:
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             cursor = await db.execute(
                 """
                 UPDATE intents
@@ -636,9 +577,7 @@ class IntentStore:
         intent_id: UUID,
         user_id: int,
     ) -> bool:
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             cursor = await db.execute(
                 """
                 UPDATE intents
@@ -668,9 +607,7 @@ class IntentStore:
         str | None,
         str | None,
     ]:
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             cursor = await db.execute(
                 """
                 SELECT scope, content
@@ -710,19 +647,11 @@ class IntentStore:
         content = content.strip()
 
         if not content:
-            raise ValueError(
-                "Guidance must not be empty"
-            )
+            raise ValueError("Guidance must not be empty")
 
-        scope = (
-            "global"
-            if channel_id is None
-            else "channel"
-        )
+        scope = "global" if channel_id is None else "channel"
 
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             if scope == "global":
                 await db.execute(
                     """
@@ -768,9 +697,7 @@ class IntentStore:
     async def get_execution_policy(
         self,
     ) -> ExecutionPolicy:
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             cursor = await db.execute(
                 """
                 SELECT
@@ -782,9 +709,7 @@ class IntentStore:
                 """
             )
 
-            policy_row = (
-                await cursor.fetchone()
-            )
+            policy_row = await cursor.fetchone()
 
             cursor = await db.execute(
                 """
@@ -801,54 +726,26 @@ class IntentStore:
                 """
             )
 
-            exit_row = (
-                await cursor.fetchone()
-            )
+            exit_row = await cursor.fetchone()
 
         if policy_row is None:
-            raise RuntimeError(
-                "Execution policy "
-                "is not initialized"
-            )
+            raise RuntimeError("Execution policy is not initialized")
 
         if exit_row is None:
-            raise RuntimeError(
-                "Execution exit policy "
-                "is not initialized"
-            )
+            raise RuntimeError("Execution exit policy is not initialized")
 
         return ExecutionPolicy(
-            trading_capital_usdt=(
-                policy_row[0]
-            ),
-            risk_per_trade_pct=(
-                policy_row[1]
-            ),
-            range_order_count=(
-                policy_row[2]
-            ),
+            trading_capital_usdt=(policy_row[0]),
+            risk_per_trade_pct=(policy_row[1]),
+            range_order_count=(policy_row[2]),
             exit_policy=ExitPolicy(
-                minimum_reward_bps=(
-                    exit_row[0]
-                ),
-                basic_r_multiple=(
-                    exit_row[1]
-                ),
-                basic_close_pct=(
-                    exit_row[2]
-                ),
-                medium_r_multiple=(
-                    exit_row[3]
-                ),
-                medium_close_pct=(
-                    exit_row[4]
-                ),
-                high_r_multiple=(
-                    exit_row[5]
-                ),
-                high_close_pct=(
-                    exit_row[6]
-                ),
+                minimum_reward_bps=(exit_row[0]),
+                basic_r_multiple=(exit_row[1]),
+                basic_close_pct=(exit_row[2]),
+                medium_r_multiple=(exit_row[3]),
+                medium_close_pct=(exit_row[4]),
+                high_r_multiple=(exit_row[5]),
+                high_close_pct=(exit_row[6]),
             ),
         )
 
@@ -856,9 +753,7 @@ class IntentStore:
         self,
         policy: ExecutionPolicy,
     ) -> None:
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             await db.execute(
                 """
                 INSERT INTO execution_policy(
@@ -886,19 +781,13 @@ class IntentStore:
                         CURRENT_TIMESTAMP
                 """,
                 (
-                    str(
-                        policy.trading_capital_usdt
-                    ),
-                    str(
-                        policy.risk_per_trade_pct
-                    ),
+                    str(policy.trading_capital_usdt),
+                    str(policy.risk_per_trade_pct),
                     policy.range_order_count,
                 ),
             )
 
-            exit_policy = (
-                policy.exit_policy
-            )
+            exit_policy = policy.exit_policy
 
             await db.execute(
                 """
@@ -943,27 +832,13 @@ class IntentStore:
                         CURRENT_TIMESTAMP
                 """,
                 (
-                    str(
-                        exit_policy.minimum_reward_bps
-                    ),
-                    str(
-                        exit_policy.basic_r_multiple
-                    ),
-                    str(
-                        exit_policy.basic_close_pct
-                    ),
-                    str(
-                        exit_policy.medium_r_multiple
-                    ),
-                    str(
-                        exit_policy.medium_close_pct
-                    ),
-                    str(
-                        exit_policy.high_r_multiple
-                    ),
-                    str(
-                        exit_policy.high_close_pct
-                    ),
+                    str(exit_policy.minimum_reward_bps),
+                    str(exit_policy.basic_r_multiple),
+                    str(exit_policy.basic_close_pct),
+                    str(exit_policy.medium_r_multiple),
+                    str(exit_policy.medium_close_pct),
+                    str(exit_policy.high_r_multiple),
+                    str(exit_policy.high_close_pct),
                 ),
             )
 
@@ -974,9 +849,7 @@ class IntentStore:
         intent_id: UUID,
         order_ids: tuple[str, ...],
     ) -> None:
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             await db.execute(
                 """
                 UPDATE intents
@@ -1000,9 +873,7 @@ class IntentStore:
                 WHERE intent_id = ?
                 """,
                 (
-                    json.dumps(
-                        list(order_ids)
-                    ),
+                    json.dumps(list(order_ids)),
                     str(intent_id),
                 ),
             )
@@ -1027,9 +898,7 @@ class IntentStore:
         *,
         error: str | None = None,
     ) -> None:
-        async with aiosqlite.connect(
-            self._database_path
-        ) as db:
+        async with aiosqlite.connect(self._database_path) as db:
             await db.execute(
                 """
                 UPDATE intents

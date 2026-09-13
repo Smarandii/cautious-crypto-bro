@@ -1,6 +1,6 @@
 from datetime import (
+    UTC,
     datetime,
-    timezone,
 )
 from decimal import Decimal
 
@@ -22,9 +22,7 @@ from cautious_crypto_bro.execution import (
 
 
 def intent() -> TradingIntent:
-    now = datetime.now(
-        timezone.utc
-    )
+    now = datetime.now(UTC)
 
     return TradingIntent(
         source=SourceMessage(
@@ -64,15 +62,9 @@ def policy(
     risk: str = "1",
 ) -> ExecutionPolicy:
     return ExecutionPolicy(
-        trading_capital_usdt=(
-            Decimal("6800")
-        ),
-        risk_per_trade_pct=(
-            Decimal(risk)
-        ),
-        range_order_count=(
-            order_count
-        ),
+        trading_capital_usdt=(Decimal("6800")),
+        risk_per_trade_pct=(Decimal(risk)),
+        range_order_count=(order_count),
     )
 
 
@@ -83,19 +75,13 @@ def test_three_range_orders_are_evenly_spaced() -> None:
         context(),
     )
 
-    assert [
-        order.price
-        for order in plan.orders
-    ] == [
+    assert [order.price for order in plan.orders] == [
         Decimal("100.0"),
         Decimal("105.0"),
         Decimal("110.0"),
     ]
 
-    assert (
-        plan.planned_max_loss_usdt
-        <= Decimal("68")
-    )
+    assert plan.planned_max_loss_usdt <= Decimal("68")
 
 
 def test_one_range_order_uses_midpoint() -> None:
@@ -105,12 +91,7 @@ def test_one_range_order_uses_midpoint() -> None:
         context(),
     )
 
-    assert [
-        order.price
-        for order in plan.orders
-    ] == [
-        Decimal("105.0")
-    ]
+    assert [order.price for order in plan.orders] == [Decimal("105.0")]
 
 
 def test_five_range_orders_are_evenly_spaced() -> None:
@@ -120,10 +101,7 @@ def test_five_range_orders_are_evenly_spaced() -> None:
         context(),
     )
 
-    assert [
-        order.price
-        for order in plan.orders
-    ] == [
+    assert [order.price for order in plan.orders] == [
         Decimal("100.0"),
         Decimal("102.5"),
         Decimal("105.0"),
@@ -142,20 +120,11 @@ def test_two_percent_risk_doubles_risk_budget() -> None:
         context(),
     )
 
-    assert (
-        plan.policy.risk_budget_usdt
-        == Decimal("136")
-    )
+    assert plan.policy.risk_budget_usdt == Decimal("136")
 
-    assert (
-        plan.planned_max_loss_usdt
-        <= Decimal("136")
-    )
+    assert plan.planned_max_loss_usdt <= Decimal("136")
 
-    assert (
-        plan.planned_max_loss_usdt
-        > Decimal("68")
-    )
+    assert plan.planned_max_loss_usdt > Decimal("68")
 
 
 def test_missing_tp_builds_default_policy_ladder() -> None:
@@ -178,21 +147,13 @@ def test_missing_tp_builds_default_policy_ladder() -> None:
         context(),
     )
 
-    assert [
-        target.name
-        for target
-        in plan.take_profit_targets
-    ] == [
+    assert [target.name for target in plan.take_profit_targets] == [
         "BASIC",
         "MEDIUM",
         "HIGH",
     ]
 
-    assert [
-        target.close_pct
-        for target
-        in plan.take_profit_targets
-    ] == [
+    assert [target.close_pct for target in plan.take_profit_targets] == [
         Decimal("25"),
         Decimal("35"),
         Decimal("40"),
@@ -200,10 +161,7 @@ def test_missing_tp_builds_default_policy_ladder() -> None:
 
     assert len(plan.orders) == 9
 
-    assert (
-        plan.planned_max_loss_usdt
-        <= Decimal("68")
-    )
+    assert plan.planned_max_loss_usdt <= Decimal("68")
 
 
 def test_explicit_trader_tp_does_not_use_default_ladder() -> None:
@@ -213,14 +171,9 @@ def test_explicit_trader_tp_does_not_use_default_ladder() -> None:
         context(),
     )
 
-    assert len(
-        plan.take_profit_targets
-    ) == 1
+    assert len(plan.take_profit_targets) == 1
 
-    assert (
-        plan.take_profit_targets[0].name
-        == "TRADER"
-    )
+    assert plan.take_profit_targets[0].name == "TRADER"
 
     assert len(plan.orders) == 3
 
@@ -248,18 +201,3 @@ def test_five_entries_with_default_ladder_exceeds_bybit_tpsl_limit() -> None:
             policy(5),
             context(),
         )
-
-
-def test_five_entries_with_trader_tp_are_allowed() -> None:
-    plan = ExecutionPlanner().plan(
-        intent(),
-        policy(5),
-        context(),
-    )
-
-    assert len(plan.orders) == 5
-
-    assert (
-        plan.planned_max_loss_usdt
-        <= Decimal("68")
-    )

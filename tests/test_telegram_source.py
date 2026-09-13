@@ -1,8 +1,8 @@
 import asyncio
 from datetime import (
+    UTC,
     datetime,
     timedelta,
-    timezone,
 )
 from types import SimpleNamespace
 
@@ -26,11 +26,7 @@ class FakeMessage:
         self.chat = None
         self.grouped_id = grouped_id
 
-        self.photo = (
-            object()
-            if image is not None
-            else None
-        )
+        self.photo = object() if image is not None else None
 
         self.file = None
         self._image = image
@@ -47,17 +43,13 @@ class FakeMessage:
 class FakeTelegramClient:
     def __init__(
         self,
-        messages: list[
-            FakeMessage
-        ],
+        messages: list[FakeMessage],
     ) -> None:
         self.messages = messages
 
-        self.entity = (
-            SimpleNamespace(
-                title="Test trader",
-                username=None,
-            )
+        self.entity = SimpleNamespace(
+            title="Test trader",
+            username=None,
         )
 
         self.handlers = []
@@ -76,9 +68,7 @@ class FakeTelegramClient:
         event,
     ):
         def register(handler):
-            self.handlers.append(
-                handler
-            )
+            self.handlers.append(handler)
             return handler
 
         return register
@@ -101,69 +91,41 @@ class FakeTelegramClient:
 
 def test_album_becomes_one_post_with_all_images() -> None:
     async def run() -> None:
-        now = datetime.now(
-            timezone.utc
-        )
+        now = datetime.now(UTC)
 
         chat = SimpleNamespace(
             title="Trader",
             username=None,
         )
 
-        post = (
-            await telegram_source
-            .telegram_messages_to_post(
-                (
-                    FakeMessage(
-                        message_id=101,
-                        published_at=now,
-                        text=(
-                            "Некоторые ждут "
-                            "биткоин по 30к.😫"
-                        ),
-                        grouped_id=77,
-                        image=b"first",
-                    ),
-                    FakeMessage(
-                        message_id=102,
-                        published_at=(
-                            now
-                            + timedelta(
-                                seconds=1
-                            )
-                        ),
-                        grouped_id=77,
-                        image=b"second",
-                    ),
+        post = await telegram_source.telegram_messages_to_post(
+            (
+                FakeMessage(
+                    message_id=101,
+                    published_at=now,
+                    text=("Некоторые ждут биткоин по 30к.😫"),
+                    grouped_id=77,
+                    image=b"first",
                 ),
-                chat=chat,
-            )
+                FakeMessage(
+                    message_id=102,
+                    published_at=(now + timedelta(seconds=1)),
+                    grouped_id=77,
+                    image=b"second",
+                ),
+            ),
+            chat=chat,
         )
 
         assert post is not None
 
-        assert (
-            post.source.message_id
-            == 101
-        )
+        assert post.source.message_id == 101
 
-        assert (
-            post.source.text
-            == (
-                "Некоторые ждут "
-                "биткоин по 30к.😫"
-            )
-        )
+        assert post.source.text == ("Некоторые ждут биткоин по 30к.😫")
 
-        assert len(
-            post.images
-        ) == 2
+        assert len(post.images) == 2
 
-        assert [
-            image.data
-            for image
-            in post.images
-        ] == [
+        assert [image.data for image in post.images] == [
             b"first",
             b"second",
         ]
@@ -175,40 +137,23 @@ def test_startup_lookback_processes_recent_messages_oldest_first(
     monkeypatch,
 ) -> None:
     async def run() -> None:
-        now = datetime.now(
-            timezone.utc
-        )
+        now = datetime.now(UTC)
 
         fake_client = FakeTelegramClient(
             [
                 FakeMessage(
                     message_id=3,
-                    published_at=(
-                        now
-                        - timedelta(
-                            minutes=30
-                        )
-                    ),
+                    published_at=(now - timedelta(minutes=30)),
                     text="newest",
                 ),
                 FakeMessage(
                     message_id=2,
-                    published_at=(
-                        now
-                        - timedelta(
-                            hours=2
-                        )
-                    ),
+                    published_at=(now - timedelta(hours=2)),
                     text="older",
                 ),
                 FakeMessage(
                     message_id=1,
-                    published_at=(
-                        now
-                        - timedelta(
-                            hours=6
-                        )
-                    ),
+                    published_at=(now - timedelta(hours=6)),
                     text="outside lookback",
                 ),
             ]
@@ -217,9 +162,7 @@ def test_startup_lookback_processes_recent_messages_oldest_first(
         monkeypatch.setattr(
             telegram_source,
             "TelegramClient",
-            lambda *args, **kwargs: (
-                fake_client
-            ),
+            lambda *args, **kwargs: fake_client,
         )
 
         processed: list[int] = []
@@ -227,21 +170,15 @@ def test_startup_lookback_processes_recent_messages_oldest_first(
         async def on_message(
             post,
         ) -> None:
-            processed.append(
-                post.source.message_id
-            )
+            processed.append(post.source.message_id)
 
-        source = (
-            telegram_source.TelegramSource(
-                api_id=1,
-                api_hash="hash",
-                session_name="session",
-                channels=[
-                    -1001234567890
-                ],
-                on_message=on_message,
-                startup_lookback_hours=5,
-            )
+        source = telegram_source.TelegramSource(
+            api_id=1,
+            api_hash="hash",
+            session_name="session",
+            channels=[-1001234567890],
+            on_message=on_message,
+            startup_lookback_hours=5,
         )
 
         await source.start()
@@ -258,21 +195,14 @@ def test_startup_lookback_groups_album_once(
     monkeypatch,
 ) -> None:
     async def run() -> None:
-        now = datetime.now(
-            timezone.utc
-        )
+        now = datetime.now(UTC)
 
         # iter_messages is newest-first.
         fake_client = FakeTelegramClient(
             [
                 FakeMessage(
                     message_id=12,
-                    published_at=(
-                        now
-                        - timedelta(
-                            minutes=10
-                        )
-                    ),
+                    published_at=(now - timedelta(minutes=10)),
                     grouped_id=500,
                     image=b"second",
                 ),
@@ -295,9 +225,7 @@ def test_startup_lookback_groups_album_once(
         monkeypatch.setattr(
             telegram_source,
             "TelegramClient",
-            lambda *args, **kwargs: (
-                fake_client
-            ),
+            lambda *args, **kwargs: fake_client,
         )
 
         processed = []
@@ -305,44 +233,28 @@ def test_startup_lookback_groups_album_once(
         async def on_message(
             post,
         ) -> None:
-            processed.append(
-                post
-            )
+            processed.append(post)
 
-        source = (
-            telegram_source.TelegramSource(
-                api_id=1,
-                api_hash="hash",
-                session_name="session",
-                channels=[
-                    -1001234567890
-                ],
-                on_message=on_message,
-                startup_lookback_hours=5,
-            )
+        source = telegram_source.TelegramSource(
+            api_id=1,
+            api_hash="hash",
+            session_name="session",
+            channels=[-1001234567890],
+            on_message=on_message,
+            startup_lookback_hours=5,
         )
 
         await source.start()
 
-        assert len(
-            processed
-        ) == 1
+        assert len(processed) == 1
 
         post = processed[0]
 
-        assert (
-            post.source.message_id
-            == 11
-        )
+        assert post.source.message_id == 11
 
-        assert (
-            post.source.text
-            == "album caption"
-        )
+        assert post.source.text == "album caption"
 
-        assert len(
-            post.images
-        ) == 2
+        assert len(post.images) == 2
 
     asyncio.run(run())
 
@@ -351,9 +263,7 @@ def test_startup_lookback_can_be_disabled(
     monkeypatch,
 ) -> None:
     async def run() -> None:
-        now = datetime.now(
-            timezone.utc
-        )
+        now = datetime.now(UTC)
 
         fake_client = FakeTelegramClient(
             [
@@ -368,9 +278,7 @@ def test_startup_lookback_can_be_disabled(
         monkeypatch.setattr(
             telegram_source,
             "TelegramClient",
-            lambda *args, **kwargs: (
-                fake_client
-            ),
+            lambda *args, **kwargs: fake_client,
         )
 
         processed: list[int] = []
@@ -378,21 +286,15 @@ def test_startup_lookback_can_be_disabled(
         async def on_message(
             post,
         ) -> None:
-            processed.append(
-                post.source.message_id
-            )
+            processed.append(post.source.message_id)
 
-        source = (
-            telegram_source.TelegramSource(
-                api_id=1,
-                api_hash="hash",
-                session_name="session",
-                channels=[
-                    -1001234567890
-                ],
-                on_message=on_message,
-                startup_lookback_hours=0,
-            )
+        source = telegram_source.TelegramSource(
+            api_id=1,
+            api_hash="hash",
+            session_name="session",
+            channels=[-1001234567890],
+            on_message=on_message,
+            startup_lookback_hours=0,
         )
 
         await source.start()

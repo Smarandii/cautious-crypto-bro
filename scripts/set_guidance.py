@@ -11,14 +11,10 @@ from cautious_crypto_bro.storage import IntentStore
 
 async def main() -> None:
     parser = argparse.ArgumentParser(
-        description=(
-            "Create or replace signal interpretation guidance."
-        )
+        description=("Create or replace signal interpretation guidance.")
     )
 
-    scope = parser.add_mutually_exclusive_group(
-        required=True
-    )
+    scope = parser.add_mutually_exclusive_group(required=True)
 
     scope.add_argument(
         "--global",
@@ -38,9 +34,7 @@ async def main() -> None:
     content = sys.stdin.read().strip()
 
     if not content:
-        raise SystemExit(
-            "Pass guidance text through stdin."
-        )
+        raise SystemExit("Pass guidance text through stdin.")
 
     database_path = Path(
         os.environ.get(
@@ -52,11 +46,7 @@ async def main() -> None:
     store = IntentStore(database_path)
     await store.initialize()
 
-    channel_id = (
-        None
-        if args.is_global
-        else args.channel
-    )
+    channel_id = None if args.is_global else args.channel
 
     await store.set_guidance(
         content,
@@ -66,10 +56,7 @@ async def main() -> None:
     if channel_id is None:
         print("Updated global guidance.")
     else:
-        print(
-            f"Updated guidance for channel "
-            f"{channel_id}."
-        )
+        print(f"Updated guidance for channel {channel_id}.")
 
 
 if __name__ == "__main__":

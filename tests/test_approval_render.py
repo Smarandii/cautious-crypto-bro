@@ -1,6 +1,6 @@
 from datetime import (
+    UTC,
     datetime,
-    timezone,
 )
 from decimal import Decimal
 
@@ -33,7 +33,7 @@ def test_render_contains_execution_policy() -> None:
                 12,
                 18,
                 0,
-                tzinfo=timezone.utc,
+                tzinfo=UTC,
             ),
             received_at=datetime(
                 2026,
@@ -42,7 +42,7 @@ def test_render_contains_execution_policy() -> None:
                 18,
                 0,
                 1,
-                tzinfo=timezone.utc,
+                tzinfo=UTC,
             ),
             text="signal",
         ),
@@ -55,19 +55,13 @@ def test_render_contains_execution_policy() -> None:
         ),
         stop_loss=3900,
         take_profit=4300,
-        summary=(
-            "Bounce from support."
-        ),
+        summary=("Bounce from support."),
         confidence=0.9,
     )
 
     policy = ExecutionPolicy(
-        trading_capital_usdt=(
-            Decimal("6800")
-        ),
-        risk_per_trade_pct=(
-            Decimal("1")
-        ),
+        trading_capital_usdt=(Decimal("6800")),
+        risk_per_trade_pct=(Decimal("1")),
         range_order_count=3,
     )
 
@@ -77,42 +71,28 @@ def test_render_contains_execution_policy() -> None:
         side=intent.side,
         orders=(
             PlannedOrder(
-                order_type=(
-                    ExecutionOrderType.LIMIT
-                ),
+                order_type=(ExecutionOrderType.LIMIT),
                 quantity=Decimal("0.2"),
                 price=Decimal("4000"),
-                reference_price=(
-                    Decimal("4000")
-                ),
+                reference_price=(Decimal("4000")),
             ),
             PlannedOrder(
-                order_type=(
-                    ExecutionOrderType.LIMIT
-                ),
+                order_type=(ExecutionOrderType.LIMIT),
                 quantity=Decimal("0.2"),
                 price=Decimal("4010"),
-                reference_price=(
-                    Decimal("4010")
-                ),
+                reference_price=(Decimal("4010")),
             ),
             PlannedOrder(
-                order_type=(
-                    ExecutionOrderType.LIMIT
-                ),
+                order_type=(ExecutionOrderType.LIMIT),
                 quantity=Decimal("0.2"),
                 price=Decimal("4020"),
-                reference_price=(
-                    Decimal("4020")
-                ),
+                reference_price=(Decimal("4020")),
             ),
         ),
         stop_loss=Decimal("3900"),
         take_profit=Decimal("4300"),
         policy=policy,
-        planned_max_loss_usdt=(
-            Decimal("66")
-        ),
+        planned_max_loss_usdt=(Decimal("66")),
     )
 
     rendered = ApprovalBot._render(
@@ -120,25 +100,9 @@ def test_render_contains_execution_policy() -> None:
         plan,
     )
 
-    assert (
-        "LONG ETHUSDT"
-        in rendered
-    )
-    assert (
-        "Execution plan — 3 order(s)"
-        in rendered
-    )
-    assert (
-        "Risk policy: "
-        "<b>1% = 68 USDT</b>"
-        in rendered
-    )
+    assert "LONG ETHUSDT" in rendered
+    assert "Execution plan — 3 order(s)" in rendered
+    assert "Risk policy: <b>1% = 68 USDT</b>" in rendered
     assert "R:R:" in rendered
-    assert (
-        "Open source message"
-        in rendered
-    )
-    assert (
-        "Trader &amp; Co"
-        in rendered
-    )
+    assert "Open source message" in rendered
+    assert "Trader &amp; Co" in rendered
