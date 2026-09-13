@@ -9,11 +9,13 @@ dependencies = [
   "httpx>=0.28,<1",
   "pydantic>=2.11,<3",
   "pydantic-settings>=2.10,<3",
+  "redis>=8.1.0",
   "telethon>=1.40,<2",
 ]
 
 [dependency-groups]
 dev = [
+  "fakeredis>=2.38.0",
   "pytest>=8.4,<9",
 ]
 

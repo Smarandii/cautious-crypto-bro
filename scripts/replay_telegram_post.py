@@ -20,6 +20,9 @@ from cautious_crypto_bro.execution import (
 from cautious_crypto_bro.openrouter import (
     OpenRouterIntentExtractor,
 )
+from cautious_crypto_bro.runtime_store import (
+    RedisRuntimeStore,
+)
 from cautious_crypto_bro.storage import (
     IntentStore,
 )
@@ -152,6 +155,11 @@ async def main() -> int:
         source.channel_id
     )
 
+    runtime_store = RedisRuntimeStore(
+        settings.redis_url
+    )
+    await runtime_store.initialize()
+
     print()
     print(
         "Guidance: "
@@ -178,6 +186,14 @@ async def main() -> int:
             max_attempts=(
                 settings.openrouter_inference_max_attempts
             ),
+            provider_cooldown_store=(
+                runtime_store
+            ),
+            provider_cooldown_seconds=(
+                settings.openrouter_provider_cooldown_hours
+                * 60
+                * 60
+            ),
         )
     )
 
@@ -196,6 +212,7 @@ async def main() -> int:
         )
     finally:
         await extractor.close()
+        await runtime_store.close()
 
     print()
     print("=== TRADING INTENT ===")

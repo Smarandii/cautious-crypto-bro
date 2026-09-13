@@ -28,7 +28,7 @@ docker compose up -d --build app
 docker compose logs -f app
 ```
 
-Runtime state lives in the persistent `app_state` Docker volume.
+SQLite/Telegram state lives in `app_state`; shared runtime state uses Redis.
 
 ## Verify
 

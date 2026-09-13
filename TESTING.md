@@ -91,7 +91,7 @@ docker compose build app
 ```
 
 Do not use `docker compose down -v` unless you intentionally want to delete the
-Telegram session and SQLite state.
+Telegram/SQLite and Redis state.
 
 ## Startup lookback
 

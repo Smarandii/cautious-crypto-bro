@@ -1,4 +1,21 @@
 services:
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    volumes:
+      - redis_state:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    restart: unless-stopped
+
   app:
     build:
       context: .
@@ -7,8 +24,12 @@ services:
     environment:
       TELEGRAM_SESSION_NAME: /state/cautious_crypto_bro
       DATABASE_PATH: /state/cautious_crypto_bro.sqlite3
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - app_state:/state
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   test:
@@ -19,3 +40,4 @@ services:
 
 volumes:
   app_state:
+  redis_state:
