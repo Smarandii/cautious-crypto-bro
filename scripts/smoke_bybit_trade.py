@@ -5,9 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 
-import httpx
-
-from cautious_crypto_bro.bybit import DEMO_BASE_URL, BybitDemoExecutor
+from cautious_crypto_bro.bybit import BybitDemoExecutor
 from cautious_crypto_bro.config import get_settings
 from cautious_crypto_bro.domain import (
     Entry,
@@ -16,128 +14,185 @@ from cautious_crypto_bro.domain import (
     SourceMessage,
     TradingIntent,
 )
-
-
-def current_price(symbol: str) -> Decimal:
-    response = httpx.get(
-        f"{DEMO_BASE_URL}/v5/market/tickers",
-        params={
-            "category": "linear",
-            "symbol": symbol,
-        },
-        timeout=10,
-    )
-    response.raise_for_status()
-
-    data = response.json()
-
-    if str(data.get("retCode", 0)) != "0":
-        raise RuntimeError(
-            f"Bybit ticker request failed: "
-            f"{data.get('retCode')} {data.get('retMsg')}"
-        )
-
-    items = data.get("result", {}).get("list", [])
-
-    if not items:
-        raise RuntimeError(f"No ticker found for {symbol}")
-
-    return Decimal(items[0]["lastPrice"])
+from cautious_crypto_bro.execution import ExecutionPlanner
+from cautious_crypto_bro.storage import IntentStore
 
 
 async def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Create a synthetic TradingIntent and execute it on Bybit Demo."
+        description=(
+            "Build a synthetic risk-sized execution plan "
+            "and optionally submit it to Bybit Demo."
+        )
     )
+
     parser.add_argument(
         "--symbol",
         default="BTCUSDT",
     )
+
     parser.add_argument(
         "--side",
         choices=["LONG", "SHORT"],
         default="LONG",
     )
+
     parser.add_argument(
-        "--notional",
-        type=float,
-        default=None,
-        help="Override BYBIT_DEFAULT_NOTIONAL_USDT.",
+        "--entry-type",
+        choices=["MARKET", "LIMIT", "RANGE"],
+        default="RANGE",
     )
+
     parser.add_argument(
         "--execute",
         action="store_true",
-        help="Actually submit the demo order.",
+        help="Actually submit the demo order(s).",
     )
 
     args = parser.parse_args()
     settings = get_settings()
 
-    symbol = args.symbol.upper()
-    side = Side(args.side)
-    price = current_price(symbol)
+    store = IntentStore(settings.database_path)
+    await store.initialize()
 
-    if side is Side.LONG:
-        stop_loss = price * Decimal("0.95")
-        take_profit = price * Decimal("1.05")
-    else:
-        stop_loss = price * Decimal("1.05")
-        take_profit = price * Decimal("0.95")
-
-    now = datetime.now(timezone.utc)
-
-    intent = TradingIntent(
-        source=SourceMessage(
-            channel_id=0,
-            channel_title="CCB Bybit smoke test",
-            channel_username=None,
-            message_id=0,
-            published_at=now,
-            received_at=now,
-            text="Synthetic integration-test intent.",
-        ),
-        symbol=symbol,
-        side=side,
-        entry=Entry(type=EntryType.MARKET),
-        stop_loss=float(stop_loss),
-        take_profit=float(take_profit),
-        summary="Synthetic Bybit Demo integration test.",
-        confidence=1.0,
-    )
-
-    notional = (
-        args.notional
-        if args.notional is not None
-        else settings.bybit_default_notional_usdt
-    )
-
-    print(f"Symbol:   {intent.symbol}")
-    print(f"Side:     {intent.side}")
-    print(f"Price:    {price}")
-    print(f"Notional: {notional} USDT")
-    print(f"SL:       {intent.stop_loss}")
-    print(f"TP:       {intent.take_profit}")
-    print()
-
-    if not args.execute:
-        print("Dry run only.")
-        print("Re-run with --execute to place the Bybit Demo order.")
-        return
+    policy = await store.get_execution_policy()
 
     executor = BybitDemoExecutor(
         api_key=settings.bybit_api_key,
         api_secret=settings.bybit_api_secret,
-        notional_usdt=notional,
     )
 
     try:
-        order_id = await executor.execute(intent)
+        symbol = args.symbol.upper()
+        side = Side(args.side)
+        entry_type = EntryType(args.entry_type)
+
+        context = await executor.market_context(symbol)
+        market = context.market_price
+
+        if side is Side.LONG:
+            stop_loss = market * Decimal("0.95")
+            take_profit = market * Decimal("1.05")
+
+            limit_price = market * Decimal("0.99")
+
+            range_low = market * Decimal("0.98")
+            range_high = market * Decimal("0.99")
+        else:
+            stop_loss = market * Decimal("1.05")
+            take_profit = market * Decimal("0.95")
+
+            limit_price = market * Decimal("1.01")
+
+            range_low = market * Decimal("1.01")
+            range_high = market * Decimal("1.02")
+
+        if entry_type is EntryType.MARKET:
+            entry = Entry(
+                type=EntryType.MARKET,
+            )
+
+        elif entry_type is EntryType.LIMIT:
+            entry = Entry(
+                type=EntryType.LIMIT,
+                price=float(limit_price),
+            )
+
+        else:
+            entry = Entry(
+                type=EntryType.RANGE,
+                range_low=float(range_low),
+                range_high=float(range_high),
+            )
+
+        now = datetime.now(timezone.utc)
+
+        intent = TradingIntent(
+            source=SourceMessage(
+                channel_id=0,
+                channel_title="CCB Bybit smoke test",
+                channel_username=None,
+                message_id=0,
+                published_at=now,
+                received_at=now,
+                text="Synthetic integration-test intent.",
+            ),
+            symbol=symbol,
+            side=side,
+            entry=entry,
+            stop_loss=float(stop_loss),
+            take_profit=float(take_profit),
+            summary="Synthetic Bybit Demo integration test.",
+            confidence=1.0,
+        )
+
+        plan = ExecutionPlanner().plan(
+            intent,
+            policy,
+            context,
+        )
+
+        print(f"Symbol:       {plan.symbol}")
+        print(f"Side:         {plan.side}")
+        print(f"Entry type:   {entry_type}")
+        print(f"Market:       {context.market_price}")
+        print(
+            "Capital:      "
+            f"{policy.trading_capital_usdt} USDT"
+        )
+        print(
+            "Risk:         "
+            f"{policy.risk_per_trade_pct}%"
+        )
+        print(
+            "Risk budget:  "
+            f"{policy.risk_budget_usdt} USDT"
+        )
+        print(f"Orders:       {len(plan.orders)}")
+
+        for index, order in enumerate(
+            plan.orders,
+            start=1,
+        ):
+            price = (
+                str(order.price)
+                if order.price is not None
+                else "MARKET"
+            )
+
+            print(
+                f"  {index}: "
+                f"{order.order_type} "
+                f"price={price} "
+                f"qty={order.quantity}"
+            )
+
+        print(f"SL:           {plan.stop_loss}")
+        print(f"TP:           {plan.take_profit}")
+        print(
+            "Planned loss: "
+            f"{plan.planned_max_loss_usdt} USDT"
+        )
+        print()
+
+        if not args.execute:
+            print("Dry run only.")
+            print(
+                "Re-run with --execute to submit "
+                "the Bybit Demo order(s)."
+            )
+            return
+
+        order_ids = await executor.execute(plan)
+
+        print()
+        print("EXECUTED ON BYBIT DEMO")
+
+        for order_id in order_ids:
+            print(f"Order ID: {order_id}")
+
     finally:
         executor.close()
-
-    print()
-    print("EXECUTED ON BYBIT DEMO")
-    print(f"Order ID: {order_id}")
 
 
 if __name__ == "__main__":
