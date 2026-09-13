@@ -1,7 +1,7 @@
 import asyncio
 from datetime import (
+    UTC,
     datetime,
-    timezone,
 )
 
 from cautious_crypto_bro.domain import (
@@ -14,9 +14,7 @@ from cautious_crypto_bro.service import (
 
 
 def post() -> IncomingPost:
-    now = datetime.now(
-        timezone.utc
-    )
+    now = datetime.now(UTC)
 
     return IncomingPost(
         source=SourceMessage(
@@ -47,8 +45,7 @@ class MustNotBeCalled:
         name,
     ):
         raise AssertionError(
-            f"{name} must not be called "
-            "for a duplicate source message"
+            f"{name} must not be called for a duplicate source message"
         )
 
 
@@ -64,13 +61,9 @@ def test_duplicate_source_stops_before_processing() -> None:
             approval_bot=never,
         )
 
-        await service.on_message(
-            post()
-        )
+        await service.on_message(post())
 
-    asyncio.run(
-        run()
-    )
+    asyncio.run(run())
 
 
 class RetryStore:
@@ -93,9 +86,7 @@ class RetryStore:
             return None
 
         self.status = "PROCESSING"
-        self.claim = (
-            f"claim-{self.failed}"
-        )
+        self.claim = f"claim-{self.failed}"
         return self.claim
 
     async def get_guidance(
@@ -138,9 +129,7 @@ class FailOnceExtractor:
         self.calls += 1
 
         if self.calls == 1:
-            raise RuntimeError(
-                "temporary failure"
-            )
+            raise RuntimeError("temporary failure")
 
         return None
 
@@ -161,21 +150,15 @@ def test_extraction_failure_is_retryable() -> None:
 
         source_post = post()
 
-        await service.on_message(
-            source_post
-        )
+        await service.on_message(source_post)
 
         assert store.status == "FAILED"
         assert store.failed == 1
 
-        await service.on_message(
-            source_post
-        )
+        await service.on_message(source_post)
 
         assert extractor.calls == 2
         assert store.status == "COMPLETED"
         assert store.completed == 1
 
-    asyncio.run(
-        run()
-    )
+    asyncio.run(run())

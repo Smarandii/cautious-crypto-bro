@@ -48,12 +48,10 @@ class ExecutionPlanner:
             context.tick_size,
         )
 
-        order_type, reference_prices = (
-            self._entry_prices(
-                intent,
-                policy,
-                context,
-            )
+        order_type, reference_prices = self._entry_prices(
+            intent,
+            policy,
+            context,
         )
 
         (
@@ -71,11 +69,7 @@ class ExecutionPlanner:
             intent.side,
             reference_prices,
             stop_loss,
-            tuple(
-                target.price
-                for target
-                in take_profit_targets
-            ),
+            tuple(target.price for target in take_profit_targets),
         )
 
         self._validate_not_passed_through(
@@ -84,15 +78,9 @@ class ExecutionPlanner:
             context.market_price,
         )
 
-        planned_order_count = (
-            len(reference_prices)
-            * len(take_profit_targets)
-        )
+        planned_order_count = len(reference_prices) * len(take_profit_targets)
 
-        if (
-            planned_order_count
-            > MAX_BYBIT_BATCH_ORDERS
-        ):
+        if planned_order_count > MAX_BYBIT_BATCH_ORDERS:
             raise ExecutionPlanningError(
                 "Execution plan would create "
                 f"{planned_order_count} Bybit orders; "
@@ -101,14 +89,9 @@ class ExecutionPlanner:
                 "Reduce range_order_count."
             )
 
-        required_tpsl_slots = (
-            planned_order_count * 2
-        )
+        required_tpsl_slots = planned_order_count * 2
 
-        if (
-            required_tpsl_slots
-            > MAX_BYBIT_PARTIAL_TPSL_ORDERS
-        ):
+        if required_tpsl_slots > MAX_BYBIT_PARTIAL_TPSL_ORDERS:
             raise ExecutionPlanningError(
                 "Execution plan would require "
                 f"{required_tpsl_slots} Bybit Partial "
@@ -120,53 +103,32 @@ class ExecutionPlanner:
             )
 
         total_stop_distance = sum(
-            (
-                abs(
-                    price
-                    - stop_loss
-                )
-                for price
-                in reference_prices
-            ),
+            (abs(price - stop_loss) for price in reference_prices),
             Decimal("0"),
         )
 
         if total_stop_distance <= 0:
-            raise ExecutionPlanningError(
-                "Entry-to-stop distance "
-                "must be positive"
-            )
+            raise ExecutionPlanningError("Entry-to-stop distance must be positive")
 
-        raw_base_qty = (
-            policy.risk_budget_usdt
-            / total_stop_distance
-        )
+        raw_base_qty = policy.risk_budget_usdt / total_stop_distance
 
         base_qty = self._round_down(
             raw_base_qty,
             context.qty_step,
         )
 
-        if (
-            base_qty <= 0
-            or base_qty < context.min_qty
-        ):
+        if base_qty <= 0 or base_qty < context.min_qty:
             raise ExecutionPlanningError(
-                "Configured risk budget is too small "
-                "for Bybit minimum quantity"
+                "Configured risk budget is too small for Bybit minimum quantity"
             )
 
-        orders: list[
-            PlannedOrder
-        ] = []
+        orders: list[PlannedOrder] = []
 
         for price in reference_prices:
-            allocations = (
-                self._split_quantity(
-                    base_qty,
-                    take_profit_targets,
-                    context.qty_step,
-                )
+            allocations = self._split_quantity(
+                base_qty,
+                take_profit_targets,
+                context.qty_step,
             )
 
             for (
@@ -177,11 +139,7 @@ class ExecutionPlanner:
                 allocations,
                 strict=True,
             ):
-                if (
-                    quantity <= 0
-                    or quantity
-                    < context.min_qty
-                ):
+                if quantity <= 0 or quantity < context.min_qty:
                     raise ExecutionPlanningError(
                         "TP ladder creates a child order "
                         "below Bybit minimum quantity. "
@@ -189,14 +147,7 @@ class ExecutionPlanner:
                         "entry orders, or adjust TP shares."
                     )
 
-                if (
-                    context.min_notional
-                    and (
-                        quantity
-                        * price
-                    )
-                    < context.min_notional
-                ):
+                if context.min_notional and (quantity * price) < context.min_notional:
                     raise ExecutionPlanningError(
                         "TP ladder creates a child order "
                         "below Bybit minimum notional. "
@@ -209,29 +160,17 @@ class ExecutionPlanner:
                         order_type=order_type,
                         quantity=quantity,
                         price=(
-                            price
-                            if (
-                                order_type
-                                is ExecutionOrderType.LIMIT
-                            )
-                            else None
+                            price if (order_type is ExecutionOrderType.LIMIT) else None
                         ),
                         reference_price=price,
-                        take_profit=(
-                            target.price
-                        ),
+                        take_profit=(target.price),
                     )
                 )
 
         planned_max_loss = sum(
             (
-                order.quantity
-                * abs(
-                    order.reference_price
-                    - stop_loss
-                )
-                for order
-                in orders
+                order.quantity * abs(order.reference_price - stop_loss)
+                for order in orders
             ),
             Decimal("0"),
         )
@@ -242,21 +181,11 @@ class ExecutionPlanner:
             side=intent.side,
             orders=tuple(orders),
             stop_loss=stop_loss,
-            take_profit=(
-                take_profit_targets[-1].price
-            ),
-            take_profit_targets=(
-                take_profit_targets
-            ),
-            take_profit_source=(
-                take_profit_source
-            ),
-            policy=policy.model_copy(
-                deep=True
-            ),
-            planned_max_loss_usdt=(
-                planned_max_loss
-            ),
+            take_profit=(take_profit_targets[-1].price),
+            take_profit_targets=(take_profit_targets),
+            take_profit_source=(take_profit_source),
+            policy=policy.model_copy(deep=True),
+            planned_max_loss_usdt=(planned_max_loss),
         )
 
     def _take_profit_targets(
@@ -273,76 +202,45 @@ class ExecutionPlanner:
         tuple[PlannedTakeProfit, ...],
         TakeProfitSource,
     ]:
-        reference_entry = (
-            sum(
-                reference_prices,
-                Decimal("0"),
-            )
-            / Decimal(
-                len(reference_prices)
-            )
-        )
+        reference_entry = sum(
+            reference_prices,
+            Decimal("0"),
+        ) / Decimal(len(reference_prices))
 
-        risk_distance = abs(
-            reference_entry
-            - stop_loss
-        )
+        risk_distance = abs(reference_entry - stop_loss)
 
         if risk_distance <= 0:
-            raise ExecutionPlanningError(
-                "Reference entry and stop "
-                "must be different"
-            )
+            raise ExecutionPlanningError("Reference entry and stop must be different")
 
         if intent.take_profit is not None:
             price = self._round_price(
-                Decimal(
-                    str(
-                        intent.take_profit
-                    )
-                ),
+                Decimal(str(intent.take_profit)),
                 tick_size,
             )
 
-            actual_r = (
-                abs(
-                    price
-                    - reference_entry
-                )
-                / risk_distance
-            )
+            actual_r = abs(price - reference_entry) / risk_distance
 
             return (
                 (
                     PlannedTakeProfit(
                         name="TRADER",
                         price=price,
-                        close_pct=(
-                            Decimal("100")
-                        ),
+                        close_pct=(Decimal("100")),
                         r_multiple=actual_r,
                     ),
                 ),
                 TakeProfitSource.TRADER,
             )
 
-        exit_policy = (
-            policy.exit_policy
-        )
+        exit_policy = policy.exit_policy
 
         minimum_reward = (
-            reference_entry
-            * exit_policy.minimum_reward_bps
-            / Decimal("10000")
+            reference_entry * exit_policy.minimum_reward_bps / Decimal("10000")
         )
 
-        targets: list[
-            PlannedTakeProfit
-        ] = []
+        targets: list[PlannedTakeProfit] = []
 
-        previous_price: (
-            Decimal | None
-        ) = None
+        previous_price: Decimal | None = None
 
         for (
             name,
@@ -350,21 +248,14 @@ class ExecutionPlanner:
             close_pct,
         ) in exit_policy.rules:
             reward_distance = max(
-                risk_distance
-                * configured_r,
+                risk_distance * configured_r,
                 minimum_reward,
             )
 
             if intent.side is Side.LONG:
-                raw_price = (
-                    reference_entry
-                    + reward_distance
-                )
+                raw_price = reference_entry + reward_distance
             else:
-                raw_price = (
-                    reference_entry
-                    - reward_distance
-                )
+                raw_price = reference_entry - reward_distance
 
             price = self._round_price(
                 raw_price,
@@ -372,39 +263,16 @@ class ExecutionPlanner:
             )
 
             if previous_price is not None:
-                if (
-                    intent.side is Side.LONG
-                    and price
-                    <= previous_price
-                ):
-                    price = (
-                        previous_price
-                        + tick_size
-                    )
+                if intent.side is Side.LONG and price <= previous_price:
+                    price = previous_price + tick_size
 
-                if (
-                    intent.side is Side.SHORT
-                    and price
-                    >= previous_price
-                ):
-                    price = (
-                        previous_price
-                        - tick_size
-                    )
+                if intent.side is Side.SHORT and price >= previous_price:
+                    price = previous_price - tick_size
 
             if price <= 0:
-                raise ExecutionPlanningError(
-                    "Derived take profit "
-                    "is not positive"
-                )
+                raise ExecutionPlanningError("Derived take profit is not positive")
 
-            actual_r = (
-                abs(
-                    price
-                    - reference_entry
-                )
-                / risk_distance
-            )
+            actual_r = abs(price - reference_entry) / risk_distance
 
             targets.append(
                 PlannedTakeProfit(
@@ -443,9 +311,7 @@ class ExecutionPlanner:
             assert entry.price is not None
 
             price = self._round_price(
-                Decimal(
-                    str(entry.price)
-                ),
+                Decimal(str(entry.price)),
                 context.tick_size,
             )
 
@@ -454,46 +320,20 @@ class ExecutionPlanner:
                 (price,),
             )
 
-        assert (
-            entry.range_low
-            is not None
-        )
-        assert (
-            entry.range_high
-            is not None
-        )
+        assert entry.range_low is not None
+        assert entry.range_high is not None
 
-        low = Decimal(
-            str(entry.range_low)
-        )
-        high = Decimal(
-            str(entry.range_high)
-        )
+        low = Decimal(str(entry.range_low))
+        high = Decimal(str(entry.range_high))
 
-        count = (
-            policy.range_order_count
-        )
+        count = policy.range_order_count
 
         if count == 1:
-            raw_prices = (
-                (
-                    low + high
-                )
-                / Decimal("2"),
-            )
+            raw_prices = ((low + high) / Decimal("2"),)
         else:
-            spacing = (
-                high - low
-            ) / Decimal(
-                count - 1
-            )
+            spacing = (high - low) / Decimal(count - 1)
 
-            raw_prices = tuple(
-                low
-                + spacing * index
-                for index
-                in range(count)
-            )
+            raw_prices = tuple(low + spacing * index for index in range(count))
 
         prices = tuple(
             self._round_price(
@@ -528,41 +368,25 @@ class ExecutionPlanner:
         ...,
     ]:
         if len(targets) == 1:
-            return (
-                base_qty,
-            )
+            return (base_qty,)
 
-        allocations: list[
-            Decimal
-        ] = []
+        allocations: list[Decimal] = []
 
         allocated = Decimal("0")
 
         for target in targets[:-1]:
-            quantity = (
-                ExecutionPlanner
-                ._round_down(
-                    base_qty
-                    * target.close_pct
-                    / Decimal("100"),
-                    qty_step,
-                )
+            quantity = ExecutionPlanner._round_down(
+                base_qty * target.close_pct / Decimal("100"),
+                qty_step,
             )
 
-            allocations.append(
-                quantity
-            )
+            allocations.append(quantity)
 
             allocated += quantity
 
-        allocations.append(
-            base_qty
-            - allocated
-        )
+        allocations.append(base_qty - allocated)
 
-        return tuple(
-            allocations
-        )
+        return tuple(allocations)
 
     @staticmethod
     def _validate_geometry(
@@ -577,45 +401,25 @@ class ExecutionPlanner:
             ...,
         ],
     ) -> None:
-        low = min(
-            reference_prices
-        )
-        high = max(
-            reference_prices
-        )
+        low = min(reference_prices)
+        high = max(reference_prices)
 
         if side is Side.LONG:
             if not stop_loss < low:
-                raise ExecutionPlanningError(
-                    "Rounded LONG stop geometry "
-                    "is invalid"
-                )
+                raise ExecutionPlanningError("Rounded LONG stop geometry is invalid")
 
-            if any(
-                target <= high
-                for target
-                in take_profits
-            ):
+            if any(target <= high for target in take_profits):
                 raise ExecutionPlanningError(
-                    "Rounded LONG take-profit "
-                    "geometry is invalid"
+                    "Rounded LONG take-profit geometry is invalid"
                 )
 
         else:
             if not high < stop_loss:
-                raise ExecutionPlanningError(
-                    "Rounded SHORT stop geometry "
-                    "is invalid"
-                )
+                raise ExecutionPlanningError("Rounded SHORT stop geometry is invalid")
 
-            if any(
-                target >= low
-                for target
-                in take_profits
-            ):
+            if any(target >= low for target in take_profits):
                 raise ExecutionPlanningError(
-                    "Rounded SHORT take-profit "
-                    "geometry is invalid"
+                    "Rounded SHORT take-profit geometry is invalid"
                 )
 
     @staticmethod
@@ -627,31 +431,14 @@ class ExecutionPlanner:
         ],
         market_price: Decimal,
     ) -> None:
-        if (
-            intent.entry.type
-            is EntryType.MARKET
-        ):
+        if intent.entry.type is EntryType.MARKET:
             return
 
-        if (
-            intent.side is Side.LONG
-            and market_price
-            < min(reference_prices)
-        ):
-            raise ExecutionPlanningError(
-                "Market is already below "
-                "the LONG entry area"
-            )
+        if intent.side is Side.LONG and market_price < min(reference_prices):
+            raise ExecutionPlanningError("Market is already below the LONG entry area")
 
-        if (
-            intent.side is Side.SHORT
-            and market_price
-            > max(reference_prices)
-        ):
-            raise ExecutionPlanningError(
-                "Market is already above "
-                "the SHORT entry area"
-            )
+        if intent.side is Side.SHORT and market_price > max(reference_prices):
+            raise ExecutionPlanningError("Market is already above the SHORT entry area")
 
     @staticmethod
     def _round_price(
@@ -659,18 +446,9 @@ class ExecutionPlanner:
         tick_size: Decimal,
     ) -> Decimal:
         if tick_size <= 0:
-            raise ExecutionPlanningError(
-                "Bybit tick size must be positive"
-            )
+            raise ExecutionPlanningError("Bybit tick size must be positive")
 
-        return (
-            (
-                value / tick_size
-            ).to_integral_value(
-                rounding=ROUND_HALF_UP
-            )
-            * tick_size
-        )
+        return (value / tick_size).to_integral_value(rounding=ROUND_HALF_UP) * tick_size
 
     @staticmethod
     def _round_down(
@@ -678,16 +456,6 @@ class ExecutionPlanner:
         step: Decimal,
     ) -> Decimal:
         if step <= 0:
-            raise ExecutionPlanningError(
-                "Bybit quantity step "
-                "must be positive"
-            )
+            raise ExecutionPlanningError("Bybit quantity step must be positive")
 
-        return (
-            (
-                value / step
-            ).to_integral_value(
-                rounding=ROUND_DOWN
-            )
-            * step
-        )
+        return (value / step).to_integral_value(rounding=ROUND_DOWN) * step

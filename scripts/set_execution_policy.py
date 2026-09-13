@@ -17,10 +17,7 @@ from cautious_crypto_bro.storage import (
 
 async def main() -> None:
     parser = argparse.ArgumentParser(
-        description=(
-            "Show or update "
-            "the execution policy."
-        )
+        description=("Show or update the execution policy.")
     )
 
     parser.add_argument(
@@ -77,14 +74,10 @@ async def main() -> None:
         )
     )
 
-    store = IntentStore(
-        database_path
-    )
+    store = IntentStore(database_path)
     await store.initialize()
 
-    current = (
-        await store.get_execution_policy()
-    )
+    current = await store.get_execution_policy()
 
     supplied = any(
         value is not None
@@ -103,31 +96,23 @@ async def main() -> None:
     )
 
     if not supplied:
-        print_policy(
-            current
-        )
+        print_policy(current)
         return
 
-    current_exit = (
-        current.exit_policy
-    )
+    current_exit = current.exit_policy
 
     exit_policy = ExitPolicy(
         minimum_reward_bps=(
             args.minimum_reward_bps
-            if args.minimum_reward_bps
-            is not None
+            if args.minimum_reward_bps is not None
             else current_exit.minimum_reward_bps
         ),
         basic_r_multiple=(
-            args.basic_r
-            if args.basic_r is not None
-            else current_exit.basic_r_multiple
+            args.basic_r if args.basic_r is not None else current_exit.basic_r_multiple
         ),
         basic_close_pct=(
             args.basic_close_pct
-            if args.basic_close_pct
-            is not None
+            if args.basic_close_pct is not None
             else current_exit.basic_close_pct
         ),
         medium_r_multiple=(
@@ -137,19 +122,15 @@ async def main() -> None:
         ),
         medium_close_pct=(
             args.medium_close_pct
-            if args.medium_close_pct
-            is not None
+            if args.medium_close_pct is not None
             else current_exit.medium_close_pct
         ),
         high_r_multiple=(
-            args.high_r
-            if args.high_r is not None
-            else current_exit.high_r_multiple
+            args.high_r if args.high_r is not None else current_exit.high_r_multiple
         ),
         high_close_pct=(
             args.high_close_pct
-            if args.high_close_pct
-            is not None
+            if args.high_close_pct is not None
             else current_exit.high_close_pct
         ),
     )
@@ -161,9 +142,7 @@ async def main() -> None:
             else current.trading_capital_usdt
         ),
         risk_per_trade_pct=(
-            args.risk_pct
-            if args.risk_pct is not None
-            else current.risk_per_trade_pct
+            args.risk_pct if args.risk_pct is not None else current.risk_per_trade_pct
         ),
         range_order_count=(
             args.range_orders
@@ -173,65 +152,28 @@ async def main() -> None:
         exit_policy=exit_policy,
     )
 
-    await store.set_execution_policy(
-        updated
-    )
+    await store.set_execution_policy(updated)
 
-    print(
-        "Updated execution policy:"
-    )
-    print_policy(
-        updated
-    )
+    print("Updated execution policy:")
+    print_policy(updated)
 
 
 def print_policy(
     policy: ExecutionPolicy,
 ) -> None:
-    exit_policy = (
-        policy.exit_policy
-    )
+    exit_policy = policy.exit_policy
 
-    print(
-        "capital_usdt="
-        f"{policy.trading_capital_usdt}"
-    )
-    print(
-        "risk_pct="
-        f"{policy.risk_per_trade_pct}"
-    )
-    print(
-        "range_orders="
-        f"{policy.range_order_count}"
-    )
-    print(
-        "risk_budget_usdt="
-        f"{policy.risk_budget_usdt}"
-    )
+    print(f"capital_usdt={policy.trading_capital_usdt}")
+    print(f"risk_pct={policy.risk_per_trade_pct}")
+    print(f"range_orders={policy.range_order_count}")
+    print(f"risk_budget_usdt={policy.risk_budget_usdt}")
 
-    print(
-        "minimum_reward_bps="
-        f"{exit_policy.minimum_reward_bps}"
-    )
+    print(f"minimum_reward_bps={exit_policy.minimum_reward_bps}")
 
-    print(
-        "basic="
-        f"{exit_policy.basic_r_multiple}R/"
-        f"{exit_policy.basic_close_pct}%"
-    )
-    print(
-        "medium="
-        f"{exit_policy.medium_r_multiple}R/"
-        f"{exit_policy.medium_close_pct}%"
-    )
-    print(
-        "high="
-        f"{exit_policy.high_r_multiple}R/"
-        f"{exit_policy.high_close_pct}%"
-    )
+    print(f"basic={exit_policy.basic_r_multiple}R/{exit_policy.basic_close_pct}%")
+    print(f"medium={exit_policy.medium_r_multiple}R/{exit_policy.medium_close_pct}%")
+    print(f"high={exit_policy.high_r_multiple}R/{exit_policy.high_close_pct}%")
 
 
 if __name__ == "__main__":
-    asyncio.run(
-        main()
-    )
+    asyncio.run(main())

@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import logging
 import mimetypes
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from cautious_crypto_bro.config import (
@@ -26,17 +26,11 @@ from cautious_crypto_bro.storage import (
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
-        format=(
-            "%(levelname)s %(name)s: "
-            "%(message)s"
-        ),
+        format=("%(levelname)s %(name)s: %(message)s"),
     )
 
     parser = argparse.ArgumentParser(
-        description=(
-            "Run a local image through the "
-            "production intent extractor."
-        )
+        description=("Run a local image through the production intent extractor.")
     )
 
     parser.add_argument(
@@ -63,36 +57,20 @@ async def main() -> None:
     args = parser.parse_args()
 
     if not args.image.is_file():
-        raise SystemExit(
-            f"Image not found: {args.image}"
-        )
+        raise SystemExit(f"Image not found: {args.image}")
 
-    media_type, _ = mimetypes.guess_type(
-        args.image.name
-    )
+    media_type, _ = mimetypes.guess_type(args.image.name)
 
-    if (
-        not media_type
-        or not media_type.startswith("image/")
-    ):
-        raise SystemExit(
-            "Could not determine image MIME type: "
-            f"{args.image}"
-        )
+    if not media_type or not media_type.startswith("image/"):
+        raise SystemExit(f"Could not determine image MIME type: {args.image}")
 
     settings = get_settings()
 
-    store = IntentStore(
-        settings.database_path
-    )
+    store = IntentStore(settings.database_path)
 
     await store.initialize()
 
-    global_guidance, channel_guidance = (
-        await store.get_guidance(
-            args.channel_id
-        )
-    )
+    global_guidance, channel_guidance = await store.get_guidance(args.channel_id)
 
     print(
         "Guidance: "
@@ -100,7 +78,7 @@ async def main() -> None:
         f"channel={'yes' if channel_guidance else 'no'}"
     )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     post = IncomingPost(
         source=SourceMessage(
@@ -124,12 +102,8 @@ async def main() -> None:
         api_key=settings.openrouter_api_key,
         model=settings.openrouter_model,
         base_url=settings.openrouter_base_url,
-        inference_timeout_seconds=(
-            settings.openrouter_inference_timeout_seconds
-        ),
-        max_attempts=(
-            settings.openrouter_inference_max_attempts
-        ),
+        inference_timeout_seconds=(settings.openrouter_inference_timeout_seconds),
+        max_attempts=(settings.openrouter_inference_max_attempts),
     )
 
     try:
@@ -145,11 +119,7 @@ async def main() -> None:
         print("NO ACTIONABLE INTENT")
         return
 
-    print(
-        intent.model_dump_json(
-            indent=2
-        )
-    )
+    print(intent.model_dump_json(indent=2))
 
 
 if __name__ == "__main__":

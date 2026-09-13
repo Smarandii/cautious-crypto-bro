@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID, uuid4
@@ -52,20 +52,12 @@ class SourceMessage(BaseModel):
     @property
     def telegram_url(self) -> str | None:
         if self.channel_username:
-            return (
-                f"https://t.me/"
-                f"{self.channel_username.lstrip('@')}/"
-                f"{self.message_id}"
-            )
+            return f"https://t.me/{self.channel_username.lstrip('@')}/{self.message_id}"
 
         channel_id = str(self.channel_id)
 
         if channel_id.startswith("-100"):
-            return (
-                f"https://t.me/c/"
-                f"{channel_id[4:]}/"
-                f"{self.message_id}"
-            )
+            return f"https://t.me/c/{channel_id[4:]}/{self.message_id}"
 
         return None
 
@@ -91,7 +83,7 @@ class Entry(BaseModel):
     range_high: float | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
-    def validate_shape(self) -> "Entry":
+    def validate_shape(self) -> Entry:
         if self.type is EntryType.MARKET:
             if any(
                 value is not None
@@ -101,45 +93,27 @@ class Entry(BaseModel):
                     self.range_high,
                 )
             ):
-                raise ValueError(
-                    "MARKET entry must not contain price or range"
-                )
+                raise ValueError("MARKET entry must not contain price or range")
 
             return self
 
         if self.type is EntryType.LIMIT:
             if self.price is None:
-                raise ValueError(
-                    "LIMIT entry requires a price"
-                )
+                raise ValueError("LIMIT entry requires a price")
 
-            if (
-                self.range_low is not None
-                or self.range_high is not None
-            ):
-                raise ValueError(
-                    "LIMIT entry must not contain a range"
-                )
+            if self.range_low is not None or self.range_high is not None:
+                raise ValueError("LIMIT entry must not contain a range")
 
             return self
 
         if self.price is not None:
-            raise ValueError(
-                "RANGE entry must not contain a single price"
-            )
+            raise ValueError("RANGE entry must not contain a single price")
 
-        if (
-            self.range_low is None
-            or self.range_high is None
-        ):
-            raise ValueError(
-                "RANGE entry requires range_low and range_high"
-            )
+        if self.range_low is None or self.range_high is None:
+            raise ValueError("RANGE entry requires range_low and range_high")
 
         if self.range_low >= self.range_high:
-            raise ValueError(
-                "RANGE requires range_low < range_high"
-            )
+            raise ValueError("RANGE requires range_low < range_high")
 
         return self
 
@@ -166,19 +140,12 @@ class IntentExtraction(BaseModel):
     @model_validator(mode="after")
     def consistent_actionability(
         self,
-    ) -> "IntentExtraction":
+    ) -> IntentExtraction:
         if self.actionable and self.intent is None:
-            raise ValueError(
-                "actionable=true requires intent"
-            )
+            raise ValueError("actionable=true requires intent")
 
-        if (
-            not self.actionable
-            and self.intent is not None
-        ):
-            raise ValueError(
-                "actionable=false requires intent=null"
-            )
+        if not self.actionable and self.intent is not None:
+            raise ValueError("actionable=false requires intent=null")
 
         return self
 
@@ -195,11 +162,7 @@ class TradingIntent(BaseModel):
     take_profit: float | None = Field(default=None, gt=0)
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(
-            timezone.utc
-        )
-    )
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     status: IntentStatus = Field(
         default=IntentStatus.PENDING,
         exclude=True,
@@ -208,90 +171,48 @@ class TradingIntent(BaseModel):
     @model_validator(mode="after")
     def validate_trade_geometry(
         self,
-    ) -> "TradingIntent":
-        self.symbol = (
-            self.symbol.upper()
-            .replace("/", "")
-            .replace("-", "")
-        )
+    ) -> TradingIntent:
+        self.symbol = self.symbol.upper().replace("/", "").replace("-", "")
 
         if not self.symbol.endswith("USDT"):
-            raise ValueError(
-                "MVP supports only USDT linear symbols"
-            )
+            raise ValueError("MVP supports only USDT linear symbols")
 
         if self.entry.type is EntryType.MARKET:
             if self.take_profit is None:
                 return self
 
-            if (
-                self.side is Side.LONG
-                and not self.stop_loss
-                < self.take_profit
-            ):
-                raise ValueError(
-                    "LONG requires stop_loss < take_profit"
-                )
+            if self.side is Side.LONG and not self.stop_loss < self.take_profit:
+                raise ValueError("LONG requires stop_loss < take_profit")
 
-            if (
-                self.side is Side.SHORT
-                and not self.take_profit
-                < self.stop_loss
-            ):
-                raise ValueError(
-                    "SHORT requires take_profit < stop_loss"
-                )
+            if self.side is Side.SHORT and not self.take_profit < self.stop_loss:
+                raise ValueError("SHORT requires take_profit < stop_loss")
 
             return self
 
         if self.entry.type is EntryType.LIMIT:
-            references = (
-                self.entry.price,
-            )
+            references = (self.entry.price,)
         else:
             references = (
                 self.entry.range_low,
                 self.entry.range_high,
             )
 
-        low = min(
-            value
-            for value in references
-            if value is not None
-        )
-        high = max(
-            value
-            for value in references
-            if value is not None
-        )
+        low = min(value for value in references if value is not None)
+        high = max(value for value in references if value is not None)
 
         if self.side is Side.LONG:
             if not self.stop_loss < low:
-                raise ValueError(
-                    "LONG requires stop_loss below entry/range"
-                )
+                raise ValueError("LONG requires stop_loss below entry/range")
 
-            if (
-                self.take_profit is not None
-                and not high < self.take_profit
-            ):
-                raise ValueError(
-                    "LONG requires take_profit above entry/range"
-                )
+            if self.take_profit is not None and not high < self.take_profit:
+                raise ValueError("LONG requires take_profit above entry/range")
 
         else:
             if not high < self.stop_loss:
-                raise ValueError(
-                    "SHORT requires stop_loss above entry/range"
-                )
+                raise ValueError("SHORT requires stop_loss above entry/range")
 
-            if (
-                self.take_profit is not None
-                and not self.take_profit < low
-            ):
-                raise ValueError(
-                    "SHORT requires take_profit below entry/range"
-                )
+            if self.take_profit is not None and not self.take_profit < low:
+                raise ValueError("SHORT requires take_profit below entry/range")
 
         return self
 
@@ -338,27 +259,14 @@ class ExitPolicy(BaseModel):
     @model_validator(mode="after")
     def validate_ladder(
         self,
-    ) -> "ExitPolicy":
-        if not (
-            self.basic_r_multiple
-            < self.medium_r_multiple
-            < self.high_r_multiple
-        ):
-            raise ValueError(
-                "TP R-multiples must increase "
-                "basic < medium < high"
-            )
+    ) -> ExitPolicy:
+        if not (self.basic_r_multiple < self.medium_r_multiple < self.high_r_multiple):
+            raise ValueError("TP R-multiples must increase basic < medium < high")
 
-        total = (
-            self.basic_close_pct
-            + self.medium_close_pct
-            + self.high_close_pct
-        )
+        total = self.basic_close_pct + self.medium_close_pct + self.high_close_pct
 
         if total != Decimal("100"):
-            raise ValueError(
-                "TP close percentages must total 100"
-            )
+            raise ValueError("TP close percentages must total 100")
 
         return self
 
@@ -406,11 +314,7 @@ class ExecutionPolicy(BaseModel):
 
     @property
     def risk_budget_usdt(self) -> Decimal:
-        return (
-            self.trading_capital_usdt
-            * self.risk_per_trade_pct
-            / Decimal("100")
-        )
+        return self.trading_capital_usdt * self.risk_per_trade_pct / Decimal("100")
 
 
 class PlannedTakeProfit(BaseModel):
@@ -423,7 +327,6 @@ class PlannedTakeProfit(BaseModel):
         le=100,
     )
     r_multiple: Decimal = Field(gt=0)
-
 
 
 class PlannedOrder(BaseModel):
@@ -444,20 +347,12 @@ class PlannedOrder(BaseModel):
     @model_validator(mode="after")
     def validate_shape(
         self,
-    ) -> "PlannedOrder":
-        if (
-            self.order_type
-            is ExecutionOrderType.MARKET
-        ):
+    ) -> PlannedOrder:
+        if self.order_type is ExecutionOrderType.MARKET:
             if self.price is not None:
-                raise ValueError(
-                    "MARKET planned order "
-                    "must not contain price"
-                )
+                raise ValueError("MARKET planned order must not contain price")
         elif self.price is None:
-            raise ValueError(
-                "LIMIT planned order requires price"
-            )
+            raise ValueError("LIMIT planned order requires price")
 
         return self
 
@@ -481,46 +376,25 @@ class ExecutionPlan(BaseModel):
         PlannedTakeProfit,
         ...,
     ] = ()
-    take_profit_source: TakeProfitSource = (
-        TakeProfitSource.TRADER
-    )
+    take_profit_source: TakeProfitSource = TakeProfitSource.TRADER
     policy: ExecutionPolicy
-    planned_max_loss_usdt: Decimal = Field(
-        ge=0
-    )
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(
-            timezone.utc
-        )
-    )
+    planned_max_loss_usdt: Decimal = Field(ge=0)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @model_validator(mode="after")
     def validate_risk_budget(
         self,
-    ) -> "ExecutionPlan":
-        if (
-            self.planned_max_loss_usdt
-            > self.policy.risk_budget_usdt
-        ):
-            raise ValueError(
-                "Execution plan exceeds "
-                "configured risk budget"
-            )
+    ) -> ExecutionPlan:
+        if self.planned_max_loss_usdt > self.policy.risk_budget_usdt:
+            raise ValueError("Execution plan exceeds configured risk budget")
 
         if self.take_profit_targets:
             total_close_pct = sum(
-                (
-                    target.close_pct
-                    for target
-                    in self.take_profit_targets
-                ),
+                (target.close_pct for target in self.take_profit_targets),
                 Decimal("0"),
             )
 
             if total_close_pct != Decimal("100"):
-                raise ValueError(
-                    "Planned TP close percentages "
-                    "must total 100"
-                )
+                raise ValueError("Planned TP close percentages must total 100")
 
         return self

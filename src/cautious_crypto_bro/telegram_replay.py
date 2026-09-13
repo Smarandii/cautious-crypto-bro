@@ -20,9 +20,7 @@ from .telegram_source import (
 )
 
 
-class TelegramReplayError(
-    RuntimeError
-):
+class TelegramReplayError(RuntimeError):
     pass
 
 
@@ -38,104 +36,61 @@ class TelegramPostReference:
 def parse_telegram_post_url(
     url: str,
 ) -> TelegramPostReference:
-    parsed = urlparse(
-        url.strip()
-    )
+    parsed = urlparse(url.strip())
 
-    host = (
-        parsed.netloc
-        .lower()
-        .removeprefix("www.")
-    )
+    host = parsed.netloc.lower().removeprefix("www.")
 
     if host not in {
         "t.me",
         "telegram.me",
     }:
-        raise TelegramReplayError(
-            "Expected a t.me Telegram "
-            "post URL"
-        )
+        raise TelegramReplayError("Expected a t.me Telegram post URL")
 
-    parts = [
-        part
-        for part
-        in parsed.path.split("/")
-        if part
-    ]
+    parts = [part for part in parsed.path.split("/") if part]
 
     if not parts:
-        raise TelegramReplayError(
-            "Telegram URL does not "
-            "contain a post"
-        )
+        raise TelegramReplayError("Telegram URL does not contain a post")
 
     if parts[0] == "c":
         if len(parts) < 3:
             raise TelegramReplayError(
-                "Private-channel link must "
-                "look like "
-                "https://t.me/c/<channel>/<message>"
+                "Private-channel link must look like https://t.me/c/<channel>/<message>"
             )
 
-        channel_part = (
-            parts[1]
-        )
+        channel_part = parts[1]
 
         if not channel_part.isdigit():
-            raise TelegramReplayError(
-                "Invalid private Telegram "
-                "channel id"
-            )
+            raise TelegramReplayError("Invalid private Telegram channel id")
 
-        entity: str | int = int(
-            f"-100{channel_part}"
-        )
+        entity: str | int = int(f"-100{channel_part}")
 
-        message_part = (
-            parts[2]
-        )
+        message_part = parts[2]
 
     elif parts[0] == "s":
         if len(parts) < 3:
             raise TelegramReplayError(
-                "Telegram preview link must "
-                "contain channel and message id"
+                "Telegram preview link must contain channel and message id"
             )
 
         entity = parts[1]
-        message_part = (
-            parts[2]
-        )
+        message_part = parts[2]
 
     else:
         if len(parts) < 2:
             raise TelegramReplayError(
-                "Public-channel link must "
-                "look like "
-                "https://t.me/<channel>/<message>"
+                "Public-channel link must look like https://t.me/<channel>/<message>"
             )
 
         entity = parts[0]
-        message_part = (
-            parts[1]
-        )
+        message_part = parts[1]
 
     try:
-        message_id = int(
-            message_part
-        )
+        message_id = int(message_part)
     except ValueError as exc:
-        raise TelegramReplayError(
-            "Telegram message id "
-            "must be numeric"
-        ) from exc
+        raise TelegramReplayError("Telegram message id must be numeric") from exc
 
     if message_id <= 0:
-        raise TelegramReplayError(
-            "Telegram message id "
-            "must be positive"
-        )
+        raise TelegramReplayError("Telegram message id must be positive")
 
     return TelegramPostReference(
         entity=entity,
@@ -158,9 +113,7 @@ async def _replay_message_group(
     )
 
     if grouped_id is None:
-        return (
-            message,
-        )
+        return (message,)
 
     # Telegram media groups contain at most a small
     # number of adjacent channel messages. Fetch a
@@ -180,11 +133,9 @@ async def _replay_message_group(
         )
     )
 
-    candidates = (
-        await client.get_messages(
-            entity,
-            ids=ids,
-        )
+    candidates = await client.get_messages(
+        entity,
+        ids=ids,
     )
 
     grouped: dict[
@@ -206,9 +157,7 @@ async def _replay_message_group(
 
     # Keep the requested message even if Telegram's
     # neighborhood result is unexpectedly incomplete.
-    grouped[
-        message.id
-    ] = message
+    grouped[message.id] = message
 
     return tuple(
         sorted(
@@ -225,15 +174,9 @@ async def fetch_telegram_post(
     api_hash: str,
     session_name: str,
 ) -> IncomingPost:
-    reference = (
-        parse_telegram_post_url(
-            url
-        )
-    )
+    reference = parse_telegram_post_url(url)
 
-    with cloned_telegram_session(
-        session_name
-    ) as replay_session:
+    with cloned_telegram_session(session_name) as replay_session:
         client = TelegramClient(
             replay_session,
             api_id,
@@ -244,40 +187,19 @@ async def fetch_telegram_post(
         await client.connect()
 
         try:
-            if not (
-                await client
-                .is_user_authorized()
-            ):
-                raise TelegramReplayError(
-                    "Cloned Telegram session "
-                    "is not authorized"
-                )
+            if not (await client.is_user_authorized()):
+                raise TelegramReplayError("Cloned Telegram session is not authorized")
 
             try:
-                entity = (
-                    await client
-                    .get_entity(
-                        reference.entity
-                    )
-                )
+                entity = await client.get_entity(reference.entity)
             except ValueError:
                 await client.get_dialogs()
 
-                entity = (
-                    await client
-                    .get_entity(
-                        reference.entity
-                    )
-                )
+                entity = await client.get_entity(reference.entity)
 
-            message = (
-                await client
-                .get_messages(
-                    entity,
-                    ids=(
-                        reference.message_id
-                    ),
-                )
+            message = await client.get_messages(
+                entity,
+                ids=(reference.message_id),
             )
 
             if message is None:
@@ -287,25 +209,20 @@ async def fetch_telegram_post(
                     "the configured account"
                 )
 
-            messages = (
-                await _replay_message_group(
-                    client,
-                    entity,
-                    message,
-                )
+            messages = await _replay_message_group(
+                client,
+                entity,
+                message,
             )
 
-            post = (
-                await telegram_messages_to_post(
-                    messages,
-                    chat=entity,
-                )
+            post = await telegram_messages_to_post(
+                messages,
+                chat=entity,
             )
 
             if post is None:
                 raise TelegramReplayError(
-                    "Telegram post contains no "
-                    "supported text or image"
+                    "Telegram post contains no supported text or image"
                 )
 
             return post
@@ -318,63 +235,35 @@ async def fetch_telegram_post(
 def cloned_telegram_session(
     session_name: str,
 ):
-    source_path = (
-        _session_database_path(
-            session_name
-        )
-    )
+    source_path = _session_database_path(session_name)
 
     if not source_path.is_file():
-        raise TelegramReplayError(
-            "Telegram session database "
-            f"not found: {source_path}"
-        )
+        raise TelegramReplayError(f"Telegram session database not found: {source_path}")
 
-    with tempfile.TemporaryDirectory(
-        prefix="ccb-telegram-replay-"
-    ) as directory:
-        target_base = (
-            Path(directory)
-            / "telegram_replay"
-        )
+    with tempfile.TemporaryDirectory(prefix="ccb-telegram-replay-") as directory:
+        target_base = Path(directory) / "telegram_replay"
 
-        target_database = Path(
-            f"{target_base}.session"
-        )
+        target_database = Path(f"{target_base}.session")
 
-        source = sqlite3.connect(
-            source_path
-        )
+        source = sqlite3.connect(source_path)
 
-        target = sqlite3.connect(
-            target_database
-        )
+        target = sqlite3.connect(target_database)
 
         try:
-            source.backup(
-                target
-            )
+            source.backup(target)
         finally:
             target.close()
             source.close()
 
-        yield str(
-            target_base
-        )
+        yield str(target_base)
 
 
 def _session_database_path(
     session_name: str,
 ) -> Path:
-    path = Path(
-        session_name
-    )
+    path = Path(session_name)
 
-    if path.name.endswith(
-        ".session"
-    ):
+    if path.name.endswith(".session"):
         return path
 
-    return Path(
-        f"{session_name}.session"
-    )
+    return Path(f"{session_name}.session")

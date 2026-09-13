@@ -11,9 +11,7 @@ from cautious_crypto_bro.runtime_store import (
 
 def test_provider_cooldown_uses_redis_ttl() -> None:
     async def run() -> None:
-        redis = FakeRedis(
-            decode_responses=True
-        )
+        redis = FakeRedis(decode_responses=True)
 
         store = RedisRuntimeStore(
             "redis://unused",
@@ -23,56 +21,32 @@ def test_provider_cooldown_uses_redis_ttl() -> None:
 
         await store.initialize()
 
-        await (
-            store
-            .cooldown_openrouter_provider(
-                "Venice",
-                "truncated response",
-                3600,
-            )
+        await store.cooldown_openrouter_provider(
+            "Venice",
+            "truncated response",
+            3600,
         )
 
-        assert (
-            await store
-            .get_openrouter_provider_cooldowns()
-        ) == (
-            "venice",
-        )
+        assert (await store.get_openrouter_provider_cooldowns()) == ("venice",)
 
-        key = (
-            "test:openrouter:"
-            "provider-cooldown:venice"
-        )
+        key = "test:openrouter:provider-cooldown:venice"
 
-        ttl = await redis.ttl(
-            key
-        )
+        ttl = await redis.ttl(key)
 
-        assert (
-            0 < ttl <= 3600
-        )
+        assert 0 < ttl <= 3600
 
-        await redis.delete(
-            key
-        )
+        await redis.delete(key)
 
-        assert (
-            await store
-            .get_openrouter_provider_cooldowns()
-        ) == ()
+        assert (await store.get_openrouter_provider_cooldowns()) == ()
 
         await store.close()
 
-    asyncio.run(
-        run()
-    )
+    asyncio.run(run())
 
 
 def test_openrouter_evaluation_cache_uses_ttl() -> None:
     async def run() -> None:
-        redis = FakeRedis(
-            decode_responses=True
-        )
+        redis = FakeRedis(decode_responses=True)
 
         store = RedisRuntimeStore(
             "redis://unused",
@@ -89,23 +63,13 @@ def test_openrouter_evaluation_cache_uses_ttl() -> None:
         )
 
         assert (
-            await store
-            .get_openrouter_evaluation(
-                "abc123"
-            )
+            await store.get_openrouter_evaluation("abc123")
         ) == '{"actionable":false}'
 
-        ttl = await redis.ttl(
-            (
-                "test:openrouter:"
-                "evaluation:abc123"
-            )
-        )
+        ttl = await redis.ttl("test:openrouter:evaluation:abc123")
 
         assert 0 < ttl <= 3600
 
         await store.close()
 
-    asyncio.run(
-        run()
-    )
+    asyncio.run(run())

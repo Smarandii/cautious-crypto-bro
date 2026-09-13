@@ -21,12 +21,7 @@ async def main() -> None:
     await client.start()
 
     print()
-    print(
-        f"{'ID':>18}  "
-        f"{'TYPE':<16}  "
-        f"{'USERNAME':<30}  "
-        f"NAME"
-    )
+    print(f"{'ID':>18}  {'TYPE':<16}  {'USERNAME':<30}  NAME")
     print("-" * 100)
 
     async for dialog in client.iter_dialogs():

@@ -1,6 +1,6 @@
 from datetime import (
+    UTC,
     datetime,
-    timezone,
 )
 from decimal import Decimal
 from unittest.mock import patch
@@ -29,7 +29,7 @@ def test_account_state_reads_bybit_snapshot() -> None:
             13,
             12,
             0,
-            tzinfo=timezone.utc,
+            tzinfo=UTC,
         ).timestamp()
         * 1000
     )
@@ -82,9 +82,7 @@ def test_account_state_reads_bybit_snapshot() -> None:
                                 "orderId": "open-1",
                                 "orderLinkId": "ccb-open-1",
                                 "reduceOnly": False,
-                                "updatedTime": str(
-                                    now_ms
-                                ),
+                                "updatedTime": str(now_ms),
                             }
                         ],
                         "nextPageCursor": "",
@@ -111,9 +109,7 @@ def test_account_state_reads_bybit_snapshot() -> None:
                                 "orderId": "closed-1",
                                 "orderLinkId": "ccb-old",
                                 "reduceOnly": False,
-                                "updatedTime": str(
-                                    now_ms
-                                ),
+                                "updatedTime": str(now_ms),
                             }
                         ],
                         "nextPageCursor": "",
@@ -128,21 +124,15 @@ def test_account_state_reads_bybit_snapshot() -> None:
                     "retCode": 0,
                     "result": {
                         "list": [
-                            {
-                                "closedPnl": "12.4"
-                            },
-                            {
-                                "closedPnl": "-2.1"
-                            },
+                            {"closedPnl": "12.4"},
+                            {"closedPnl": "-2.1"},
                         ],
                         "nextPageCursor": "",
                     },
                 },
             )
 
-        raise AssertionError(
-            f"Unexpected request {request.url}"
-        )
+        raise AssertionError(f"Unexpected request {request.url}")
 
     executor = BybitDemoExecutor(
         api_key="key",
@@ -151,12 +141,8 @@ def test_account_state_reads_bybit_snapshot() -> None:
 
     executor._client.close()
     executor._client = httpx.Client(
-        base_url=(
-            "https://api-demo.bybit.com"
-        ),
-        transport=httpx.MockTransport(
-            handler
-        ),
+        base_url=("https://api-demo.bybit.com"),
+        transport=httpx.MockTransport(handler),
     )
 
     try:
@@ -164,40 +150,21 @@ def test_account_state_reads_bybit_snapshot() -> None:
             executor,
             "_sync_clock",
         ):
-            state = (
-                executor
-                ._account_state_sync()
-            )
+            state = executor._account_state_sync()
 
-        assert (
-            state.realized_pnl_today
-            == Decimal("10.3")
-        )
+        assert state.realized_pnl_today == Decimal("10.3")
 
-        assert (
-            state.unrealised_pnl
-            == Decimal("4.9152")
-        )
+        assert state.unrealised_pnl == Decimal("4.9152")
 
-        assert len(
-            state.positions
-        ) == 1
+        assert len(state.positions) == 1
 
-        assert len(
-            state.open_orders
-        ) == 1
+        assert len(state.open_orders) == 1
 
-        assert len(
-            state.terminal_orders_24h
-        ) == 1
+        assert len(state.terminal_orders_24h) == 1
 
-        exposure = state.exposure_for(
-            "BTCUSDT"
-        )
+        exposure = state.exposure_for("BTCUSDT")
 
-        assert len(
-            exposure.pending_entry_orders
-        ) == 1
+        assert len(exposure.pending_entry_orders) == 1
 
     finally:
         executor.close()
@@ -210,14 +177,12 @@ def test_account_state_render_is_compact() -> None:
         13,
         12,
         0,
-        tzinfo=timezone.utc,
+        tzinfo=UTC,
     )
 
     state = AccountStateSummary(
         as_of=now,
-        realized_pnl_today=(
-            Decimal("12.4")
-        ),
+        realized_pnl_today=(Decimal("12.4")),
         positions=(
             AccountPosition(
                 symbol="NEARUSDT",
@@ -225,9 +190,7 @@ def test_account_state_render_is_compact() -> None:
                 size=Decimal("819.2"),
                 avg_price=Decimal("2.304"),
                 mark_price=Decimal("2.31"),
-                unrealised_pnl=(
-                    Decimal("4.9152")
-                ),
+                unrealised_pnl=(Decimal("4.9152")),
                 status="Normal",
                 take_profit=None,
                 stop_loss=Decimal("2.221"),
@@ -240,9 +203,7 @@ def test_account_state_render_is_compact() -> None:
                 order_type="Limit",
                 status="New",
                 quantity=Decimal("0.01"),
-                remaining_quantity=(
-                    Decimal("0.01")
-                ),
+                remaining_quantity=(Decimal("0.01")),
                 price=Decimal("112000"),
                 avg_price=None,
                 order_id="1",
@@ -258,9 +219,7 @@ def test_account_state_render_is_compact() -> None:
                 order_type="Limit",
                 status="Cancelled",
                 quantity=Decimal("0.2"),
-                remaining_quantity=(
-                    Decimal("0.2")
-                ),
+                remaining_quantity=(Decimal("0.2")),
                 price=Decimal("4700"),
                 avg_price=None,
                 order_id="2",
@@ -271,51 +230,23 @@ def test_account_state_render_is_compact() -> None:
         ),
     )
 
-    rendered = (
-        ApprovalBot
-        ._render_account_state(
-            state
-        )
-    )
+    rendered = ApprovalBot._render_account_state(state)
 
-    assert (
-        "Realized P&amp;L: "
-        "<b>+12.40 USDT</b>"
-        in rendered
-    )
+    assert "Realized P&amp;L: <b>+12.40 USDT</b>" in rendered
 
-    assert (
-        "Unrealized P&amp;L: "
-        "<b>+4.92 USDT</b>"
-        in rendered
-    )
+    assert "Unrealized P&amp;L: <b>+4.92 USDT</b>" in rendered
 
-    assert (
-        "Open positions: 1"
-        in rendered
-    )
+    assert "Open positions: 1" in rendered
 
-    assert (
-        "NEARUSDT LONG 819.2"
-        in rendered
-    )
+    assert "NEARUSDT LONG 819.2" in rendered
 
-    assert (
-        "Open orders: 1"
-        in rendered
-    )
+    assert "Open orders: 1" in rendered
 
-    assert (
-        "Recent terminal "
-        "orders — last 24h: 1"
-        in rendered
-    )
+    assert "Recent terminal orders — last 24h: 1" in rendered
 
 
 def test_protective_order_is_classified_and_rendered() -> None:
-    now = datetime.now(
-        timezone.utc
-    )
+    now = datetime.now(UTC)
 
     order = AccountOrder(
         symbol="NEARUSDT",
@@ -323,45 +254,28 @@ def test_protective_order_is_classified_and_rendered() -> None:
         order_type="Market",
         status="Untriggered",
         quantity=Decimal("327.7"),
-        remaining_quantity=(
-            Decimal("327.7")
-        ),
+        remaining_quantity=(Decimal("327.7")),
         price=None,
         avg_price=None,
         order_id="tp-1",
         order_link_id="",
         reduce_only=False,
         updated_at=now,
-        stop_order_type=(
-            "PartialTakeProfit"
-        ),
-        create_type=(
-            "CreateByPartialTakeProfit"
-        ),
+        stop_order_type=("PartialTakeProfit"),
+        create_type=("CreateByPartialTakeProfit"),
         trigger_price=Decimal("2.47"),
     )
 
     assert order.kind == "TP"
     assert order.is_protective
 
-    rendered = (
-        ApprovalBot
-        ._render_account_order(
-            order
-        )
-    )
+    rendered = ApprovalBot._render_account_order(order)
 
-    assert (
-        "NEARUSDT TP 327.7 "
-        "@ trigger 2.47"
-        in rendered
-    )
+    assert "NEARUSDT TP 327.7 @ trigger 2.47" in rendered
 
 
 def test_terminal_breakdown_separates_deactivated() -> None:
-    now = datetime.now(
-        timezone.utc
-    )
+    now = datetime.now(UTC)
 
     terminal = tuple(
         AccountOrder(
@@ -370,9 +284,7 @@ def test_terminal_breakdown_separates_deactivated() -> None:
             order_type="Market",
             status=status,
             quantity=Decimal("1"),
-            remaining_quantity=(
-                Decimal("0")
-            ),
+            remaining_quantity=(Decimal("0")),
             price=None,
             avg_price=None,
             order_id=str(index),
@@ -391,25 +303,12 @@ def test_terminal_breakdown_separates_deactivated() -> None:
 
     state = AccountStateSummary(
         as_of=now,
-        realized_pnl_today=(
-            Decimal("0")
-        ),
+        realized_pnl_today=(Decimal("0")),
         positions=(),
         open_orders=(),
-        terminal_orders_24h=(
-            terminal
-        ),
+        terminal_orders_24h=(terminal),
     )
 
-    rendered = (
-        ApprovalBot
-        ._render_account_state(
-            state
-        )
-    )
+    rendered = ApprovalBot._render_account_state(state)
 
-    assert (
-        "Filled 1 · Cancelled 1 "
-        "· Deactivated 1"
-        in rendered
-    )
+    assert "Filled 1 · Cancelled 1 · Deactivated 1" in rendered

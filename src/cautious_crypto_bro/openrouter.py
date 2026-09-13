@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 
 import httpx
-
 from pydantic import ValidationError
 
 from .domain import (
@@ -31,17 +30,13 @@ STATIC_IGNORED_PROVIDERS = (
 )
 
 
-class OpenRouterProviderFailure(
-    ValueError
-):
+class OpenRouterProviderFailure(ValueError):
     def __init__(
         self,
         provider: str,
         message: str,
     ) -> None:
-        super().__init__(
-            message
-        )
+        super().__init__(message)
         self.provider = provider
 
 
@@ -51,9 +46,7 @@ def _response_provider(
         object,
     ],
 ) -> str | None:
-    provider = response_data.get(
-        "provider"
-    )
+    provider = response_data.get("provider")
 
     if not isinstance(
         provider,
@@ -63,11 +56,7 @@ def _response_provider(
 
     provider = provider.strip()
 
-    return (
-        provider
-        if provider
-        else None
-    )
+    return provider if provider else None
 
 
 SYSTEM_PROMPT = """
@@ -171,18 +160,13 @@ def _build_user_content(
     ]
 
     for image in post.images:
-        encoded = base64.b64encode(
-            image.data
-        ).decode("ascii")
+        encoded = base64.b64encode(image.data).decode("ascii")
 
         content.append(
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": (
-                        f"data:{image.media_type};"
-                        f"base64,{encoded}"
-                    ),
+                    "url": (f"data:{image.media_type};base64,{encoded}"),
                 },
             }
         )
@@ -203,10 +187,7 @@ def _evaluation_fingerprint(
         "cache_version": 1,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
-        "schema": (
-            IntentExtraction
-            .model_json_schema()
-        ),
+        "schema": (IntentExtraction.model_json_schema()),
         "request": {
             "temperature": 0,
             "max_tokens": 512,
@@ -215,45 +196,22 @@ def _evaluation_fingerprint(
             },
         },
         "source": {
-            "channel_id": (
-                source.channel_id
-            ),
-            "channel_title": (
-                source.channel_title
-            ),
-            "channel_username": (
-                source.channel_username
-            ),
-            "message_id": (
-                source.message_id
-            ),
-            "published_at": (
-                source.published_at
-                .isoformat()
-            ),
+            "channel_id": (source.channel_id),
+            "channel_title": (source.channel_title),
+            "channel_username": (source.channel_username),
+            "message_id": (source.message_id),
+            "published_at": (source.published_at.isoformat()),
             "text": source.text,
         },
         "images": [
             {
-                "media_type": (
-                    image.media_type
-                ),
-                "sha256": (
-                    hashlib.sha256(
-                        image.data
-                    ).hexdigest()
-                ),
+                "media_type": (image.media_type),
+                "sha256": (hashlib.sha256(image.data).hexdigest()),
             }
             for image in post.images
         ],
-        "global_guidance": (
-            global_guidance
-            or ""
-        ),
-        "channel_guidance": (
-            channel_guidance
-            or ""
-        ),
+        "global_guidance": (global_guidance or ""),
+        "channel_guidance": (channel_guidance or ""),
     }
 
     canonical = json.dumps(
@@ -263,21 +221,14 @@ def _evaluation_fingerprint(
         separators=(",", ":"),
     )
 
-    return hashlib.sha256(
-        canonical.encode(
-            "utf-8"
-        )
-    ).hexdigest()
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _trading_intent_from_extraction(
     source: SourceMessage,
     extraction: IntentExtraction,
 ) -> TradingIntent | None:
-    if (
-        not extraction.actionable
-        or extraction.intent is None
-    ):
+    if not extraction.actionable or extraction.intent is None:
         return None
 
     raw = extraction.intent
@@ -297,18 +248,10 @@ def _trading_intent_from_extraction(
 def _completion_content(
     response_data: dict[str, object],
 ) -> str:
-    choices = response_data.get(
-        "choices"
-    )
+    choices = response_data.get("choices")
 
-    if (
-        not isinstance(choices, list)
-        or not choices
-    ):
-        raise ValueError(
-            "OpenRouter response contains "
-            "no completion choices"
-        )
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("OpenRouter response contains no completion choices")
 
     choice = choices[0]
 
@@ -316,29 +259,15 @@ def _completion_content(
         choice,
         dict,
     ):
-        raise ValueError(
-            "OpenRouter completion choice "
-            "is invalid"
-        )
+        raise ValueError("OpenRouter completion choice is invalid")
 
-    provider = (
-        _response_provider(
-            response_data
-        )
-    )
+    provider = _response_provider(response_data)
 
-    provider_label = (
-        provider
-        or "unknown"
-    )
+    provider_label = provider or "unknown"
 
-    provider_error = (
-        choice.get("error")
-    )
+    provider_error = choice.get("error")
 
-    finish_reason = choice.get(
-        "finish_reason"
-    )
+    finish_reason = choice.get("finish_reason")
 
     if finish_reason == "length":
         message = (
@@ -353,14 +282,9 @@ def _completion_content(
                 message,
             )
 
-        raise ValueError(
-            message
-        )
+        raise ValueError(message)
 
-    if (
-        provider_error is not None
-        or finish_reason == "error"
-    ):
+    if provider_error is not None or finish_reason == "error":
         error_code = None
         error_message = None
 
@@ -368,14 +292,8 @@ def _completion_content(
             provider_error,
             dict,
         ):
-            error_code = (
-                provider_error.get("code")
-            )
-            error_message = (
-                provider_error.get(
-                    "message"
-                )
-            )
+            error_code = provider_error.get("code")
+            error_message = provider_error.get("message")
 
         message = (
             "OpenRouter provider failure: "
@@ -390,35 +308,23 @@ def _completion_content(
                 message,
             )
 
-        raise ValueError(
-            message
-        )
+        raise ValueError(message)
 
-    message = choice.get(
-        "message"
-    )
+    message = choice.get("message")
 
     if not isinstance(
         message,
         dict,
     ):
-        raise ValueError(
-            "OpenRouter response contains "
-            "no assistant message"
-        )
+        raise ValueError("OpenRouter response contains no assistant message")
 
-    content = message.get(
-        "content"
-    )
+    content = message.get("content")
 
     if not isinstance(
         content,
         str,
     ):
-        raise ValueError(
-            "OpenRouter response content "
-            "is not a string"
-        )
+        raise ValueError("OpenRouter response content is not a string")
 
     return content
 
@@ -432,50 +338,24 @@ class OpenRouterIntentExtractor:
         base_url: str,
         inference_timeout_seconds: float = 45,
         max_attempts: int = 2,
-        provider_cooldown_store: (
-            ProviderCooldownStore
-            | None
-        ) = None,
-        provider_cooldown_seconds: int = (
-            12 * 60 * 60
-        ),
-        evaluation_cache: (
-            OpenRouterEvaluationCache
-            | None
-        ) = None,
-        evaluation_cache_seconds: int = (
-            6 * 60 * 60
-        ),
+        provider_cooldown_store: (ProviderCooldownStore | None) = None,
+        provider_cooldown_seconds: int = (12 * 60 * 60),
+        evaluation_cache: (OpenRouterEvaluationCache | None) = None,
+        evaluation_cache_seconds: int = (6 * 60 * 60),
     ) -> None:
         if provider_cooldown_seconds <= 0:
-            raise ValueError(
-                "provider_cooldown_seconds "
-                "must be positive"
-            )
+            raise ValueError("provider_cooldown_seconds must be positive")
 
         if evaluation_cache_seconds <= 0:
-            raise ValueError(
-                "evaluation_cache_seconds "
-                "must be positive"
-            )
+            raise ValueError("evaluation_cache_seconds must be positive")
 
         self._model = model
-        self._inference_timeout_seconds = (
-            inference_timeout_seconds
-        )
+        self._inference_timeout_seconds = inference_timeout_seconds
         self._max_attempts = max_attempts
-        self._provider_cooldown_store = (
-            provider_cooldown_store
-        )
-        self._provider_cooldown_seconds = (
-            provider_cooldown_seconds
-        )
-        self._evaluation_cache = (
-            evaluation_cache
-        )
-        self._evaluation_cache_seconds = (
-            evaluation_cache_seconds
-        )
+        self._provider_cooldown_store = provider_cooldown_store
+        self._provider_cooldown_seconds = provider_cooldown_seconds
+        self._evaluation_cache = evaluation_cache
+        self._evaluation_cache_seconds = evaluation_cache_seconds
 
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
@@ -483,9 +363,7 @@ class OpenRouterIntentExtractor:
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            timeout=httpx.Timeout(
-                inference_timeout_seconds + 15
-            ),
+            timeout=httpx.Timeout(inference_timeout_seconds + 15),
         )
 
     async def close(self) -> None:
@@ -494,22 +372,15 @@ class OpenRouterIntentExtractor:
     async def _active_provider_cooldowns(
         self,
     ) -> tuple[str, ...]:
-        if (
-            self._provider_cooldown_store
-            is None
-        ):
+        if self._provider_cooldown_store is None:
             return ()
 
         try:
             return await (
-                self._provider_cooldown_store
-                .get_openrouter_provider_cooldowns()
+                self._provider_cooldown_store.get_openrouter_provider_cooldowns()
             )
         except Exception:
-            logger.exception(
-                "Failed to read OpenRouter "
-                "provider cooldowns"
-            )
+            logger.exception("Failed to read OpenRouter provider cooldowns")
             return ()
 
     async def _cooldown_provider(
@@ -517,52 +388,35 @@ class OpenRouterIntentExtractor:
         failure: OpenRouterProviderFailure,
         ignored_providers: set[str],
     ) -> None:
-        provider = (
-            failure.provider
-            .strip()
-            .casefold()
-        )
+        provider = failure.provider.strip().casefold()
 
         if not provider:
             return
 
         # Always exclude it for this extraction,
         # even if Redis temporarily fails.
-        ignored_providers.add(
-            provider
-        )
+        ignored_providers.add(provider)
 
-        if (
-            self._provider_cooldown_store
-            is None
-        ):
+        if self._provider_cooldown_store is None:
             return
 
         try:
-            await (
-                self._provider_cooldown_store
-                .cooldown_openrouter_provider(
-                    provider,
-                    str(failure),
-                    self._provider_cooldown_seconds,
-                )
+            await self._provider_cooldown_store.cooldown_openrouter_provider(
+                provider,
+                str(failure),
+                self._provider_cooldown_seconds,
             )
         except Exception:
             logger.exception(
-                "Failed to persist OpenRouter "
-                "provider cooldown for %s",
+                "Failed to persist OpenRouter provider cooldown for %s",
                 provider,
             )
             return
 
         logger.warning(
-            "OpenRouter provider %s cooled "
-            "down for %.1f hour(s): %s",
+            "OpenRouter provider %s cooled down for %.1f hour(s): %s",
             provider,
-            (
-                self._provider_cooldown_seconds
-                / 3600
-            ),
+            (self._provider_cooldown_seconds / 3600),
             failure,
         )
 
@@ -574,34 +428,20 @@ class OpenRouterIntentExtractor:
             return None
 
         try:
-            payload = await (
-                self._evaluation_cache
-                .get_openrouter_evaluation(
-                    fingerprint
-                )
+            payload = await self._evaluation_cache.get_openrouter_evaluation(
+                fingerprint
             )
         except Exception:
-            logger.exception(
-                "Failed to read OpenRouter "
-                "evaluation cache"
-            )
+            logger.exception("Failed to read OpenRouter evaluation cache")
             return None
 
         if payload is None:
             return None
 
         try:
-            return (
-                IntentExtraction
-                .model_validate_json(
-                    payload
-                )
-            )
+            return IntentExtraction.model_validate_json(payload)
         except ValidationError:
-            logger.warning(
-                "Ignoring invalid cached "
-                "OpenRouter evaluation"
-            )
+            logger.warning("Ignoring invalid cached OpenRouter evaluation")
             return None
 
     async def _cache_evaluation(
@@ -613,22 +453,13 @@ class OpenRouterIntentExtractor:
             return
 
         try:
-            await (
-                self._evaluation_cache
-                .cache_openrouter_evaluation(
-                    fingerprint,
-                    (
-                        extraction
-                        .model_dump_json()
-                    ),
-                    self._evaluation_cache_seconds,
-                )
+            await self._evaluation_cache.cache_openrouter_evaluation(
+                fingerprint,
+                (extraction.model_dump_json()),
+                self._evaluation_cache_seconds,
             )
         except Exception:
-            logger.exception(
-                "Failed to persist OpenRouter "
-                "evaluation cache"
-            )
+            logger.exception("Failed to persist OpenRouter evaluation cache")
 
     async def extract(
         self,
@@ -640,53 +471,36 @@ class OpenRouterIntentExtractor:
     ) -> TradingIntent | None:
         source = post.source
 
-        evaluation_fingerprint = (
-            _evaluation_fingerprint(
-                post,
-                model=self._model,
-                global_guidance=(
-                    global_guidance
-                ),
-                channel_guidance=(
-                    channel_guidance
-                ),
-            )
+        evaluation_fingerprint = _evaluation_fingerprint(
+            post,
+            model=self._model,
+            global_guidance=(global_guidance),
+            channel_guidance=(channel_guidance),
         )
 
         if debug_dir is None:
-            cached_extraction = (
-                await self
-                ._read_cached_evaluation(
-                    evaluation_fingerprint
-                )
+            cached_extraction = await self._read_cached_evaluation(
+                evaluation_fingerprint
             )
 
             if cached_extraction is not None:
                 logger.info(
-                    "OpenRouter evaluation cache "
-                    "hit for %s/%s",
+                    "OpenRouter evaluation cache hit for %s/%s",
                     source.channel_id,
                     source.message_id,
                 )
 
-                if (
-                    not cached_extraction.actionable
-                    or cached_extraction.intent
-                    is None
-                ):
+                if not cached_extraction.actionable or cached_extraction.intent is None:
                     logger.info(
-                        "No actionable intent for "
-                        "%s/%s: %s",
+                        "No actionable intent for %s/%s: %s",
                         source.channel_id,
                         source.message_id,
                         cached_extraction.reason,
                     )
 
-                return (
-                    _trading_intent_from_extraction(
-                        source,
-                        cached_extraction,
-                    )
+                return _trading_intent_from_extraction(
+                    source,
+                    cached_extraction,
                 )
 
         payload = {
@@ -714,18 +528,14 @@ class OpenRouterIntentExtractor:
                 "sort": "latency",
                 "require_parameters": True,
                 "allow_fallbacks": True,
-                "ignore": list(
-                    STATIC_IGNORED_PROVIDERS
-                ),
+                "ignore": list(STATIC_IGNORED_PROVIDERS),
             },
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "trading_intent_extraction",
                     "strict": True,
-                    "schema": (
-                        IntentExtraction.model_json_schema()
-                    ),
+                    "schema": (IntentExtraction.model_json_schema()),
                 },
             },
         }
@@ -733,9 +543,7 @@ class OpenRouterIntentExtractor:
         last_error: Exception | None = None
 
         ignored_providers = {
-            provider.casefold()
-            for provider
-            in STATIC_IGNORED_PROVIDERS
+            provider.casefold() for provider in STATIC_IGNORED_PROVIDERS
         }
 
         for attempt in range(
@@ -744,38 +552,24 @@ class OpenRouterIntentExtractor:
         ):
             ignored_providers.update(
                 provider.casefold()
-                for provider
-                in (
-                    await self
-                    ._active_provider_cooldowns()
-                )
+                for provider in (await self._active_provider_cooldowns())
             )
 
-            provider_options = (
-                payload["provider"]
-            )
+            provider_options = payload["provider"]
 
             assert isinstance(
                 provider_options,
                 dict,
             )
 
-            provider_options["ignore"] = (
-                sorted(
-                    ignored_providers
-                )
-            )
+            provider_options["ignore"] = sorted(ignored_providers)
 
-            response_provider: (
-                str | None
-            ) = None
+            response_provider: str | None = None
 
             started = time.monotonic()
 
             try:
-                async with asyncio.timeout(
-                    self._inference_timeout_seconds
-                ):
+                async with asyncio.timeout(self._inference_timeout_seconds):
                     response = await self._client.post(
                         "/chat/completions",
                         json=payload,
@@ -789,20 +583,11 @@ class OpenRouterIntentExtractor:
                     response_data,
                     dict,
                 ):
-                    raise ValueError(
-                        "OpenRouter response "
-                        "is not a JSON object"
-                    )
+                    raise ValueError("OpenRouter response is not a JSON object")
 
-                response_provider = (
-                    _response_provider(
-                        response_data
-                    )
-                )
+                response_provider = _response_provider(response_data)
 
-                content = _completion_content(
-                    response_data
-                )
+                content = _completion_content(response_data)
 
                 if debug_dir is not None:
                     debug_dir.mkdir(
@@ -810,26 +595,13 @@ class OpenRouterIntentExtractor:
                         exist_ok=True,
                     )
 
-                    stem = (
-                        f"{source.channel_id}_"
-                        f"{source.message_id}_"
-                        f"attempt{attempt}"
-                    )
+                    stem = f"{source.channel_id}_{source.message_id}_attempt{attempt}"
 
-                    response_path = (
-                        debug_dir
-                        / f"{stem}.response.json"
-                    )
+                    response_path = debug_dir / f"{stem}.response.json"
 
-                    content_path = (
-                        debug_dir
-                        / f"{stem}.content.txt"
-                    )
+                    content_path = debug_dir / f"{stem}.content.txt"
 
-                    metadata_path = (
-                        debug_dir
-                        / f"{stem}.meta.json"
-                    )
+                    metadata_path = debug_dir / f"{stem}.meta.json"
 
                     response_path.write_text(
                         response.text,
@@ -841,51 +613,24 @@ class OpenRouterIntentExtractor:
                         encoding="utf-8",
                     )
 
-                    image_bytes = [
-                        len(image.data)
-                        for image in post.images
-                    ]
+                    image_bytes = [len(image.data) for image in post.images]
 
                     estimated_base64_chars = [
-                        (
-                            (size + 2)
-                            // 3
-                            * 4
-                        )
-                        for size in image_bytes
+                        ((size + 2) // 3 * 4) for size in image_bytes
                     ]
 
                     metadata = {
-                        "channel_id": (
-                            source.channel_id
-                        ),
-                        "message_id": (
-                            source.message_id
-                        ),
+                        "channel_id": (source.channel_id),
+                        "message_id": (source.message_id),
                         "attempt": attempt,
                         "model": self._model,
-                        "http_status": (
-                            response.status_code
-                        ),
-                        "image_count": (
-                            len(post.images)
-                        ),
-                        "image_bytes": (
-                            image_bytes
-                        ),
-                        "estimated_base64_chars": (
-                            estimated_base64_chars
-                        ),
-                        "response_body_chars": (
-                            len(response.text)
-                        ),
-                        "content_chars": (
-                            len(content)
-                        ),
-                        "elapsed_seconds": (
-                            time.monotonic()
-                            - started
-                        ),
+                        "http_status": (response.status_code),
+                        "image_count": (len(post.images)),
+                        "image_bytes": (image_bytes),
+                        "estimated_base64_chars": (estimated_base64_chars),
+                        "response_body_chars": (len(response.text)),
+                        "content_chars": (len(content)),
+                        "elapsed_seconds": (time.monotonic() - started),
                     }
 
                     metadata_path.write_text(
@@ -897,8 +642,7 @@ class OpenRouterIntentExtractor:
                     )
 
                     logger.info(
-                        "Saved OpenRouter debug "
-                        "capture to %s",
+                        "Saved OpenRouter debug capture to %s",
                         debug_dir,
                     )
 
@@ -906,10 +650,7 @@ class OpenRouterIntentExtractor:
                     content,
                     str,
                 ):
-                    raise ValueError(
-                        "OpenRouter response content "
-                        "is not a string"
-                    )
+                    raise ValueError("OpenRouter response content is not a string")
 
                 # This schema normally produces only a
                 # small JSON object. A very large result
@@ -922,10 +663,7 @@ class OpenRouterIntentExtractor:
                         f"({len(content)} characters)"
                     )
 
-                    if (
-                        response_provider
-                        is not None
-                    ):
+                    if response_provider is not None:
                         raise (
                             OpenRouterProviderFailure(
                                 response_provider,
@@ -933,21 +671,12 @@ class OpenRouterIntentExtractor:
                             )
                         )
 
-                    raise ValueError(
-                        message
-                    )
+                    raise ValueError(message)
 
-                extraction = (
-                    IntentExtraction.model_validate_json(
-                        content
-                    )
-                )
+                extraction = IntentExtraction.model_validate_json(content)
 
             except TimeoutError:
-                elapsed = (
-                    time.monotonic()
-                    - started
-                )
+                elapsed = time.monotonic() - started
 
                 last_error = RuntimeError(
                     "OpenRouter inference exceeded "
@@ -956,20 +685,12 @@ class OpenRouterIntentExtractor:
                 )
 
             except ValidationError as exc:
-                message = (
-                    "OpenRouter returned invalid "
-                    "structured output"
-                )
+                message = "OpenRouter returned invalid structured output"
 
-                if (
-                    response_provider
-                    is not None
-                ):
-                    failure = (
-                        OpenRouterProviderFailure(
-                            response_provider,
-                            message,
-                        )
+                if response_provider is not None:
+                    failure = OpenRouterProviderFailure(
+                        response_provider,
+                        message,
                     )
 
                     last_error = failure
@@ -979,9 +700,7 @@ class OpenRouterIntentExtractor:
                         ignored_providers,
                     )
                 else:
-                    last_error = RuntimeError(
-                        message
-                    )
+                    last_error = RuntimeError(message)
 
                 logger.warning(
                     "Invalid OpenRouter structured output "
@@ -1002,23 +721,16 @@ class OpenRouterIntentExtractor:
                 )
 
             except httpx.HTTPStatusError as exc:
-                status = (
-                    exc.response.status_code
-                )
+                status = exc.response.status_code
 
-                if (
-                    status != 429
-                    and status < 500
-                ):
+                if status != 429 and status < 500:
                     raise
 
                 last_error = exc
 
                 if status >= 500:
                     try:
-                        error_data = (
-                            exc.response.json()
-                        )
+                        error_data = exc.response.json()
                     except ValueError:
                         error_data = None
 
@@ -1026,32 +738,24 @@ class OpenRouterIntentExtractor:
                         error_data,
                         dict,
                     ):
-                        provider = (
-                            _response_provider(
-                                error_data
-                            )
-                        )
+                        provider = _response_provider(error_data)
 
                         if provider is not None:
-                            failure = (
-                                OpenRouterProviderFailure(
-                                    provider,
-                                    (
-                                        "OpenRouter HTTP "
-                                        f"{status} provider "
-                                        "failure: "
-                                        f"provider={provider}"
-                                    ),
-                                )
+                            failure = OpenRouterProviderFailure(
+                                provider,
+                                (
+                                    "OpenRouter HTTP "
+                                    f"{status} provider "
+                                    "failure: "
+                                    f"provider={provider}"
+                                ),
                             )
 
                             last_error = failure
 
-                            await (
-                                self._cooldown_provider(
-                                    failure,
-                                    ignored_providers,
-                                )
+                            await self._cooldown_provider(
+                                failure,
+                                ignored_providers,
                             )
 
             except (
@@ -1063,10 +767,7 @@ class OpenRouterIntentExtractor:
                 last_error = exc
 
             else:
-                elapsed = (
-                    time.monotonic()
-                    - started
-                )
+                elapsed = time.monotonic() - started
 
                 logger.info(
                     "OpenRouter inference for %s/%s "
@@ -1082,13 +783,9 @@ class OpenRouterIntentExtractor:
 
                 break
 
-            if (
-                attempt
-                < self._max_attempts
-            ):
+            if attempt < self._max_attempts:
                 logger.warning(
-                    "OpenRouter attempt %d/%d failed "
-                    "for %s/%s: %s; retrying",
+                    "OpenRouter attempt %d/%d failed for %s/%s: %s; retrying",
                     attempt,
                     self._max_attempts,
                     source.channel_id,
@@ -1096,9 +793,7 @@ class OpenRouterIntentExtractor:
                     last_error,
                 )
 
-                await asyncio.sleep(
-                    0.5 * attempt
-                )
+                await asyncio.sleep(0.5 * attempt)
 
         else:
             raise RuntimeError(
@@ -1113,10 +808,7 @@ class OpenRouterIntentExtractor:
                 extraction,
             )
 
-        if (
-            not extraction.actionable
-            or extraction.intent is None
-        ):
+        if not extraction.actionable or extraction.intent is None:
             logger.info(
                 "No actionable intent for %s/%s: %s",
                 source.channel_id,
@@ -1124,9 +816,7 @@ class OpenRouterIntentExtractor:
                 extraction.reason,
             )
 
-        return (
-            _trading_intent_from_extraction(
-                source,
-                extraction,
-            )
+        return _trading_intent_from_extraction(
+            source,
+            extraction,
         )

@@ -11,39 +11,31 @@ from redis.asyncio import (
 )
 
 
-class ProviderCooldownStore(
-    Protocol
-):
+class ProviderCooldownStore(Protocol):
     async def get_openrouter_provider_cooldowns(
         self,
-    ) -> tuple[str, ...]:
-        ...
+    ) -> tuple[str, ...]: ...
 
     async def cooldown_openrouter_provider(
         self,
         provider: str,
         reason: str,
         duration_seconds: int,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
-class OpenRouterEvaluationCache(
-    Protocol
-):
+class OpenRouterEvaluationCache(Protocol):
     async def get_openrouter_evaluation(
         self,
         fingerprint: str,
-    ) -> str | None:
-        ...
+    ) -> str | None: ...
 
     async def cache_openrouter_evaluation(
         self,
         fingerprint: str,
         payload_json: str,
         duration_seconds: int,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class RedisRuntimeStore:
@@ -51,63 +43,37 @@ class RedisRuntimeStore:
         self,
         redis_url: str,
         *,
-        key_prefix: str = (
-            "cautious-crypto-bro"
-        ),
+        key_prefix: str = ("cautious-crypto-bro"),
         max_connections: int = 64,
         pool_timeout_seconds: float = 5,
         client: Redis | None = None,
     ) -> None:
-        key_prefix = (
-            key_prefix.strip()
-        )
+        key_prefix = key_prefix.strip()
 
         if not key_prefix:
-            raise ValueError(
-                "Redis key prefix "
-                "must not be empty"
-            )
+            raise ValueError("Redis key prefix must not be empty")
 
-        self._key_prefix = (
-            key_prefix.rstrip(":")
-        )
+        self._key_prefix = key_prefix.rstrip(":")
 
         if max_connections <= 0:
-            raise ValueError(
-                "Redis max_connections "
-                "must be positive"
-            )
+            raise ValueError("Redis max_connections must be positive")
 
         if pool_timeout_seconds <= 0:
-            raise ValueError(
-                "Redis pool timeout "
-                "must be positive"
-            )
+            raise ValueError("Redis pool timeout must be positive")
 
         self._pool = None
 
         if client is not None:
             self._redis = client
         else:
-            self._pool = (
-                BlockingConnectionPool
-                .from_url(
-                    redis_url,
-                    decode_responses=True,
-                    max_connections=(
-                        max_connections
-                    ),
-                    timeout=(
-                        pool_timeout_seconds
-                    ),
-                )
+            self._pool = BlockingConnectionPool.from_url(
+                redis_url,
+                decode_responses=True,
+                max_connections=(max_connections),
+                timeout=(pool_timeout_seconds),
             )
 
-            self._redis = Redis(
-                connection_pool=(
-                    self._pool
-                )
-            )
+            self._redis = Redis(connection_pool=(self._pool))
 
     async def initialize(
         self,
@@ -125,25 +91,19 @@ class RedisRuntimeStore:
     async def get_openrouter_provider_cooldowns(
         self,
     ) -> tuple[str, ...]:
-        prefix = (
-            self._provider_key_prefix()
-        )
+        prefix = self._provider_key_prefix()
 
         providers: set[str] = set()
 
-        async for key in (
-            self._redis.scan_iter(
-                match=f"{prefix}*",
-                count=100,
-            )
+        async for key in self._redis.scan_iter(
+            match=f"{prefix}*",
+            count=100,
         ):
             if isinstance(
                 key,
                 bytes,
             ):
-                key = key.decode(
-                    "utf-8"
-                )
+                key = key.decode("utf-8")
 
             if not isinstance(
                 key,
@@ -151,20 +111,12 @@ class RedisRuntimeStore:
             ):
                 continue
 
-            provider = key[
-                len(prefix):
-            ]
+            provider = key[len(prefix) :]
 
             if provider:
-                providers.add(
-                    provider
-                )
+                providers.add(provider)
 
-        return tuple(
-            sorted(
-                providers
-            )
-        )
+        return tuple(sorted(providers))
 
     async def cooldown_openrouter_provider(
         self,
@@ -172,25 +124,15 @@ class RedisRuntimeStore:
         reason: str,
         duration_seconds: int,
     ) -> None:
-        provider = (
-            self._normalize_provider(
-                provider
-            )
-        )
+        provider = self._normalize_provider(provider)
 
         if duration_seconds <= 0:
-            raise ValueError(
-                "Provider cooldown "
-                "must be positive"
-            )
+            raise ValueError("Provider cooldown must be positive")
 
         payload = json.dumps(
             {
                 "provider": provider,
-                "reason": (
-                    reason.strip()
-                    or "provider failure"
-                ),
+                "reason": (reason.strip() or "provider failure"),
             },
             separators=(
                 ",",
@@ -199,9 +141,7 @@ class RedisRuntimeStore:
         )
 
         await self._redis.set(
-            self._provider_key(
-                provider
-            ),
+            self._provider_key(provider),
             payload,
             ex=duration_seconds,
         )
@@ -210,11 +150,7 @@ class RedisRuntimeStore:
         self,
         fingerprint: str,
     ) -> str | None:
-        return await self._redis.get(
-            self._evaluation_key(
-                fingerprint
-            )
-        )
+        return await self._redis.get(self._evaluation_key(fingerprint))
 
     async def cache_openrouter_evaluation(
         self,
@@ -223,15 +159,10 @@ class RedisRuntimeStore:
         duration_seconds: int,
     ) -> None:
         if duration_seconds <= 0:
-            raise ValueError(
-                "Evaluation cache duration "
-                "must be positive"
-            )
+            raise ValueError("Evaluation cache duration must be positive")
 
         await self._redis.set(
-            self._evaluation_key(
-                fingerprint
-            ),
+            self._evaluation_key(fingerprint),
             payload_json,
             ex=duration_seconds,
         )
@@ -240,56 +171,31 @@ class RedisRuntimeStore:
         self,
         fingerprint: str,
     ) -> str:
-        fingerprint = (
-            fingerprint.strip()
-            .casefold()
-        )
+        fingerprint = fingerprint.strip().casefold()
 
         if not fingerprint:
-            raise ValueError(
-                "Evaluation fingerprint "
-                "must not be empty"
-            )
+            raise ValueError("Evaluation fingerprint must not be empty")
 
-        return (
-            f"{self._key_prefix}:"
-            "openrouter:"
-            "evaluation:"
-            f"{fingerprint}"
-        )
+        return f"{self._key_prefix}:openrouter:evaluation:{fingerprint}"
 
     def _provider_key_prefix(
         self,
     ) -> str:
-        return (
-            f"{self._key_prefix}:"
-            "openrouter:"
-            "provider-cooldown:"
-        )
+        return f"{self._key_prefix}:openrouter:provider-cooldown:"
 
     def _provider_key(
         self,
         provider: str,
     ) -> str:
-        return (
-            self._provider_key_prefix()
-            + self._normalize_provider(
-                provider
-            )
-        )
+        return self._provider_key_prefix() + self._normalize_provider(provider)
 
     @staticmethod
     def _normalize_provider(
         provider: str,
     ) -> str:
-        provider = (
-            provider.strip()
-            .casefold()
-        )
+        provider = provider.strip().casefold()
 
         if not provider:
-            raise ValueError(
-                "Provider must not be empty"
-            )
+            raise ValueError("Provider must not be empty")
 
         return provider
