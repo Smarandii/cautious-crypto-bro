@@ -98,3 +98,22 @@ Telegram/SQLite and Redis state.
 `TELEGRAM_STARTUP_LOOKBACK_HOURS=5` scans recent posts on startup; `0` disables
 it. Albums are processed as one post, oldest posts first, and already-seen
 source messages are deduplicated. Approval is still required.
+
+## Audit recent signals
+
+Review all configured Telegram sources over a recent window without creating
+intents or executing trades:
+
+```bash
+rm -rf audit-output
+mkdir -p audit-output
+
+docker compose run --rm -T \
+  -v "$PWD/audit-output:/audit-output" \
+  --entrypoint /app/.venv/bin/python \
+  app \
+  /app/scripts/audit_recent_signals.py \
+  --hours 5 \
+  --output-dir /audit-output
+
+Use --cache-only to avoid fresh OpenRouter calls.

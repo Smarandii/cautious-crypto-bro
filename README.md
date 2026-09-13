@@ -14,7 +14,7 @@ account snapshot + Telegram approval
 Bybit Demo
 
 The LLM interprets trader posts. Deterministic code controls sizing, entries,
-stops and fallback take-profit ladders. Nothing is executed without human
+stops, and fallback take-profit ladders. Nothing is executed without human
 approval.
 
 This project currently supports Bybit Demo only. Do not use production API
@@ -29,7 +29,7 @@ a Telegram account
 an OpenRouter account
 a Bybit account
 
-Clone the repo, then:
+Clone the repository, then:
 
 cp .env.example .env
 1. Get the required credentials
@@ -46,6 +46,7 @@ Bybit Demo API key + secret — create a Bybit account, enable Demo Trading,
 then create API credentials for the demo environment.
 
 If you need a Bybit account, this is my referral link:
+
 https://www.bybit.com/invite?ref=Y5B5E38
 
 It is a referral link.
@@ -84,18 +85,20 @@ Development
 
 Install uv, then:
 
-uv sync --group dev
+uv sync --python 3.12 --group dev
 uv run pre-commit install
 
 Quality checks:
 
-uv run ruff format .
+uv run ruff format --check .
 uv run ruff check .
 uv run pytest
 
 The same checks run in GitHub Actions.
 
-Useful operational and replay commands are in TESTING.md.
+Useful replay, diagnostics, and smoke-test commands are in
+TESTING.md.
+
 Current roadmap: TODO.md.
 
 Safety model
