@@ -1,12 +1,10 @@
 # TODO
 
-## Active exposure and trade lifecycle
+## Trade lifecycle and performance attribution
 
-Prevent new signals from accidentally increasing existing mirrored exposure for
-the same symbol.
+Exposure warnings are implemented for existing Bybit positions and pending CCB entry orders. Execution remains user-controlled even when signals will net in the shared one-way account.
 
-Account for Bybit positions and unfilled app orders, then extend this into
-OPEN / REDUCE / CLOSE handling for trader follow-up messages.
+Add OPEN / REDUCE / CLOSE handling for trader follow-up messages and persist fills, exits and fees so per-channel performance can be reconstructed even when same-symbol signals overlap.
 
 ## MENSA visual structure extraction
 

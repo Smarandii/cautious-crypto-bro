@@ -365,3 +365,161 @@ def test_order_uses_child_take_profit_when_present() -> None:
 
     finally:
         executor.close()
+
+
+def test_exposure_reads_position_and_pending_ccb_orders() -> None:
+    def handler(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        if (
+            request.url.path
+            == "/v5/position/list"
+        ):
+            assert (
+                request.url.params[
+                    "symbol"
+                ]
+                == "BTCUSDT"
+            )
+
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "retMsg": "OK",
+                    "result": {
+                        "list": [
+                            {
+                                "symbol": "BTCUSDT",
+                                "positionIdx": 0,
+                                "side": "Buy",
+                                "size": "0.25",
+                                "avgPrice": "60000",
+                            }
+                        ]
+                    },
+                },
+            )
+
+        if (
+            request.url.path
+            == "/v5/order/realtime"
+        ):
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "retMsg": "OK",
+                    "result": {
+                        "list": [
+                            {
+                                "orderId": "ccb-order",
+                                "orderLinkId": (
+                                    "ccb-abc-1"
+                                ),
+                                "side": "Sell",
+                                "price": "62000",
+                                "leavesQty": "0.1",
+                                "reduceOnly": False,
+                            },
+                            {
+                                "orderId": "manual",
+                                "orderLinkId": "",
+                                "side": "Buy",
+                                "price": "59000",
+                                "leavesQty": "5",
+                                "reduceOnly": False,
+                            },
+                            {
+                                "orderId": "reduce",
+                                "orderLinkId": (
+                                    "ccb-reduce-1"
+                                ),
+                                "side": "Sell",
+                                "price": "65000",
+                                "leavesQty": "0.2",
+                                "reduceOnly": True,
+                            },
+                        ],
+                        "nextPageCursor": "",
+                    },
+                },
+            )
+
+        raise AssertionError(
+            f"Unexpected request: "
+            f"{request.url}"
+        )
+
+    executor = BybitDemoExecutor(
+        api_key="key",
+        api_secret="secret",
+    )
+
+    executor._client.close()
+
+    executor._client = httpx.Client(
+        base_url=(
+            "https://api-demo.bybit.com"
+        ),
+        transport=httpx.MockTransport(
+            handler
+        ),
+    )
+
+    try:
+        with patch.object(
+            executor,
+            "_sync_clock",
+        ):
+            exposure = (
+                executor._exposure_sync(
+                    "BTCUSDT"
+                )
+            )
+
+        assert len(
+            exposure.positions
+        ) == 1
+
+        position = (
+            exposure.positions[0]
+        )
+
+        assert (
+            position.side
+            is Side.LONG
+        )
+        assert (
+            position.size
+            == Decimal("0.25")
+        )
+        assert (
+            position.avg_price
+            == Decimal("60000")
+        )
+
+        assert len(
+            exposure.pending_entry_orders
+        ) == 1
+
+        pending = (
+            exposure
+            .pending_entry_orders[0]
+        )
+
+        assert (
+            pending.side
+            is Side.SHORT
+        )
+        assert (
+            pending.remaining_quantity
+            == Decimal("0.1")
+        )
+        assert (
+            pending.order_id
+            == "ccb-order"
+        )
+
+    finally:
+        executor.close()
