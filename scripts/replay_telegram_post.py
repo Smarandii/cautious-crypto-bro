@@ -200,6 +200,14 @@ async def main() -> int:
                 * 60
                 * 60
             ),
+            evaluation_cache=(
+                runtime_store
+            ),
+            evaluation_cache_seconds=(
+                settings.openrouter_evaluation_cache_hours
+                * 60
+                * 60
+            ),
         )
     )
 

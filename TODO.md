@@ -1,13 +1,5 @@
 # TODO
 
-## Retryable source processing
-
-A source is persisted before extraction/planning finishes, so a transient
-downstream failure can make a live/lookback message permanently look processed.
-
-Track processing state so failed work can be retried without duplicating
-successful work.
-
 ## Active exposure and trade lifecycle
 
 Prevent new signals from accidentally increasing existing mirrored exposure for

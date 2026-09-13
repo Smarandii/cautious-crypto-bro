@@ -78,6 +78,14 @@ async def async_main() -> None:
                 * 60
                 * 60
             ),
+            evaluation_cache=(
+                runtime_store
+            ),
+            evaluation_cache_seconds=(
+                settings.openrouter_evaluation_cache_hours
+                * 60
+                * 60
+            ),
         )
     )
 
@@ -113,6 +121,10 @@ async def async_main() -> None:
         planner=planner,
         executor=executor,
         approval_bot=bot,
+        source_processing_lease_seconds=(
+            settings
+            .source_processing_lease_seconds
+        ),
     )
 
     source = TelegramSource(

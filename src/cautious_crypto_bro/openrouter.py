@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import time
@@ -14,9 +15,11 @@ from pydantic import ValidationError
 from .domain import (
     IncomingPost,
     IntentExtraction,
+    SourceMessage,
     TradingIntent,
 )
 from .runtime_store import (
+    OpenRouterEvaluationCache,
     ProviderCooldownStore,
 )
 
@@ -187,6 +190,110 @@ def _build_user_content(
     return content
 
 
+def _evaluation_fingerprint(
+    post: IncomingPost,
+    *,
+    model: str,
+    global_guidance: str | None,
+    channel_guidance: str | None,
+) -> str:
+    source = post.source
+
+    fingerprint_payload = {
+        "cache_version": 1,
+        "model": model,
+        "system_prompt": SYSTEM_PROMPT,
+        "schema": (
+            IntentExtraction
+            .model_json_schema()
+        ),
+        "request": {
+            "temperature": 0,
+            "max_tokens": 512,
+            "reasoning": {
+                "effort": "none",
+            },
+        },
+        "source": {
+            "channel_id": (
+                source.channel_id
+            ),
+            "channel_title": (
+                source.channel_title
+            ),
+            "channel_username": (
+                source.channel_username
+            ),
+            "message_id": (
+                source.message_id
+            ),
+            "published_at": (
+                source.published_at
+                .isoformat()
+            ),
+            "text": source.text,
+        },
+        "images": [
+            {
+                "media_type": (
+                    image.media_type
+                ),
+                "sha256": (
+                    hashlib.sha256(
+                        image.data
+                    ).hexdigest()
+                ),
+            }
+            for image in post.images
+        ],
+        "global_guidance": (
+            global_guidance
+            or ""
+        ),
+        "channel_guidance": (
+            channel_guidance
+            or ""
+        ),
+    }
+
+    canonical = json.dumps(
+        fingerprint_payload,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+    return hashlib.sha256(
+        canonical.encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+def _trading_intent_from_extraction(
+    source: SourceMessage,
+    extraction: IntentExtraction,
+) -> TradingIntent | None:
+    if (
+        not extraction.actionable
+        or extraction.intent is None
+    ):
+        return None
+
+    raw = extraction.intent
+
+    return TradingIntent(
+        source=source,
+        symbol=raw.symbol,
+        side=raw.side,
+        entry=raw.entry,
+        stop_loss=raw.stop_loss,
+        take_profit=raw.take_profit,
+        summary=raw.summary,
+        confidence=raw.confidence,
+    )
+
+
 def _completion_content(
     response_data: dict[str, object],
 ) -> str:
@@ -332,10 +439,23 @@ class OpenRouterIntentExtractor:
         provider_cooldown_seconds: int = (
             12 * 60 * 60
         ),
+        evaluation_cache: (
+            OpenRouterEvaluationCache
+            | None
+        ) = None,
+        evaluation_cache_seconds: int = (
+            6 * 60 * 60
+        ),
     ) -> None:
         if provider_cooldown_seconds <= 0:
             raise ValueError(
                 "provider_cooldown_seconds "
+                "must be positive"
+            )
+
+        if evaluation_cache_seconds <= 0:
+            raise ValueError(
+                "evaluation_cache_seconds "
                 "must be positive"
             )
 
@@ -349,6 +469,12 @@ class OpenRouterIntentExtractor:
         )
         self._provider_cooldown_seconds = (
             provider_cooldown_seconds
+        )
+        self._evaluation_cache = (
+            evaluation_cache
+        )
+        self._evaluation_cache_seconds = (
+            evaluation_cache_seconds
         )
 
         self._client = httpx.AsyncClient(
@@ -440,6 +566,70 @@ class OpenRouterIntentExtractor:
             failure,
         )
 
+    async def _read_cached_evaluation(
+        self,
+        fingerprint: str,
+    ) -> IntentExtraction | None:
+        if self._evaluation_cache is None:
+            return None
+
+        try:
+            payload = await (
+                self._evaluation_cache
+                .get_openrouter_evaluation(
+                    fingerprint
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Failed to read OpenRouter "
+                "evaluation cache"
+            )
+            return None
+
+        if payload is None:
+            return None
+
+        try:
+            return (
+                IntentExtraction
+                .model_validate_json(
+                    payload
+                )
+            )
+        except ValidationError:
+            logger.warning(
+                "Ignoring invalid cached "
+                "OpenRouter evaluation"
+            )
+            return None
+
+    async def _cache_evaluation(
+        self,
+        fingerprint: str,
+        extraction: IntentExtraction,
+    ) -> None:
+        if self._evaluation_cache is None:
+            return
+
+        try:
+            await (
+                self._evaluation_cache
+                .cache_openrouter_evaluation(
+                    fingerprint,
+                    (
+                        extraction
+                        .model_dump_json()
+                    ),
+                    self._evaluation_cache_seconds,
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist OpenRouter "
+                "evaluation cache"
+            )
+
     async def extract(
         self,
         post: IncomingPost,
@@ -449,6 +639,55 @@ class OpenRouterIntentExtractor:
         debug_dir: Path | None = None,
     ) -> TradingIntent | None:
         source = post.source
+
+        evaluation_fingerprint = (
+            _evaluation_fingerprint(
+                post,
+                model=self._model,
+                global_guidance=(
+                    global_guidance
+                ),
+                channel_guidance=(
+                    channel_guidance
+                ),
+            )
+        )
+
+        if debug_dir is None:
+            cached_extraction = (
+                await self
+                ._read_cached_evaluation(
+                    evaluation_fingerprint
+                )
+            )
+
+            if cached_extraction is not None:
+                logger.info(
+                    "OpenRouter evaluation cache "
+                    "hit for %s/%s",
+                    source.channel_id,
+                    source.message_id,
+                )
+
+                if (
+                    not cached_extraction.actionable
+                    or cached_extraction.intent
+                    is None
+                ):
+                    logger.info(
+                        "No actionable intent for "
+                        "%s/%s: %s",
+                        source.channel_id,
+                        source.message_id,
+                        cached_extraction.reason,
+                    )
+
+                return (
+                    _trading_intent_from_extraction(
+                        source,
+                        cached_extraction,
+                    )
+                )
 
         payload = {
             "model": self._model,
@@ -868,6 +1107,12 @@ class OpenRouterIntentExtractor:
                 f"{last_error}"
             ) from last_error
 
+        if debug_dir is None:
+            await self._cache_evaluation(
+                evaluation_fingerprint,
+                extraction,
+            )
+
         if (
             not extraction.actionable
             or extraction.intent is None
@@ -878,17 +1123,10 @@ class OpenRouterIntentExtractor:
                 source.message_id,
                 extraction.reason,
             )
-            return None
 
-        raw = extraction.intent
-
-        return TradingIntent(
-            source=source,
-            symbol=raw.symbol,
-            side=raw.side,
-            entry=raw.entry,
-            stop_loss=raw.stop_loss,
-            take_profit=raw.take_profit,
-            summary=raw.summary,
-            confidence=raw.confidence,
+        return (
+            _trading_intent_from_extraction(
+                source,
+                extraction,
+            )
         )

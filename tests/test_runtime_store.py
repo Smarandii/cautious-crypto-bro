@@ -66,3 +66,46 @@ def test_provider_cooldown_uses_redis_ttl() -> None:
     asyncio.run(
         run()
     )
+
+
+def test_openrouter_evaluation_cache_uses_ttl() -> None:
+    async def run() -> None:
+        redis = FakeRedis(
+            decode_responses=True
+        )
+
+        store = RedisRuntimeStore(
+            "redis://unused",
+            key_prefix="test",
+            client=redis,
+        )
+
+        await store.initialize()
+
+        await store.cache_openrouter_evaluation(
+            "abc123",
+            '{"actionable":false}',
+            3600,
+        )
+
+        assert (
+            await store
+            .get_openrouter_evaluation(
+                "abc123"
+            )
+        ) == '{"actionable":false}'
+
+        ttl = await redis.ttl(
+            (
+                "test:openrouter:"
+                "evaluation:abc123"
+            )
+        )
+
+        assert 0 < ttl <= 3600
+
+        await store.close()
+
+    asyncio.run(
+        run()
+    )

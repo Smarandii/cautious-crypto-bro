@@ -46,6 +46,11 @@ class Settings(BaseSettings):
         ge=1,
         le=168,
     )
+    openrouter_evaluation_cache_hours: int = Field(
+        default=6,
+        ge=1,
+        le=168,
+    )
 
     redis_url: str = "redis://redis:6379/0"
     redis_max_connections: int = Field(
@@ -63,6 +68,11 @@ class Settings(BaseSettings):
     bybit_api_secret: str
 
     database_path: Path = Path("data/cautious_crypto_bro.sqlite3")
+    source_processing_lease_seconds: int = Field(
+        default=300,
+        ge=60,
+        le=3600,
+    )
     intent_max_age_seconds: int = Field(default=900, gt=0)
     log_level: str = "INFO"
 
