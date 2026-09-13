@@ -148,26 +148,37 @@ class SignalService:
             )
             return
 
+        account_state = None
+        account_state_error = None
         exposure = None
         exposure_error = None
 
         try:
+            account_state = (
+                await self._executor
+                .account_state()
+            )
+
             exposure = (
-                await self._executor.exposure(
+                account_state.exposure_for(
                     intent.symbol
                 )
             )
+
         except Exception as exc:
-            exposure_error = (
+            account_state_error = (
                 f"{type(exc).__name__}: "
                 f"{exc}"
             )
+            exposure_error = (
+                account_state_error
+            )
 
-            # Exposure awareness is informational.
-            # A temporary Bybit read failure must not
-            # discard an otherwise valid signal.
+            # Account state is informational.
+            # Failure must not discard a valid signal.
             logger.exception(
-                "Exposure check failed for %s/%s",
+                "Account-state check failed "
+                "for %s/%s",
                 source.channel_id,
                 source.message_id,
             )
@@ -215,6 +226,12 @@ class SignalService:
                 exposure=exposure,
                 exposure_error=(
                     exposure_error
+                ),
+                account_state=(
+                    account_state
+                ),
+                account_state_error=(
+                    account_state_error
                 ),
             )
         except Exception:

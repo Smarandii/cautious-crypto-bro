@@ -7,6 +7,11 @@ import hmac
 import json
 import logging
 import time
+from datetime import (
+    datetime,
+    timedelta,
+    timezone,
+)
 from decimal import Decimal
 from urllib.parse import urlencode
 
@@ -79,6 +84,166 @@ class SymbolExposure:
     ] = ()
 
 
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class AccountPosition:
+    symbol: str
+    side: Side
+    size: Decimal
+    avg_price: Decimal
+    mark_price: Decimal
+    unrealised_pnl: Decimal
+    status: str
+    take_profit: Decimal | None
+    stop_loss: Decimal | None
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class AccountOrder:
+    symbol: str
+    side: Side
+    order_type: str
+    status: str
+    quantity: Decimal
+    remaining_quantity: Decimal
+    price: Decimal | None
+    avg_price: Decimal | None
+    order_id: str
+    order_link_id: str
+    reduce_only: bool
+    updated_at: datetime
+    stop_order_type: str = ""
+    create_type: str = ""
+    trigger_price: Decimal | None = None
+    close_on_trigger: bool = False
+
+    @property
+    def kind(self) -> str:
+        stop_type = (
+            self.stop_order_type
+        )
+
+        if stop_type in {
+            "TakeProfit",
+            "PartialTakeProfit",
+        }:
+            return "TP"
+
+        if stop_type in {
+            "StopLoss",
+            "PartialStopLoss",
+        }:
+            return "SL"
+
+        if stop_type == "TrailingStop":
+            return "TRAILING"
+
+        if (
+            self.reduce_only
+            or self.close_on_trigger
+        ):
+            return "REDUCE"
+
+        if stop_type == "Stop":
+            return "CONDITIONAL"
+
+        return "ENTRY"
+
+    @property
+    def is_protective(self) -> bool:
+        return self.kind in {
+            "TP",
+            "SL",
+            "TRAILING",
+        }
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class AccountStateSummary:
+    as_of: datetime
+    realized_pnl_today: Decimal
+    positions: tuple[
+        AccountPosition,
+        ...,
+    ]
+    open_orders: tuple[
+        AccountOrder,
+        ...,
+    ]
+    terminal_orders_24h: tuple[
+        AccountOrder,
+        ...,
+    ]
+
+    @property
+    def unrealised_pnl(
+        self,
+    ) -> Decimal:
+        return sum(
+            (
+                position.unrealised_pnl
+                for position
+                in self.positions
+            ),
+            Decimal("0"),
+        )
+
+    def exposure_for(
+        self,
+        symbol: str,
+    ) -> SymbolExposure:
+        symbol = symbol.upper()
+
+        positions = tuple(
+            PositionExposure(
+                side=position.side,
+                size=position.size,
+                avg_price=(
+                    position.avg_price
+                ),
+            )
+            for position in self.positions
+            if position.symbol == symbol
+        )
+
+        pending = tuple(
+            OpenOrderExposure(
+                side=order.side,
+                remaining_quantity=(
+                    order.remaining_quantity
+                ),
+                order_id=order.order_id,
+                order_link_id=(
+                    order.order_link_id
+                ),
+                price=order.price,
+            )
+            for order in self.open_orders
+            if (
+                order.symbol == symbol
+                and order.remaining_quantity > 0
+                and not order.reduce_only
+                and order.order_link_id.startswith(
+                    "ccb-"
+                )
+            )
+        )
+
+        return SymbolExposure(
+            symbol=symbol,
+            positions=positions,
+            pending_entry_orders=pending,
+        )
+
+
 class BybitDemoExecutor:
     def __init__(
         self,
@@ -110,6 +275,13 @@ class BybitDemoExecutor:
             symbol,
         )
 
+    async def account_state(
+        self,
+    ) -> AccountStateSummary:
+        return await asyncio.to_thread(
+            self._account_state_sync
+        )
+
     async def exposure(
         self,
         symbol: str,
@@ -139,6 +311,375 @@ class BybitDemoExecutor:
 
     def close(self) -> None:
         self._client.close()
+
+    def _account_state_sync(
+        self,
+    ) -> AccountStateSummary:
+        self._sync_clock()
+
+        now = datetime.now(
+            timezone.utc
+        )
+        day_start = now.replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+        position_items = (
+            self._paginate_private_list(
+                "/v5/position/list",
+                {
+                    "category": "linear",
+                    "settleCoin": "USDT",
+                    "limit": 200,
+                },
+            )
+        )
+
+        positions: list[
+            AccountPosition
+        ] = []
+
+        for item in position_items:
+            size = self._decimal(
+                item.get("size")
+            )
+
+            if size <= 0:
+                continue
+
+            symbol = str(
+                item.get("symbol")
+                or ""
+            ).upper()
+
+            if not symbol:
+                continue
+
+            avg_price = self._decimal(
+                item.get("avgPrice")
+            )
+
+            mark_price = self._decimal(
+                item.get("markPrice")
+            )
+
+            if (
+                avg_price <= 0
+                or mark_price <= 0
+            ):
+                raise TradeExecutionError(
+                    "Active Bybit position "
+                    "contains invalid pricing"
+                )
+
+            positions.append(
+                AccountPosition(
+                    symbol=symbol,
+                    side=self._side_from_bybit(
+                        item.get("side")
+                    ),
+                    size=size,
+                    avg_price=avg_price,
+                    mark_price=mark_price,
+                    unrealised_pnl=(
+                        self._decimal(
+                            item.get(
+                                "unrealisedPnl"
+                            )
+                        )
+                    ),
+                    status=str(
+                        item.get(
+                            "positionStatus"
+                        )
+                        or "Unknown"
+                    ),
+                    take_profit=(
+                        self._optional_decimal(
+                            item.get(
+                                "takeProfit"
+                            )
+                        )
+                    ),
+                    stop_loss=(
+                        self._optional_decimal(
+                            item.get(
+                                "stopLoss"
+                            )
+                        )
+                    ),
+                )
+            )
+
+        open_items = (
+            self._paginate_private_list(
+                "/v5/order/realtime",
+                {
+                    "category": "linear",
+                    "settleCoin": "USDT",
+                    "openOnly": 0,
+                    "limit": 50,
+                },
+            )
+        )
+
+        open_orders = tuple(
+            self._account_order_from_item(
+                item
+            )
+            for item in open_items
+            if self._decimal(
+                item.get("leavesQty")
+            ) > 0
+        )
+
+        history_start = (
+            now
+            - timedelta(hours=24)
+        )
+
+        history_items = (
+            self._paginate_private_list(
+                "/v5/order/history",
+                {
+                    "category": "linear",
+                    "settleCoin": "USDT",
+                    "startTime": int(
+                        history_start.timestamp()
+                        * 1000
+                    ),
+                    "endTime": int(
+                        now.timestamp()
+                        * 1000
+                    ),
+                    "limit": 50,
+                },
+            )
+        )
+
+        terminal_statuses = {
+            "Filled",
+            "Cancelled",
+            "Rejected",
+            "Deactivated",
+            "PartiallyFilledCanceled",
+            "PartiallyFilledCancelled",
+        }
+
+        terminal_orders = tuple(
+            sorted(
+                (
+                    self._account_order_from_item(
+                        item
+                    )
+                    for item in history_items
+                    if str(
+                        item.get(
+                            "orderStatus"
+                        )
+                        or ""
+                    )
+                    in terminal_statuses
+                ),
+                key=lambda order: (
+                    order.updated_at
+                ),
+                reverse=True,
+            )
+        )
+
+        pnl_items = (
+            self._paginate_private_list(
+                "/v5/position/closed-pnl",
+                {
+                    "category": "linear",
+                    "startTime": int(
+                        day_start.timestamp()
+                        * 1000
+                    ),
+                    "endTime": int(
+                        now.timestamp()
+                        * 1000
+                    ),
+                    "limit": 100,
+                },
+            )
+        )
+
+        realized_pnl = sum(
+            (
+                self._decimal(
+                    item.get("closedPnl")
+                )
+                for item in pnl_items
+            ),
+            Decimal("0"),
+        )
+
+        return AccountStateSummary(
+            as_of=now,
+            realized_pnl_today=(
+                realized_pnl
+            ),
+            positions=tuple(
+                sorted(
+                    positions,
+                    key=lambda position: (
+                        position.symbol
+                    ),
+                )
+            ),
+            open_orders=tuple(
+                sorted(
+                    open_orders,
+                    key=lambda order: (
+                        order.updated_at
+                    ),
+                    reverse=True,
+                )
+            ),
+            terminal_orders_24h=(
+                terminal_orders
+            ),
+        )
+
+    def _paginate_private_list(
+        self,
+        path: str,
+        params: dict[
+            str,
+            object,
+        ],
+    ) -> list[dict]:
+        params = dict(params)
+        items: list[dict] = []
+
+        while True:
+            response = self._private_get(
+                path,
+                params,
+            )
+
+            result = (
+                response
+                .get("result", {})
+            )
+
+            page = result.get(
+                "list",
+                [],
+            )
+
+            items.extend(
+                item
+                for item in page
+                if isinstance(
+                    item,
+                    dict,
+                )
+            )
+
+            cursor = str(
+                result.get(
+                    "nextPageCursor"
+                )
+                or ""
+            )
+
+            if not cursor:
+                break
+
+            params["cursor"] = cursor
+
+        return items
+
+    def _account_order_from_item(
+        self,
+        item: dict,
+    ) -> AccountOrder:
+        updated_ms = int(
+            item.get("updatedTime")
+            or item.get("createdTime")
+            or 0
+        )
+
+        return AccountOrder(
+            symbol=str(
+                item.get("symbol")
+                or ""
+            ).upper(),
+            side=self._side_from_bybit(
+                item.get("side")
+            ),
+            order_type=str(
+                item.get("orderType")
+                or "Unknown"
+            ),
+            status=str(
+                item.get("orderStatus")
+                or "Unknown"
+            ),
+            quantity=self._decimal(
+                item.get("qty")
+            ),
+            remaining_quantity=(
+                self._decimal(
+                    item.get("leavesQty")
+                )
+            ),
+            price=self._optional_decimal(
+                item.get("price")
+            ),
+            avg_price=(
+                self._optional_decimal(
+                    item.get("avgPrice")
+                )
+            ),
+            order_id=str(
+                item.get("orderId")
+                or ""
+            ),
+            order_link_id=str(
+                item.get("orderLinkId")
+                or ""
+            ),
+            reduce_only=(
+                item.get("reduceOnly")
+                is True
+                or str(
+                    item.get("reduceOnly")
+                ).casefold()
+                == "true"
+            ),
+            updated_at=datetime.fromtimestamp(
+                updated_ms / 1000,
+                tz=timezone.utc,
+            ),
+            stop_order_type=str(
+                item.get("stopOrderType")
+                or ""
+            ),
+            create_type=str(
+                item.get("createType")
+                or ""
+            ),
+            trigger_price=(
+                self._optional_decimal(
+                    item.get("triggerPrice")
+                )
+            ),
+            close_on_trigger=(
+                item.get("closeOnTrigger")
+                is True
+                or str(
+                    item.get("closeOnTrigger")
+                ).casefold()
+                == "true"
+            ),
+        )
 
     def _exposure_sync(
         self,
@@ -1301,6 +1842,36 @@ class BybitDemoExecutor:
             )
 
         return data
+
+    @staticmethod
+    def _decimal(
+        value: object,
+    ) -> Decimal:
+        raw = str(
+            value
+            if value is not None
+            else "0"
+        ).strip()
+
+        if not raw:
+            return Decimal("0")
+
+        return Decimal(raw)
+
+    @classmethod
+    def _optional_decimal(
+        cls,
+        value: object,
+    ) -> Decimal | None:
+        parsed = cls._decimal(
+            value
+        )
+
+        return (
+            parsed
+            if parsed != 0
+            else None
+        )
 
     @staticmethod
     def _side_from_bybit(
