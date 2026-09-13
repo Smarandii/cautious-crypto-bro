@@ -150,7 +150,15 @@ class RedisRuntimeStore:
         self,
         fingerprint: str,
     ) -> str | None:
-        return await self._redis.get(self._evaluation_key(fingerprint))
+        value = await self._redis.get(self._evaluation_key(fingerprint))
+
+        if value is None:
+            return None
+
+        if isinstance(value, bytes):
+            return value.decode("utf-8")
+
+        return value
 
     async def cache_openrouter_evaluation(
         self,

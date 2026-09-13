@@ -11,6 +11,7 @@ from datetime import (
     datetime,
     timedelta,
 )
+from typing import Any
 
 from telethon import (
     TelegramClient,
@@ -121,10 +122,28 @@ async def telegram_messages_to_post(
 
     canonical = ordered[0]
 
-    published_at = min(_as_utc(message.date) for message in ordered)
+    dates = tuple(message.date for message in ordered if message.date is not None)
+
+    if not dates:
+        logger.warning(
+            "Ignoring Telegram message group starting at %s: no publication date",
+            ordered[0].id,
+        )
+        return None
+
+    published_at = min(_as_utc(value) for value in dates)
+
+    channel_id = canonical.chat_id
+
+    if channel_id is None:
+        logger.warning(
+            "Ignoring Telegram message group starting at %s: no channel id",
+            ordered[0].id,
+        )
+        return None
 
     source = SourceMessage(
-        channel_id=canonical.chat_id,
+        channel_id=channel_id,
         channel_title=(
             getattr(
                 resolved_chat,
@@ -258,9 +277,9 @@ class TelegramSource:
         self._startup_lookback_hours = startup_lookback_hours
 
     async def start(self) -> None:
-        await self._client.start()
+        await self._client.start()  # pyright: ignore[reportGeneralTypeIssues]
 
-        entities = []
+        entities: list[Any] = []
 
         for channel in self._channels:
             entity = await self._client.get_entity(channel)
@@ -308,7 +327,7 @@ class TelegramSource:
 
     async def _run_startup_lookback(
         self,
-        entities: list[object],
+        entities: list[Any],
     ) -> None:
         cutoff = datetime.now(UTC) - timedelta(hours=(self._startup_lookback_hours))
 
@@ -404,9 +423,9 @@ class TelegramSource:
     async def run_until_disconnected(
         self,
     ) -> None:
-        await self._client.run_until_disconnected()
+        await self._client.run_until_disconnected()  # pyright: ignore[reportGeneralTypeIssues]
 
     async def disconnect(
         self,
     ) -> None:
-        await self._client.disconnect()
+        await self._client.disconnect()  # pyright: ignore[reportGeneralTypeIssues]

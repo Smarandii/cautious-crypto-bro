@@ -4,12 +4,18 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   quality:
+    name: Python / quality
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -23,8 +29,16 @@ jobs:
       - name: Install Python
         run: uv python install 3.12
 
+      - name: Verify lockfile
+        run: uv lock --check
+
       - name: Install dependencies
         run: uv sync --frozen --group dev
+
+      - name: Repository hygiene
+        env:
+          SKIP: ruff-format,ruff-check,pyright,droast
+        run: uv run pre-commit run --all-files
 
       - name: Check formatting
         run: uv run ruff format --check .
@@ -32,5 +46,47 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: Type check
+        run: uv run pyright
+
+      - name: Build package
+        run: uv build
+
       - name: Unit tests
         run: uv run pytest -q
+
+  droast:
+    name: Dockerfile / droast
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lint Dockerfiles
+        uses: immanuwell/dockerfile-roast@1.7.0
+        with:
+          files: .
+          preset: production
+          min-severity: warning
+          fail-on: warning
+          no-roast: true
+          image-tag: 1.7.0
+
+  docker:
+    name: Docker / build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+
+      - name: Build runtime image
+        run: docker build --target runtime --tag cautious-crypto-bro:ci .

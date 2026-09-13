@@ -22,6 +22,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    Message,
 )
 from aiogram.utils.backoff import (
     BackoffConfig,
@@ -328,8 +329,10 @@ class ApprovalBot:
         plan: ExecutionPlan,
         suffix: str,
     ) -> None:
-        if callback.message is not None:
-            await callback.message.edit_text(
+        message = callback.message
+
+        if isinstance(message, Message):
+            await message.edit_text(
                 self._render(
                     intent,
                     plan,

@@ -7,6 +7,7 @@ from contextlib import (
 )
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from telethon import TelegramClient
@@ -100,7 +101,7 @@ def parse_telegram_post_url(
 
 async def _replay_message_group(
     client: TelegramClient,
-    entity: object,
+    entity: Any,
     message: Message,
 ) -> tuple[
     Message,
@@ -133,9 +134,12 @@ async def _replay_message_group(
         )
     )
 
-    candidates = await client.get_messages(
-        entity,
-        ids=ids,
+    candidates = cast(
+        Any,
+        await client.get_messages(
+            entity,
+            ids=ids,
+        ),
     )
 
     grouped: dict[
@@ -197,9 +201,12 @@ async def fetch_telegram_post(
 
                 entity = await client.get_entity(reference.entity)
 
-            message = await client.get_messages(
-                entity,
-                ids=(reference.message_id),
+            message = cast(
+                Message | None,
+                await client.get_messages(
+                    entity,
+                    ids=(reference.message_id),
+                ),
             )
 
             if message is None:
@@ -228,7 +235,7 @@ async def fetch_telegram_post(
             return post
 
         finally:
-            await client.disconnect()
+            await client.disconnect()  # pyright: ignore[reportGeneralTypeIssues]
 
 
 @contextmanager
