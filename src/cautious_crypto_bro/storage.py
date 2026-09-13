@@ -15,6 +15,218 @@ from .domain import (
     TradingIntent,
 )
 
+LATEST_SCHEMA_VERSION = 1
+
+
+async def _source_message_columns(
+    db: aiosqlite.Connection,
+) -> set[str]:
+    cursor = await db.execute("PRAGMA table_info(source_messages)")
+    return {str(row[1]) for row in await cursor.fetchall()}
+
+
+async def _migrate_to_v1(
+    db: aiosqlite.Connection,
+) -> None:
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS source_messages (
+            channel_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL
+                DEFAULT 'COMPLETED',
+            attempt_count INTEGER NOT NULL
+                DEFAULT 1,
+            last_error TEXT,
+            claim_token TEXT,
+            updated_at TEXT NOT NULL
+                DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (channel_id, message_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS intents (
+            intent_id TEXT PRIMARY KEY,
+            channel_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            decision_user_id INTEGER,
+            bybit_order_id TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS signal_guidance (
+            scope TEXT NOT NULL
+                CHECK(scope IN ('global', 'channel')),
+            channel_id INTEGER,
+            content TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+                DEFAULT CURRENT_TIMESTAMP,
+            CHECK(
+                (
+                    scope = 'global'
+                    AND channel_id IS NULL
+                )
+                OR
+                (
+                    scope = 'channel'
+                    AND channel_id IS NOT NULL
+                )
+            )
+        )
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS
+            ux_signal_guidance_global
+        ON signal_guidance(scope)
+        WHERE scope = 'global'
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS
+            ux_signal_guidance_channel
+        ON signal_guidance(channel_id)
+        WHERE scope = 'channel'
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS execution_policy (
+            id INTEGER PRIMARY KEY
+                CHECK(id = 1),
+            trading_capital_usdt TEXT NOT NULL,
+            risk_per_trade_pct TEXT NOT NULL,
+            range_order_count INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+                DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS execution_exit_policy (
+            id INTEGER PRIMARY KEY
+                CHECK(id = 1),
+            minimum_reward_bps TEXT NOT NULL,
+            basic_r_multiple TEXT NOT NULL,
+            basic_close_pct TEXT NOT NULL,
+            medium_r_multiple TEXT NOT NULL,
+            medium_close_pct TEXT NOT NULL,
+            high_r_multiple TEXT NOT NULL,
+            high_close_pct TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+                DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS execution_plans (
+            intent_id TEXT PRIMARY KEY,
+            payload_json TEXT NOT NULL,
+            bybit_order_ids_json TEXT,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
+        INSERT OR IGNORE INTO execution_policy(
+            id,
+            trading_capital_usdt,
+            risk_per_trade_pct,
+            range_order_count
+        )
+        VALUES (
+            1,
+            '6800',
+            '1',
+            3
+        )
+        """,
+        """
+        INSERT OR IGNORE INTO execution_exit_policy(
+            id,
+            minimum_reward_bps,
+            basic_r_multiple,
+            basic_close_pct,
+            medium_r_multiple,
+            medium_close_pct,
+            high_r_multiple,
+            high_close_pct
+        )
+        VALUES (
+            1,
+            '20',
+            '0.5',
+            '25',
+            '1',
+            '35',
+            '2',
+            '40'
+        )
+        """,
+    )
+
+    for statement in statements:
+        await db.execute(statement)
+
+    source_columns = await _source_message_columns(db)
+
+    missing_columns = (
+        (
+            "status",
+            """
+            ALTER TABLE source_messages
+            ADD COLUMN status TEXT NOT NULL
+            DEFAULT 'COMPLETED'
+            """,
+        ),
+        (
+            "attempt_count",
+            """
+            ALTER TABLE source_messages
+            ADD COLUMN attempt_count INTEGER
+            NOT NULL DEFAULT 1
+            """,
+        ),
+        (
+            "last_error",
+            """
+            ALTER TABLE source_messages
+            ADD COLUMN last_error TEXT
+            """,
+        ),
+        (
+            "claim_token",
+            """
+            ALTER TABLE source_messages
+            ADD COLUMN claim_token TEXT
+            """,
+        ),
+        (
+            "updated_at",
+            """
+            ALTER TABLE source_messages
+            ADD COLUMN updated_at TEXT
+            NOT NULL DEFAULT ''
+            """,
+        ),
+    )
+
+    for column, statement in missing_columns:
+        if column not in source_columns:
+            await db.execute(statement)
+
+    await db.execute(
+        """
+        UPDATE source_messages
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE updated_at = ''
+        """
+    )
+
+
+MIGRATIONS = {
+    1: _migrate_to_v1,
+}
+
 
 class IntentStore:
     def __init__(
@@ -30,191 +242,33 @@ class IntentStore:
         )
 
         async with aiosqlite.connect(self._database_path) as db:
-            await db.executescript(
-                """
-                PRAGMA journal_mode=WAL;
+            await db.execute("PRAGMA journal_mode=WAL")
 
-                CREATE TABLE IF NOT EXISTS source_messages (
-                    channel_id INTEGER NOT NULL,
-                    message_id INTEGER NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    status TEXT NOT NULL
-                        DEFAULT 'COMPLETED',
-                    attempt_count INTEGER NOT NULL
-                        DEFAULT 1,
-                    last_error TEXT,
-                    claim_token TEXT,
-                    updated_at TEXT NOT NULL
-                        DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (channel_id, message_id)
-                );
+            cursor = await db.execute("PRAGMA user_version")
+            row = await cursor.fetchone()
+            current_version = int(row[0]) if row is not None else 0
 
-                CREATE TABLE IF NOT EXISTS intents (
-                    intent_id TEXT PRIMARY KEY,
-                    channel_id INTEGER NOT NULL,
-                    message_id INTEGER NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    decision_user_id INTEGER,
-                    bybit_order_id TEXT,
-                    error TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS signal_guidance (
-                    scope TEXT NOT NULL
-                        CHECK(scope IN ('global', 'channel')),
-                    channel_id INTEGER,
-                    content TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                        DEFAULT CURRENT_TIMESTAMP,
-                    CHECK(
-                        (
-                            scope = 'global'
-                            AND channel_id IS NULL
-                        )
-                        OR
-                        (
-                            scope = 'channel'
-                            AND channel_id IS NOT NULL
-                        )
-                    )
-                );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS
-                    ux_signal_guidance_global
-                ON signal_guidance(scope)
-                WHERE scope = 'global';
-
-                CREATE UNIQUE INDEX IF NOT EXISTS
-                    ux_signal_guidance_channel
-                ON signal_guidance(channel_id)
-                WHERE scope = 'channel';
-
-                CREATE TABLE IF NOT EXISTS execution_policy (
-                    id INTEGER PRIMARY KEY
-                        CHECK(id = 1),
-                    trading_capital_usdt TEXT NOT NULL,
-                    risk_per_trade_pct TEXT NOT NULL,
-                    range_order_count INTEGER NOT NULL,
-                    updated_at TEXT NOT NULL
-                        DEFAULT CURRENT_TIMESTAMP
-                );
-
-                CREATE TABLE IF NOT EXISTS execution_exit_policy (
-                    id INTEGER PRIMARY KEY
-                        CHECK(id = 1),
-                    minimum_reward_bps TEXT NOT NULL,
-                    basic_r_multiple TEXT NOT NULL,
-                    basic_close_pct TEXT NOT NULL,
-                    medium_r_multiple TEXT NOT NULL,
-                    medium_close_pct TEXT NOT NULL,
-                    high_r_multiple TEXT NOT NULL,
-                    high_close_pct TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                        DEFAULT CURRENT_TIMESTAMP
-                );
-
-                CREATE TABLE IF NOT EXISTS execution_plans (
-                    intent_id TEXT PRIMARY KEY,
-                    payload_json TEXT NOT NULL,
-                    bybit_order_ids_json TEXT,
-                    created_at TEXT NOT NULL
-                );
-
-                INSERT OR IGNORE INTO execution_policy(
-                    id,
-                    trading_capital_usdt,
-                    risk_per_trade_pct,
-                    range_order_count
-                )
-                VALUES (
-                    1,
-                    '6800',
-                    '1',
-                    3
-                );
-
-                INSERT OR IGNORE INTO execution_exit_policy(
-                    id,
-                    minimum_reward_bps,
-                    basic_r_multiple,
-                    basic_close_pct,
-                    medium_r_multiple,
-                    medium_close_pct,
-                    high_r_multiple,
-                    high_close_pct
-                )
-                VALUES (
-                    1,
-                    '20',
-                    '0.5',
-                    '25',
-                    '1',
-                    '35',
-                    '2',
-                    '40'
-                );
-                """
-            )
-
-            cursor = await db.execute("PRAGMA table_info(source_messages)")
-
-            source_columns = {row[1] for row in await cursor.fetchall()}
-
-            if "status" not in source_columns:
-                await db.execute(
-                    """
-                    ALTER TABLE source_messages
-                    ADD COLUMN status TEXT NOT NULL
-                    DEFAULT 'COMPLETED'
-                    """
+            if current_version > LATEST_SCHEMA_VERSION:
+                raise RuntimeError(
+                    "Database schema is newer than this application: "
+                    f"{current_version} > {LATEST_SCHEMA_VERSION}"
                 )
 
-            if "attempt_count" not in source_columns:
-                await db.execute(
-                    """
-                    ALTER TABLE source_messages
-                    ADD COLUMN attempt_count INTEGER
-                    NOT NULL DEFAULT 1
-                    """
-                )
+            for version in range(
+                current_version + 1,
+                LATEST_SCHEMA_VERSION + 1,
+            ):
+                migration = MIGRATIONS[version]
 
-            if "last_error" not in source_columns:
-                await db.execute(
-                    """
-                    ALTER TABLE source_messages
-                    ADD COLUMN last_error TEXT
-                    """
-                )
+                await db.execute("BEGIN IMMEDIATE")
 
-            if "claim_token" not in source_columns:
-                await db.execute(
-                    """
-                    ALTER TABLE source_messages
-                    ADD COLUMN claim_token TEXT
-                    """
-                )
-
-            if "updated_at" not in source_columns:
-                await db.execute(
-                    """
-                    ALTER TABLE source_messages
-                    ADD COLUMN updated_at TEXT
-                    NOT NULL DEFAULT ''
-                    """
-                )
-
-            await db.execute(
-                """
-                UPDATE source_messages
-                SET updated_at = CURRENT_TIMESTAMP
-                WHERE updated_at = ''
-                """
-            )
-
-            await db.commit()
+                try:
+                    await migration(db)
+                    await db.execute(f"PRAGMA user_version = {version}")
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+                    raise
 
     async def claim_source(
         self,
