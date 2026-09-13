@@ -9,6 +9,7 @@ import aiosqlite
 from .domain import (
     ExecutionPlan,
     ExecutionPolicy,
+    ExitPolicy,
     IntentStatus,
     SourceMessage,
     TradingIntent,
@@ -97,6 +98,20 @@ class IntentStore:
                         DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS execution_exit_policy (
+                    id INTEGER PRIMARY KEY
+                        CHECK(id = 1),
+                    minimum_reward_bps TEXT NOT NULL,
+                    basic_r_multiple TEXT NOT NULL,
+                    basic_close_pct TEXT NOT NULL,
+                    medium_r_multiple TEXT NOT NULL,
+                    medium_close_pct TEXT NOT NULL,
+                    high_r_multiple TEXT NOT NULL,
+                    high_close_pct TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                        DEFAULT CURRENT_TIMESTAMP
+                );
+
                 CREATE TABLE IF NOT EXISTS execution_plans (
                     intent_id TEXT PRIMARY KEY,
                     payload_json TEXT NOT NULL,
@@ -115,6 +130,27 @@ class IntentStore:
                     '6800',
                     '1',
                     3
+                );
+
+                INSERT OR IGNORE INTO execution_exit_policy(
+                    id,
+                    minimum_reward_bps,
+                    basic_r_multiple,
+                    basic_close_pct,
+                    medium_r_multiple,
+                    medium_close_pct,
+                    high_r_multiple,
+                    high_close_pct
+                )
+                VALUES (
+                    1,
+                    '20',
+                    '0.5',
+                    '25',
+                    '1',
+                    '35',
+                    '2',
+                    '40'
                 );
                 """
             )
@@ -452,18 +488,74 @@ class IntentStore:
                 """
             )
 
-            row = await cursor.fetchone()
+            policy_row = (
+                await cursor.fetchone()
+            )
 
-        if row is None:
+            cursor = await db.execute(
+                """
+                SELECT
+                    minimum_reward_bps,
+                    basic_r_multiple,
+                    basic_close_pct,
+                    medium_r_multiple,
+                    medium_close_pct,
+                    high_r_multiple,
+                    high_close_pct
+                FROM execution_exit_policy
+                WHERE id = 1
+                """
+            )
+
+            exit_row = (
+                await cursor.fetchone()
+            )
+
+        if policy_row is None:
             raise RuntimeError(
                 "Execution policy "
                 "is not initialized"
             )
 
+        if exit_row is None:
+            raise RuntimeError(
+                "Execution exit policy "
+                "is not initialized"
+            )
+
         return ExecutionPolicy(
-            trading_capital_usdt=row[0],
-            risk_per_trade_pct=row[1],
-            range_order_count=row[2],
+            trading_capital_usdt=(
+                policy_row[0]
+            ),
+            risk_per_trade_pct=(
+                policy_row[1]
+            ),
+            range_order_count=(
+                policy_row[2]
+            ),
+            exit_policy=ExitPolicy(
+                minimum_reward_bps=(
+                    exit_row[0]
+                ),
+                basic_r_multiple=(
+                    exit_row[1]
+                ),
+                basic_close_pct=(
+                    exit_row[2]
+                ),
+                medium_r_multiple=(
+                    exit_row[3]
+                ),
+                medium_close_pct=(
+                    exit_row[4]
+                ),
+                high_r_multiple=(
+                    exit_row[5]
+                ),
+                high_close_pct=(
+                    exit_row[6]
+                ),
+            ),
         )
 
     async def set_execution_policy(
@@ -507,6 +599,77 @@ class IntentStore:
                         policy.risk_per_trade_pct
                     ),
                     policy.range_order_count,
+                ),
+            )
+
+            exit_policy = (
+                policy.exit_policy
+            )
+
+            await db.execute(
+                """
+                INSERT INTO execution_exit_policy(
+                    id,
+                    minimum_reward_bps,
+                    basic_r_multiple,
+                    basic_close_pct,
+                    medium_r_multiple,
+                    medium_close_pct,
+                    high_r_multiple,
+                    high_close_pct,
+                    updated_at
+                )
+                VALUES (
+                    1,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    CURRENT_TIMESTAMP
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    minimum_reward_bps =
+                        excluded.minimum_reward_bps,
+                    basic_r_multiple =
+                        excluded.basic_r_multiple,
+                    basic_close_pct =
+                        excluded.basic_close_pct,
+                    medium_r_multiple =
+                        excluded.medium_r_multiple,
+                    medium_close_pct =
+                        excluded.medium_close_pct,
+                    high_r_multiple =
+                        excluded.high_r_multiple,
+                    high_close_pct =
+                        excluded.high_close_pct,
+                    updated_at =
+                        CURRENT_TIMESTAMP
+                """,
+                (
+                    str(
+                        exit_policy.minimum_reward_bps
+                    ),
+                    str(
+                        exit_policy.basic_r_multiple
+                    ),
+                    str(
+                        exit_policy.basic_close_pct
+                    ),
+                    str(
+                        exit_policy.medium_r_multiple
+                    ),
+                    str(
+                        exit_policy.medium_close_pct
+                    ),
+                    str(
+                        exit_policy.high_r_multiple
+                    ),
+                    str(
+                        exit_policy.high_close_pct
+                    ),
                 ),
             )
 

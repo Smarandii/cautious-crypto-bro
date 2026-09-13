@@ -327,3 +327,41 @@ def test_market_execution_rejects_risk_above_budget() -> None:
 
     finally:
         executor.close()
+
+
+def test_order_uses_child_take_profit_when_present() -> None:
+    plan = range_plan()
+
+    first = plan.orders[0].model_copy(
+        update={
+            "take_profit": Decimal("120")
+        }
+    )
+
+    plan = plan.model_copy(
+        update={
+            "orders": (
+                first,
+                *plan.orders[1:],
+            )
+        }
+    )
+
+    executor = BybitDemoExecutor(
+        api_key="key",
+        api_secret="secret",
+    )
+
+    try:
+        params = executor._order_params(
+            plan,
+            0,
+        )
+
+        assert (
+            params["takeProfit"]
+            == "120"
+        )
+
+    finally:
+        executor.close()

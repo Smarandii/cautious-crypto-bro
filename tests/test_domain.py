@@ -144,3 +144,20 @@ def test_private_channel_url() -> None:
             "2132062264/11482"
         )
     )
+
+
+def test_take_profit_may_be_omitted() -> None:
+    TradingIntent(
+        source=source(),
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        entry=Entry(
+            type=EntryType.RANGE,
+            range_low=99_000,
+            range_high=100_000,
+        ),
+        stop_loss=98_000,
+        take_profit=None,
+        summary="Entry and stop only.",
+        confidence=0.9,
+    )
