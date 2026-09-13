@@ -156,7 +156,13 @@ async def main() -> int:
     )
 
     runtime_store = RedisRuntimeStore(
-        settings.redis_url
+        settings.redis_url,
+        max_connections=(
+            settings.redis_max_connections
+        ),
+        pool_timeout_seconds=(
+            settings.redis_pool_timeout_seconds
+        ),
     )
     await runtime_store.initialize()
 

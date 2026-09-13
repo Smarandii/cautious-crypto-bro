@@ -48,6 +48,16 @@ class Settings(BaseSettings):
     )
 
     redis_url: str = "redis://redis:6379/0"
+    redis_max_connections: int = Field(
+        default=64,
+        ge=1,
+        le=512,
+    )
+    redis_pool_timeout_seconds: float = Field(
+        default=5,
+        gt=0,
+        le=60,
+    )
 
     bybit_api_key: str
     bybit_api_secret: str

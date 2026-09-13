@@ -5,7 +5,10 @@ from typing import (
     Protocol,
 )
 
-from redis.asyncio import Redis
+from redis.asyncio import (
+    BlockingConnectionPool,
+    Redis,
+)
 
 
 class ProviderCooldownStore(
@@ -33,6 +36,8 @@ class RedisRuntimeStore:
         key_prefix: str = (
             "cautious-crypto-bro"
         ),
+        max_connections: int = 64,
+        pool_timeout_seconds: float = 5,
         client: Redis | None = None,
     ) -> None:
         key_prefix = (
@@ -49,14 +54,42 @@ class RedisRuntimeStore:
             key_prefix.rstrip(":")
         )
 
-        self._redis = (
-            client
-            if client is not None
-            else Redis.from_url(
-                redis_url,
-                decode_responses=True,
+        if max_connections <= 0:
+            raise ValueError(
+                "Redis max_connections "
+                "must be positive"
             )
-        )
+
+        if pool_timeout_seconds <= 0:
+            raise ValueError(
+                "Redis pool timeout "
+                "must be positive"
+            )
+
+        self._pool = None
+
+        if client is not None:
+            self._redis = client
+        else:
+            self._pool = (
+                BlockingConnectionPool
+                .from_url(
+                    redis_url,
+                    decode_responses=True,
+                    max_connections=(
+                        max_connections
+                    ),
+                    timeout=(
+                        pool_timeout_seconds
+                    ),
+                )
+            )
+
+            self._redis = Redis(
+                connection_pool=(
+                    self._pool
+                )
+            )
 
     async def initialize(
         self,
