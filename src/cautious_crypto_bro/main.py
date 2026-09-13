@@ -107,6 +107,10 @@ async def async_main() -> None:
         on_message=(
             service.on_message
         ),
+        startup_lookback_hours=(
+            settings
+            .telegram_startup_lookback_hours
+        ),
     )
 
     await source.start()

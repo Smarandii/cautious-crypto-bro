@@ -142,3 +142,26 @@ docker compose build app
 The app_state Docker volume contains the Telegram login session and SQLite
 runtime state. Do not use docker compose down -v unless you intentionally
 want to delete that state.
+
+## Telegram startup lookback
+
+By default the app scans the previous 5 hours of every configured Telegram
+source when it starts:
+
+```text
+TELEGRAM_STARTUP_LOOKBACK_HOURS=5
+
+Set it to 0 to disable historical scanning.
+
+Live Telegram updates are registered before the historical scan begins, so
+messages arriving during startup are still captured.
+
+Historical messages go through the normal SignalService pipeline. The
+persistent (channel_id, message_id) source dedup means a Telegram message
+already processed before restart is not extracted, planned or approved again.
+
+Lookback messages are processed oldest-first.
+
+The lookback does not automatically execute trades. Any actionable historical
+signal still creates the normal human approval card and requires Execute to be
+pressed.
