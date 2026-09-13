@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     telegram_api_hash: str
     telegram_session_name: str = "cautious_crypto_bro"
     telegram_source_channels: list[str | int] = Field(min_length=1)
+    telegram_startup_lookback_hours: int = Field(
+        default=5,
+        ge=0,
+        le=168,
+    )
 
     telegram_bot_token: str
     telegram_approver_user_id: int
