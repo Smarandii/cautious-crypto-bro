@@ -36,6 +36,27 @@ class IntentStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS signal_guidance (
+                    scope TEXT NOT NULL
+                        CHECK(scope IN ('global', 'channel')),
+                    channel_id INTEGER,
+                    content TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CHECK(
+                        (scope = 'global' AND channel_id IS NULL)
+                        OR
+                        (scope = 'channel' AND channel_id IS NOT NULL)
+                    )
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_signal_guidance_global
+                ON signal_guidance(scope)
+                WHERE scope = 'global';
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_signal_guidance_channel
+                ON signal_guidance(channel_id)
+                WHERE scope = 'channel';
                 """
             )
             await db.commit()
@@ -104,6 +125,77 @@ class IntentStore:
             )
             await db.commit()
             return cursor.rowcount == 1
+
+    async def get_guidance(
+        self,
+        channel_id: int,
+    ) -> tuple[str | None, str | None]:
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT scope, content
+                FROM signal_guidance
+                WHERE scope = 'global'
+                   OR (scope = 'channel' AND channel_id = ?)
+                """,
+                (channel_id,),
+            )
+            rows = await cursor.fetchall()
+
+        global_guidance = None
+        channel_guidance = None
+
+        for scope, content in rows:
+            if scope == "global":
+                global_guidance = content
+            else:
+                channel_guidance = content
+
+        return global_guidance, channel_guidance
+
+    async def set_guidance(
+        self,
+        content: str,
+        *,
+        channel_id: int | None = None,
+    ) -> None:
+        content = content.strip()
+
+        if not content:
+            raise ValueError("Guidance must not be empty")
+
+        scope = "global" if channel_id is None else "channel"
+
+        async with aiosqlite.connect(self._database_path) as db:
+            if scope == "global":
+                await db.execute(
+                    "DELETE FROM signal_guidance "
+                    "WHERE scope = 'global'"
+                )
+            else:
+                await db.execute(
+                    """
+                    DELETE FROM signal_guidance
+                    WHERE scope = 'channel'
+                      AND channel_id = ?
+                    """,
+                    (channel_id,),
+                )
+
+            await db.execute(
+                """
+                INSERT INTO signal_guidance(
+                    scope,
+                    channel_id,
+                    content,
+                    updated_at
+                )
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (scope, channel_id, content),
+            )
+
+            await db.commit()
 
     async def mark_executed(self, intent_id: UUID, order_id: str) -> None:
         await self._set_terminal(intent_id, IntentStatus.EXECUTED, bybit_order_id=order_id)
