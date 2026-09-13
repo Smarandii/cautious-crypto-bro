@@ -400,6 +400,11 @@ class TelegramSource:
                 entities
             )
 
+        logger.info(
+            "Telegram startup complete; "
+            "listening for live updates"
+        )
+
     async def _run_startup_lookback(
         self,
         entities: list[object],
