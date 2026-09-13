@@ -8,12 +8,20 @@ from uuid import UUID
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.utils.backoff import BackoffConfig
 
 from .bybit import BybitDemoExecutor
 from .domain import EntryType, IntentStatus, TradingIntent
 from .storage import IntentStore
 
 logger = logging.getLogger(__name__)
+
+POLLING_BACKOFF = BackoffConfig(
+    min_delay=5.0,
+    max_delay=30.0,
+    factor=1.5,
+    jitter=0.0,
+)
 
 
 class IntentAction(CallbackData, prefix="intent"):
@@ -41,7 +49,10 @@ class ApprovalBot:
         await self._bot.delete_webhook(drop_pending_updates=False)
 
     async def run(self) -> None:
-        await self._dispatcher.start_polling(self._bot)
+        await self._dispatcher.start_polling(
+            self._bot,
+            backoff_config=POLLING_BACKOFF,
+        )
 
     async def close(self) -> None:
         await self._bot.session.close()
