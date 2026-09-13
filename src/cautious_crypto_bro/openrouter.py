@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import time
+from pathlib import Path
 
 import httpx
+
+from pydantic import ValidationError
 
 from .domain import (
     IncomingPost,
@@ -135,6 +139,116 @@ def _build_user_content(
     return content
 
 
+def _completion_content(
+    response_data: dict[str, object],
+) -> str:
+    choices = response_data.get(
+        "choices"
+    )
+
+    if (
+        not isinstance(choices, list)
+        or not choices
+    ):
+        raise ValueError(
+            "OpenRouter response contains "
+            "no completion choices"
+        )
+
+    choice = choices[0]
+
+    if not isinstance(
+        choice,
+        dict,
+    ):
+        raise ValueError(
+            "OpenRouter completion choice "
+            "is invalid"
+        )
+
+    provider_error = (
+        choice.get("error")
+    )
+
+    finish_reason = choice.get(
+        "finish_reason"
+    )
+
+    if finish_reason == "length":
+        provider = (
+            response_data.get("provider")
+            or "unknown"
+        )
+
+        raise ValueError(
+            "OpenRouter completion was truncated: "
+            f"provider={provider}, "
+            "finish_reason=length"
+        )
+
+    if (
+        provider_error is not None
+        or finish_reason == "error"
+    ):
+        provider = (
+            response_data.get(
+                "provider"
+            )
+            or "unknown"
+        )
+
+        error_code = None
+        error_message = None
+
+        if isinstance(
+            provider_error,
+            dict,
+        ):
+            error_code = (
+                provider_error.get("code")
+            )
+            error_message = (
+                provider_error.get(
+                    "message"
+                )
+            )
+
+        raise ValueError(
+            "OpenRouter provider failure: "
+            f"provider={provider}, "
+            f"code={error_code}, "
+            f"message={error_message}"
+        )
+
+    message = choice.get(
+        "message"
+    )
+
+    if not isinstance(
+        message,
+        dict,
+    ):
+        raise ValueError(
+            "OpenRouter response contains "
+            "no assistant message"
+        )
+
+    content = message.get(
+        "content"
+    )
+
+    if not isinstance(
+        content,
+        str,
+    ):
+        raise ValueError(
+            "OpenRouter response content "
+            "is not a string"
+        )
+
+    return content
+
+
 class OpenRouterIntentExtractor:
     def __init__(
         self,
@@ -142,15 +256,24 @@ class OpenRouterIntentExtractor:
         api_key: str,
         model: str,
         base_url: str,
+        inference_timeout_seconds: float = 45,
+        max_attempts: int = 2,
     ) -> None:
         self._model = model
+        self._inference_timeout_seconds = (
+            inference_timeout_seconds
+        )
+        self._max_attempts = max_attempts
+
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            timeout=httpx.Timeout(45.0),
+            timeout=httpx.Timeout(
+                inference_timeout_seconds + 15
+            ),
         )
 
     async def close(self) -> None:
@@ -162,6 +285,7 @@ class OpenRouterIntentExtractor:
         *,
         global_guidance: str | None = None,
         channel_guidance: str | None = None,
+        debug_dir: Path | None = None,
     ) -> TradingIntent | None:
         source = post.source
 
@@ -189,6 +313,11 @@ class OpenRouterIntentExtractor:
             "provider": {
                 "sort": "latency",
                 "require_parameters": True,
+                "allow_fallbacks": True,
+                "ignore": [
+                    "nextbit",
+                    "parasail",
+                ],
             },
             "response_format": {
                 "type": "json_schema",
@@ -202,44 +331,248 @@ class OpenRouterIntentExtractor:
             },
         }
 
-        started = time.monotonic()
+        last_error: Exception | None = None
 
-        try:
-            async with asyncio.timeout(20):
-                response = await self._client.post(
-                    "/chat/completions",
-                    json=payload,
+        for attempt in range(
+            1,
+            self._max_attempts + 1,
+        ):
+            started = time.monotonic()
+
+            try:
+                async with asyncio.timeout(
+                    self._inference_timeout_seconds
+                ):
+                    response = await self._client.post(
+                        "/chat/completions",
+                        json=payload,
+                    )
+
+                response.raise_for_status()
+
+                response_data = response.json()
+
+                content = _completion_content(
+                    response_data
                 )
-        except TimeoutError:
-            elapsed = time.monotonic() - started
 
+                if debug_dir is not None:
+                    debug_dir.mkdir(
+                        parents=True,
+                        exist_ok=True,
+                    )
+
+                    stem = (
+                        f"{source.channel_id}_"
+                        f"{source.message_id}_"
+                        f"attempt{attempt}"
+                    )
+
+                    response_path = (
+                        debug_dir
+                        / f"{stem}.response.json"
+                    )
+
+                    content_path = (
+                        debug_dir
+                        / f"{stem}.content.txt"
+                    )
+
+                    metadata_path = (
+                        debug_dir
+                        / f"{stem}.meta.json"
+                    )
+
+                    response_path.write_text(
+                        response.text,
+                        encoding="utf-8",
+                    )
+
+                    content_path.write_text(
+                        content,
+                        encoding="utf-8",
+                    )
+
+                    image_bytes = [
+                        len(image.data)
+                        for image in post.images
+                    ]
+
+                    estimated_base64_chars = [
+                        (
+                            (size + 2)
+                            // 3
+                            * 4
+                        )
+                        for size in image_bytes
+                    ]
+
+                    metadata = {
+                        "channel_id": (
+                            source.channel_id
+                        ),
+                        "message_id": (
+                            source.message_id
+                        ),
+                        "attempt": attempt,
+                        "model": self._model,
+                        "http_status": (
+                            response.status_code
+                        ),
+                        "image_count": (
+                            len(post.images)
+                        ),
+                        "image_bytes": (
+                            image_bytes
+                        ),
+                        "estimated_base64_chars": (
+                            estimated_base64_chars
+                        ),
+                        "response_body_chars": (
+                            len(response.text)
+                        ),
+                        "content_chars": (
+                            len(content)
+                        ),
+                        "elapsed_seconds": (
+                            time.monotonic()
+                            - started
+                        ),
+                    }
+
+                    metadata_path.write_text(
+                        json.dumps(
+                            metadata,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    logger.info(
+                        "Saved OpenRouter debug "
+                        "capture to %s",
+                        debug_dir,
+                    )
+
+                if not isinstance(
+                    content,
+                    str,
+                ):
+                    raise ValueError(
+                        "OpenRouter response content "
+                        "is not a string"
+                    )
+
+                # This schema normally produces only a
+                # small JSON object. A very large result
+                # indicates a broken structured-output
+                # response rather than a useful intent.
+                if len(content) > 20_000:
+                    raise ValueError(
+                        "OpenRouter returned unexpectedly "
+                        "large structured output "
+                        f"({len(content)} characters)"
+                    )
+
+                extraction = (
+                    IntentExtraction.model_validate_json(
+                        content
+                    )
+                )
+
+            except TimeoutError as exc:
+                elapsed = (
+                    time.monotonic()
+                    - started
+                )
+
+                last_error = RuntimeError(
+                    "OpenRouter inference exceeded "
+                    f"{self._inference_timeout_seconds:g}s "
+                    f"({elapsed:.1f}s)"
+                )
+
+            except ValidationError as exc:
+                last_error = RuntimeError(
+                    "OpenRouter returned invalid "
+                    "structured output"
+                )
+
+                logger.warning(
+                    "Invalid OpenRouter structured output "
+                    "for %s/%s on attempt %d/%d: %s",
+                    source.channel_id,
+                    source.message_id,
+                    attempt,
+                    self._max_attempts,
+                    exc,
+                )
+
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                httpx.RequestError,
+            ) as exc:
+                last_error = exc
+
+            except httpx.HTTPStatusError as exc:
+                status = (
+                    exc.response.status_code
+                )
+
+                if (
+                    status != 429
+                    and status < 500
+                ):
+                    raise
+
+                last_error = exc
+
+            else:
+                elapsed = (
+                    time.monotonic()
+                    - started
+                )
+
+                logger.info(
+                    "OpenRouter inference for %s/%s "
+                    "(%d image(s)) completed in %.2fs "
+                    "on attempt %d/%d",
+                    source.channel_id,
+                    source.message_id,
+                    len(post.images),
+                    elapsed,
+                    attempt,
+                    self._max_attempts,
+                )
+
+                break
+
+            if (
+                attempt
+                < self._max_attempts
+            ):
+                logger.warning(
+                    "OpenRouter attempt %d/%d failed "
+                    "for %s/%s: %s; retrying",
+                    attempt,
+                    self._max_attempts,
+                    source.channel_id,
+                    source.message_id,
+                    last_error,
+                )
+
+                await asyncio.sleep(
+                    0.5 * attempt
+                )
+
+        else:
             raise RuntimeError(
-                "OpenRouter inference exceeded "
-                f"20s ({elapsed:.1f}s)"
-            ) from None
-
-        elapsed = time.monotonic() - started
-
-        logger.info(
-            "OpenRouter inference for %s/%s "
-            "(%d image(s)) completed in %.2fs",
-            source.channel_id,
-            source.message_id,
-            len(post.images),
-            elapsed,
-        )
-
-        response.raise_for_status()
-
-        content = response.json()[
-            "choices"
-        ][0]["message"]["content"]
-
-        extraction = (
-            IntentExtraction.model_validate_json(
-                content
-            )
-        )
+                "OpenRouter inference failed after "
+                f"{self._max_attempts} attempt(s): "
+                f"{last_error}"
+            ) from last_error
 
         if (
             not extraction.actionable

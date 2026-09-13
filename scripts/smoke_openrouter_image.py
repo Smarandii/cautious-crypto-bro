@@ -124,6 +124,12 @@ async def main() -> None:
         api_key=settings.openrouter_api_key,
         model=settings.openrouter_model,
         base_url=settings.openrouter_base_url,
+        inference_timeout_seconds=(
+            settings.openrouter_inference_timeout_seconds
+        ),
+        max_attempts=(
+            settings.openrouter_inference_max_attempts
+        ),
     )
 
     try:

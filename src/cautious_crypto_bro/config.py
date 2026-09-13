@@ -26,6 +26,16 @@ class Settings(BaseSettings):
     openrouter_api_key: str
     openrouter_model: str = "google/gemma-4-26b-a4b-it"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_inference_timeout_seconds: float = Field(
+        default=45,
+        ge=5,
+        le=120,
+    )
+    openrouter_inference_max_attempts: int = Field(
+        default=2,
+        ge=1,
+        le=3,
+    )
 
     bybit_api_key: str
     bybit_api_secret: str

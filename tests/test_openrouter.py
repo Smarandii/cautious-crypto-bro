@@ -89,3 +89,84 @@ def test_guidance_is_added_to_prompt() -> None:
     ) < content.index(
         "Telegram post text/caption:"
     )
+
+
+def test_provider_error_inside_http_success_is_rejected() -> None:
+    from cautious_crypto_bro.openrouter import (
+        _completion_content,
+    )
+
+    response = {
+        "provider": "NextBit",
+        "choices": [
+            {
+                "finish_reason": "error",
+                "error": {
+                    "code": 502,
+                    "message": (
+                        "Network connection lost."
+                    ),
+                    "metadata": {
+                        "error_type": (
+                            "provider_unavailable"
+                        ),
+                    },
+                },
+                "message": {
+                    "role": "assistant",
+                    "content": (
+                        '{"actionable": true'
+                    ),
+                },
+            }
+        ],
+    }
+
+    import pytest
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "provider=NextBit.*"
+            "code=502.*"
+            "Network connection lost"
+        ),
+    ):
+        _completion_content(
+            response
+        )
+
+
+def test_truncated_completion_is_rejected() -> None:
+    from cautious_crypto_bro.openrouter import (
+        _completion_content,
+    )
+
+    response = {
+        "provider": "Parasail",
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {
+                    "role": "assistant",
+                    "content": (
+                        '{"actionable": true'
+                        + " " * 1000
+                    ),
+                },
+            }
+        ],
+    }
+
+    import pytest
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "provider=Parasail.*"
+            "finish_reason=length"
+        ),
+    ):
+        _completion_content(
+            response
+        )

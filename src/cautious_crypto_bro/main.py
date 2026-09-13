@@ -50,6 +50,12 @@ async def async_main() -> None:
             base_url=(
                 settings.openrouter_base_url
             ),
+            inference_timeout_seconds=(
+                settings.openrouter_inference_timeout_seconds
+            ),
+            max_attempts=(
+                settings.openrouter_inference_max_attempts
+            ),
         )
     )
 

@@ -1,6 +1,7 @@
 # Cautious Crypto Bro
 
-Telegram text/images → OpenRouter → `TradingIntent` → human approval → Bybit Demo.
+Telegram text/images → OpenRouter → `TradingIntent` → deterministic execution
+plan → human approval → Bybit Demo.
 
 ## Run
 
@@ -8,22 +9,21 @@ Telegram text/images → OpenRouter → `TradingIntent` → human approval → B
 cp .env.example .env
 # Fill .env; TELEGRAM_SOURCE_CHANNELS is a JSON array.
 
-docker compose run --rm app
 docker compose up -d --build app
 docker compose logs -f app
-```
 
-## Verify
+Runtime state lives in the persistent app_state Docker volume.
 
-```bash
+Verify
 docker compose --profile test run --rm --build test
-docker compose run --rm -T --entrypoint /app/.venv/bin/python app scripts/smoke_bybit_trade.py --execute
-```
 
-The smoke command creates a real Demo order. Runtime state lives in the `app_state` Docker volume.
+For historical Telegram replay, OpenRouter/image tests, execution-policy
+commands and Bybit Demo smoke tests, see TESTING.md.
 
-## Invariants
-
-- Bybit Demo only.
-- The LLM produces intents; only deterministic code places orders.
-- Missing or ambiguous trade parameters are rejected.
+Invariants
+Bybit Demo only.
+The LLM interprets signals; deterministic code creates execution plans and
+places orders.
+Human approval is required before a generated trading intent is executed.
+Missing or ambiguous required signal information is rejected rather than
+guessed.
