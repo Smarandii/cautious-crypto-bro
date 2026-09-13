@@ -1,40 +1,41 @@
 # TODO
 
-## Dynamic OpenRouter provider circuit breaker
+## Provider circuit breaker
 
-Replace the current static provider exclusions with runtime provider health
-tracking.
+Replace static OpenRouter provider exclusions with runtime health tracking.
 
-Desired behaviour:
+- Cool down provider-attributable failures for ~12 hours.
+- Retry with cooled-down providers added to `provider.ignore`.
+- Restore providers automatically after expiry.
+- Persist provider, failure reason and expiry in SQLite.
+- Keep static `nextbit` / `parasail` exclusions until this is proven.
 
-- identify provider-attributable failures, for example:
-  - embedded provider errors / 5xx
-  - repeated malformed structured output
-  - truncated `finish_reason=length` degeneration
-- put the failing provider into a cooldown, initially 12 hours
-- dynamically add providers in cooldown to the OpenRouter `ignore` list
-- retry inference so the retry is routed to another healthy provider
-- automatically restore a provider after its cooldown expires
-- record failure reason, failure time and cooldown expiry for diagnostics
-- avoid penalizing a provider for failures that cannot confidently be
-  attributed to that provider
+Redis is unnecessary while the app has one instance.
 
-For the current single-instance deployment, SQLite is sufficient and avoids
-adding Redis only for this feature. Redis becomes useful if multiple app
-instances need to share provider-health state.
+## Retryable source processing
 
-The current hardcoded `nextbit` and `parasail` exclusions can eventually be
-replaced by this mechanism.
+A source is persisted before extraction/planning finishes, so a transient
+downstream failure can make a live/lookback message permanently look processed.
 
-## Active trade / duplicate exposure guard
+Track processing state so failed work can be retried without duplicating
+successful work.
 
-Track active mirrored trades by symbol and reject opening another trade when
-there is already active Cautious Crypto Bro exposure for that symbol.
+## Active exposure and trade lifecycle
 
-This should eventually consider both:
+Prevent new signals from accidentally increasing existing mirrored exposure for
+the same symbol.
 
-- an existing Bybit position
-- unfilled Cautious Crypto Bro entry orders
+Account for Bybit positions and unfilled app orders, then extend this into
+OPEN / REDUCE / CLOSE handling for trader follow-up messages.
 
-Do this together with trade lifecycle support rather than inferring semantic
-trade identity from Telegram text.
+## MENSA visual structure extraction
+
+Interpret advanced chart-based setups instead of requiring every price in text.
+
+- Detect entry rectangles only with reliable chart calibration.
+- Use explicit anchors / price axis to derive numeric range boundaries.
+- Derive structural stop deterministically from channel guidance.
+- Preserve the anchor as one entry order; distribute remaining entries across
+  the range.
+- Risk budget determines quantity, not stop placement.
+- Reject low-confidence geometry rather than invent prices.
