@@ -53,6 +53,15 @@ async def main() -> None:
     )
 
     parser.add_argument(
+        "--cancel-existing",
+        action="store_true",
+        help=(
+            "Cancel all existing Demo orders for "
+            "the selected symbol before the smoke test."
+        ),
+    )
+
+    parser.add_argument(
         "--execute",
         action="store_true",
         help="Actually submit the demo order(s).",
@@ -75,6 +84,17 @@ async def main() -> None:
         symbol = args.symbol.upper()
         side = Side(args.side)
         entry_type = EntryType(args.entry_type)
+
+        if args.cancel_existing:
+            cancelled = await executor.cancel_all_orders(
+                symbol
+            )
+
+            print(
+                f"Cancelled existing orders: {cancelled}"
+            )
+
+            await asyncio.sleep(1)
 
         context = await executor.market_context(symbol)
         market = context.market_price
