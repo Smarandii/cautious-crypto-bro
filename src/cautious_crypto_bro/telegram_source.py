@@ -4,6 +4,7 @@ import logging
 from collections.abc import (
     Awaitable,
     Callable,
+    Sequence,
 )
 from datetime import (
     datetime,
@@ -46,48 +47,66 @@ def _as_utc(
     )
 
 
-async def telegram_message_to_post(
-    message: Message,
+async def telegram_messages_to_post(
+    messages: Sequence[Message],
     *,
     chat: object | None = None,
 ) -> IncomingPost | None:
-    resolved_chat = (
-        chat
-        if chat is not None
-        else message.chat
+    if not messages:
+        return None
+
+    ordered = tuple(
+        sorted(
+            messages,
+            key=lambda message: message.id,
+        )
     )
+
+    resolved_chat = chat
+
+    if resolved_chat is None:
+        resolved_chat = next(
+            (
+                message.chat
+                for message in ordered
+                if message.chat is not None
+            ),
+            None,
+        )
 
     if resolved_chat is None:
         return None
 
-    text = (
-        message.message
-        or ""
-    ).strip()
+    texts: list[str] = []
+    images: list[
+        ImageAttachment
+    ] = []
 
-    media_type = (
-        telegram_image_media_type(
-            message
+    for message in ordered:
+        text = (
+            message.message
+            or ""
+        ).strip()
+
+        # Telegram albums normally have one caption, but
+        # preserving multiple distinct captions is safer.
+        if (
+            text
+            and text not in texts
+        ):
+            texts.append(
+                text
+            )
+
+        media_type = (
+            telegram_image_media_type(
+                message
+            )
         )
-    )
 
-    if (
-        not text
-        and media_type is None
-    ):
-        logger.info(
-            "Ignoring message %s: "
-            "no text or supported image",
-            message.id,
-        )
-        return None
+        if media_type is None:
+            continue
 
-    images: tuple[
-        ImageAttachment,
-        ...,
-    ] = ()
-
-    if media_type is not None:
         try:
             data = (
                 await message.download_media(
@@ -97,7 +116,7 @@ async def telegram_message_to_post(
         except Exception:
             logger.exception(
                 "Failed to download image "
-                "from message %s",
+                "from Telegram message %s",
                 message.id,
             )
             return None
@@ -110,19 +129,36 @@ async def telegram_message_to_post(
             )
             return None
 
-        images = (
+        images.append(
             ImageAttachment(
                 media_type=media_type,
                 data=bytes(data),
-            ),
+            )
         )
 
-    published_at = _as_utc(
-        message.date
+    if (
+        not texts
+        and not images
+    ):
+        logger.info(
+            "Ignoring Telegram message group "
+            "starting at %s: no text or "
+            "supported images",
+            ordered[0].id,
+        )
+        return None
+
+    canonical = ordered[0]
+
+    published_at = min(
+        _as_utc(
+            message.date
+        )
+        for message in ordered
     )
 
     source = SourceMessage(
-        channel_id=message.chat_id,
+        channel_id=canonical.chat_id,
         channel_title=(
             getattr(
                 resolved_chat,
@@ -130,7 +166,7 @@ async def telegram_message_to_post(
                 None,
             )
             or str(
-                message.chat_id
+                canonical.chat_id
             )
         ),
         channel_username=getattr(
@@ -138,17 +174,34 @@ async def telegram_message_to_post(
             "username",
             None,
         ),
-        message_id=message.id,
+        # The lowest Telegram message id is the
+        # deterministic identity of the album.
+        message_id=canonical.id,
         published_at=published_at,
         received_at=datetime.now(
             timezone.utc
         ),
-        text=text,
+        text="\n".join(
+            texts
+        ),
     )
 
     return IncomingPost(
         source=source,
-        images=images,
+        images=tuple(
+            images
+        ),
+    )
+
+
+async def telegram_message_to_post(
+    message: Message,
+    *,
+    chat: object | None = None,
+) -> IncomingPost | None:
+    return await telegram_messages_to_post(
+        (message,),
+        chat=chat,
     )
 
 
@@ -184,6 +237,67 @@ def telegram_image_media_type(
     return None
 
 
+def _group_telegram_messages(
+    messages: Sequence[Message],
+) -> tuple[
+    tuple[Message, ...],
+    ...,
+]:
+    ordered = sorted(
+        messages,
+        key=lambda message: message.id,
+    )
+
+    groups: list[
+        list[Message]
+    ] = []
+
+    album_indexes: dict[
+        int,
+        int,
+    ] = {}
+
+    for message in ordered:
+        grouped_id = getattr(
+            message,
+            "grouped_id",
+            None,
+        )
+
+        if grouped_id is None:
+            groups.append(
+                [message]
+            )
+            continue
+
+        group_index = (
+            album_indexes.get(
+                grouped_id
+            )
+        )
+
+        if group_index is None:
+            album_indexes[
+                grouped_id
+            ] = len(groups)
+
+            groups.append(
+                [message]
+            )
+            continue
+
+        groups[
+            group_index
+        ].append(
+            message
+        )
+
+    return tuple(
+        tuple(group)
+        for group in groups
+    )
+
+
 class TelegramSource:
     def __init__(
         self,
@@ -211,6 +325,7 @@ class TelegramSource:
 
         self._channels = channels
         self._on_message = on_message
+
         self._startup_lookback_hours = (
             startup_lookback_hours
         )
@@ -237,22 +352,47 @@ class TelegramSource:
                 channel,
             )
 
-        # Register live updates before running the historical scan.
-        # If a message appears while lookback is running, the
-        # persistent source-message dedup in SignalService decides
-        # which path processes it.
+        # Albums are handled as one logical Telegram post.
+        @self._client.on(
+            events.Album(
+                chats=entities
+            )
+        )
+        async def handle_album(
+            event: events.Album.Event,
+        ) -> None:
+            await self._handle_messages(
+                tuple(
+                    event.messages
+                ),
+                chat=event.chat,
+            )
+
+        # Telethon also emits NewMessage for each album
+        # member. Skip grouped messages here so the Album
+        # event is the only live processing path for them.
         @self._client.on(
             events.NewMessage(
                 chats=entities
             )
         )
-        async def handle(
+        async def handle_message(
             event: (
                 events.NewMessage.Event
             ),
         ) -> None:
-            await self._handle_message(
-                event.message
+            if (
+                getattr(
+                    event.message,
+                    "grouped_id",
+                    None,
+                )
+                is not None
+            ):
+                return
+
+            await self._handle_messages(
+                (event.message,)
             )
 
         if self._startup_lookback_hours:
@@ -265,7 +405,9 @@ class TelegramSource:
         entities: list[object],
     ) -> None:
         cutoff = (
-            datetime.now(timezone.utc)
+            datetime.now(
+                timezone.utc
+            )
             - timedelta(
                 hours=(
                     self._startup_lookback_hours
@@ -280,25 +422,55 @@ class TelegramSource:
         )
 
         for entity in entities:
-            messages: list[Message] = []
+            messages: list[
+                Message
+            ] = []
+
+            last_included_group: (
+                int | None
+            ) = None
 
             try:
-                # Telethon returns newest messages first.
-                # Stop as soon as we cross the lookback boundary,
-                # then process the collected messages oldest first.
+                # Telethon history is newest-first.
                 async for message in (
                     self._client.iter_messages(
                         entity
                     )
                 ):
+                    grouped_id = getattr(
+                        message,
+                        "grouped_id",
+                        None,
+                    )
+
                     if (
-                        _as_utc(message.date)
+                        _as_utc(
+                            message.date
+                        )
                         < cutoff
                     ):
+                        # If the lookback boundary falls in
+                        # the middle of an album, finish
+                        # collecting that album.
+                        if (
+                            last_included_group
+                            is not None
+                            and grouped_id
+                            == last_included_group
+                        ):
+                            messages.append(
+                                message
+                            )
+                            continue
+
                         break
 
                     messages.append(
                         message
+                    )
+
+                    last_included_group = (
+                        grouped_id
                     )
 
             except Exception:
@@ -313,10 +485,17 @@ class TelegramSource:
                 )
                 continue
 
+            posts = (
+                _group_telegram_messages(
+                    messages
+                )
+            )
+
             logger.info(
                 "Startup lookback found "
-                "%d message(s) in %s",
+                "%d message(s) / %d post(s) in %s",
                 len(messages),
+                len(posts),
                 getattr(
                     entity,
                     "title",
@@ -324,31 +503,32 @@ class TelegramSource:
                 ),
             )
 
-            for message in reversed(
-                messages
-            ):
+            for group in posts:
                 try:
-                    await self._handle_message(
-                        message,
+                    await self._handle_messages(
+                        group,
                         chat=entity,
                     )
                 except Exception:
                     logger.exception(
                         "Failed to process Telegram "
-                        "startup lookback message %s/%s",
-                        message.chat_id,
-                        message.id,
+                        "startup lookback post "
+                        "starting at %s/%s",
+                        group[0].chat_id,
+                        group[0].id,
                     )
 
-    async def _handle_message(
+    async def _handle_messages(
         self,
-        message: Message,
+        messages: Sequence[
+            Message
+        ],
         *,
         chat: object | None = None,
     ) -> None:
         post = (
-            await telegram_message_to_post(
-                message,
+            await telegram_messages_to_post(
+                messages,
                 chat=chat,
             )
         )

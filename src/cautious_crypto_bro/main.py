@@ -113,13 +113,16 @@ async def async_main() -> None:
         ),
     )
 
-    await source.start()
-
     try:
         async with asyncio.TaskGroup() as tg:
+            # Approval callbacks must already be active
+            # while startup lookback is creating cards.
             tg.create_task(
                 bot.run()
             )
+
+            await source.start()
+
             tg.create_task(
                 source.run_until_disconnected()
             )
