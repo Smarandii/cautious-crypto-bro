@@ -20,6 +20,7 @@ from .domain import (
 )
 
 MAX_BYBIT_BATCH_ORDERS = 20
+MAX_BYBIT_PARTIAL_TPSL_ORDERS = 20
 
 
 class ExecutionPlanningError(RuntimeError):
@@ -98,6 +99,24 @@ class ExecutionPlanner:
                 f"maximum supported in one batch is "
                 f"{MAX_BYBIT_BATCH_ORDERS}. "
                 "Reduce range_order_count."
+            )
+
+        required_tpsl_slots = (
+            planned_order_count * 2
+        )
+
+        if (
+            required_tpsl_slots
+            > MAX_BYBIT_PARTIAL_TPSL_ORDERS
+        ):
+            raise ExecutionPlanningError(
+                "Execution plan would require "
+                f"{required_tpsl_slots} Bybit Partial "
+                "TP/SL slots, but Bybit allows at most "
+                f"{MAX_BYBIT_PARTIAL_TPSL_ORDERS}. "
+                "With the current order-attached exit "
+                "implementation, reduce entry levels "
+                "or use a trader-provided single TP."
             )
 
         total_stop_distance = sum(

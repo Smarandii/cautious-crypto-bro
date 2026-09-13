@@ -4,6 +4,8 @@ from datetime import (
 )
 from decimal import Decimal
 
+import pytest
+
 from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
@@ -14,6 +16,7 @@ from cautious_crypto_bro.domain import (
 )
 from cautious_crypto_bro.execution import (
     ExecutionPlanner,
+    ExecutionPlanningError,
     InstrumentContext,
 )
 
@@ -222,7 +225,7 @@ def test_explicit_trader_tp_does_not_use_default_ladder() -> None:
     assert len(plan.orders) == 3
 
 
-def test_five_entries_with_default_ladder_make_fifteen_orders() -> None:
+def test_five_entries_with_default_ladder_exceeds_bybit_tpsl_limit() -> None:
     base = intent()
 
     without_tp = TradingIntent(
@@ -236,13 +239,25 @@ def test_five_entries_with_default_ladder_make_fifteen_orders() -> None:
         confidence=base.confidence,
     )
 
+    with pytest.raises(
+        ExecutionPlanningError,
+        match="Partial TP/SL slots",
+    ):
+        ExecutionPlanner().plan(
+            without_tp,
+            policy(5),
+            context(),
+        )
+
+
+def test_five_entries_with_trader_tp_are_allowed() -> None:
     plan = ExecutionPlanner().plan(
-        without_tp,
+        intent(),
         policy(5),
         context(),
     )
 
-    assert len(plan.orders) == 15
+    assert len(plan.orders) == 5
 
     assert (
         plan.planned_max_loss_usdt
