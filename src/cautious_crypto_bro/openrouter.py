@@ -42,13 +42,17 @@ MVP rules:
 - required: symbol, LONG/SHORT, entry semantics, stop loss, take profit
 - MARKET only if the author clearly says enter now/at market or clearly
   states they entered now
-- otherwise an explicit numeric entry price is required and entry.type
-  must be LIMIT
+- LIMIT when there is one explicit numeric entry price
+- RANGE when the author clearly defines an entry area/zone and both numeric
+  boundaries are explicit and clearly attributable to that entry area
+- for RANGE set range_low to the lower numeric boundary and range_high to
+  the higher numeric boundary; do not collapse a range into one price
 - exactly one stop and one target
 - values visible in an image may be used only when they are explicit
   and clearly legible
 - never estimate prices from chart geometry, line position, vague levels,
   or unlabeled visual elements
+- never invent a range boundary from the visual size of a rectangle
 - never assign a visible price to stop loss or take profit merely because
   the schema requires one
 - if the post is commentary, an update to an older idea, incomplete,

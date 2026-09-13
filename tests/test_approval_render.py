@@ -1,27 +1,144 @@
-from datetime import datetime, timezone
+from datetime import (
+    datetime,
+    timezone,
+)
+from decimal import Decimal
 
-from cautious_crypto_bro.approval_bot import ApprovalBot
-from cautious_crypto_bro.domain import Entry, EntryType, Side, SourceMessage, TradingIntent
+from cautious_crypto_bro.approval_bot import (
+    ApprovalBot,
+)
+from cautious_crypto_bro.domain import (
+    Entry,
+    EntryType,
+    ExecutionOrderType,
+    ExecutionPlan,
+    ExecutionPolicy,
+    PlannedOrder,
+    Side,
+    SourceMessage,
+    TradingIntent,
+)
 
 
-def test_render_contains_decision_context() -> None:
+def test_render_contains_execution_policy() -> None:
     intent = TradingIntent(
         source=SourceMessage(
             channel_id=-100123,
             channel_title="Trader & Co",
             channel_username="trader",
             message_id=99,
-            published_at=datetime(2026, 9, 12, 18, 0, tzinfo=timezone.utc),
-            received_at=datetime(2026, 9, 12, 18, 0, 1, tzinfo=timezone.utc),
+            published_at=datetime(
+                2026,
+                9,
+                12,
+                18,
+                0,
+                tzinfo=timezone.utc,
+            ),
+            received_at=datetime(
+                2026,
+                9,
+                12,
+                18,
+                0,
+                1,
+                tzinfo=timezone.utc,
+            ),
             text="signal",
         ),
-        symbol="ETHUSDT", side=Side.LONG,
-        entry=Entry(type=EntryType.LIMIT, price=4000),
-        stop_loss=3900, take_profit=4300,
-        summary="Bounce from support.", confidence=0.9,
+        symbol="ETHUSDT",
+        side=Side.LONG,
+        entry=Entry(
+            type=EntryType.RANGE,
+            range_low=4000,
+            range_high=4020,
+        ),
+        stop_loss=3900,
+        take_profit=4300,
+        summary=(
+            "Bounce from support."
+        ),
+        confidence=0.9,
     )
-    rendered = ApprovalBot._render(intent)
-    assert "LONG ETHUSDT" in rendered
+
+    policy = ExecutionPolicy(
+        trading_capital_usdt=(
+            Decimal("6800")
+        ),
+        risk_per_trade_pct=(
+            Decimal("1")
+        ),
+        range_order_count=3,
+    )
+
+    plan = ExecutionPlan(
+        intent_id=intent.intent_id,
+        symbol=intent.symbol,
+        side=intent.side,
+        orders=(
+            PlannedOrder(
+                order_type=(
+                    ExecutionOrderType.LIMIT
+                ),
+                quantity=Decimal("0.2"),
+                price=Decimal("4000"),
+                reference_price=(
+                    Decimal("4000")
+                ),
+            ),
+            PlannedOrder(
+                order_type=(
+                    ExecutionOrderType.LIMIT
+                ),
+                quantity=Decimal("0.2"),
+                price=Decimal("4010"),
+                reference_price=(
+                    Decimal("4010")
+                ),
+            ),
+            PlannedOrder(
+                order_type=(
+                    ExecutionOrderType.LIMIT
+                ),
+                quantity=Decimal("0.2"),
+                price=Decimal("4020"),
+                reference_price=(
+                    Decimal("4020")
+                ),
+            ),
+        ),
+        stop_loss=Decimal("3900"),
+        take_profit=Decimal("4300"),
+        policy=policy,
+        planned_max_loss_usdt=(
+            Decimal("66")
+        ),
+    )
+
+    rendered = ApprovalBot._render(
+        intent,
+        plan,
+    )
+
+    assert (
+        "LONG ETHUSDT"
+        in rendered
+    )
+    assert (
+        "Execution plan — 3 order(s)"
+        in rendered
+    )
+    assert (
+        "Risk policy: "
+        "<b>1% = 68 USDT</b>"
+        in rendered
+    )
     assert "R:R:" in rendered
-    assert "Open source message" in rendered
-    assert "Trader &amp; Co" in rendered
+    assert (
+        "Open source message"
+        in rendered
+    )
+    assert (
+        "Trader &amp; Co"
+        in rendered
+    )

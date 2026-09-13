@@ -29,7 +29,6 @@ class Settings(BaseSettings):
 
     bybit_api_key: str
     bybit_api_secret: str
-    bybit_default_notional_usdt: float = Field(gt=0)
 
     database_path: Path = Path("data/cautious_crypto_bro.sqlite3")
     intent_max_age_seconds: int = Field(default=900, gt=0)
