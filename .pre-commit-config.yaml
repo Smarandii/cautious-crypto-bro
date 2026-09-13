@@ -1,4 +1,19 @@
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace
+
   - repo: local
     hooks:
       - id: ruff-format
@@ -12,3 +27,16 @@ repos:
         entry: uv run ruff check
         language: system
         types_or: [python, pyi]
+
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        pass_filenames: false
+        files: ^src/
+
+      - id: droast
+        name: droast
+        entry: bash -c 'docker run --rm -v "$PWD:/workspace:ro" -w /workspace ghcr.io/immanuwell/droast:1.7.0 --preset production --no-roast "$@"' --
+        language: system
+        files: '(^|/)((Dockerfile|Containerfile)(\.[^/]+)?|[^/]+\.Dockerfile)$'

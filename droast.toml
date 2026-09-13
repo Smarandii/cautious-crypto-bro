@@ -1,0 +1,4 @@
+preset = "production"
+min-severity = "warning"
+fail-on = "warning"
+no-roast = true

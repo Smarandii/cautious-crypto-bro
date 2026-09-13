@@ -2,7 +2,7 @@
 name = "cautious-crypto-bro"
 version = "0.1.0"
 description = "Human-in-the-loop Telegram crypto signal interpreter and Bybit demo executor"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "aiogram>=3.31,<4",
   "aiosqlite>=0.21,<1",
@@ -17,6 +17,7 @@ dependencies = [
 dev = [
   "fakeredis>=2.38.0",
   "pre-commit>=4.3,<5",
+  "pyright>=1.1.405,<2",
   "pytest>=8.4,<9",
   "ruff>=0.13,<1",
 ]
@@ -49,3 +50,9 @@ select = [
   "UP",
   "B",
 ]
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
