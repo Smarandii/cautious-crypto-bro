@@ -66,3 +66,31 @@ def test_execution_policy_defaults_and_updates(
     asyncio.run(
         run()
     )
+
+
+def test_exit_policy_defaults() -> None:
+    policy = ExecutionPolicy(
+        trading_capital_usdt=Decimal("6800"),
+        risk_per_trade_pct=Decimal("1"),
+        range_order_count=3,
+    )
+
+    assert (
+        policy.exit_policy.basic_r_multiple
+        == Decimal("0.5")
+    )
+    assert (
+        policy.exit_policy.medium_r_multiple
+        == Decimal("1")
+    )
+    assert (
+        policy.exit_policy.high_r_multiple
+        == Decimal("2")
+    )
+
+    assert (
+        policy.exit_policy.basic_close_pct
+        + policy.exit_policy.medium_close_pct
+        + policy.exit_policy.high_close_pct
+        == Decimal("100")
+    )

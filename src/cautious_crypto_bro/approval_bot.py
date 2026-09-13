@@ -34,6 +34,7 @@ from .domain import (
     ExecutionPlan,
     IntentStatus,
     Side,
+    TakeProfitSource,
     TradingIntent,
 )
 from .storage import IntentStore
@@ -455,6 +456,42 @@ class ApprovalBot:
                 f"{intent.entry.range_high:g}"
             )
 
+        if plan.take_profit_targets:
+            source_label = (
+                "Policy fallback"
+                if (
+                    plan.take_profit_source
+                    is TakeProfitSource.POLICY
+                )
+                else "Trader"
+            )
+
+            tp_lines = []
+
+            for target in plan.take_profit_targets:
+                tp_lines.append(
+                    f"{html.escape(target.name.title())}: "
+                    f"<b>"
+                    f"{ApprovalBot._fmt_decimal(target.price)}"
+                    f"</b> — "
+                    f"{ApprovalBot._fmt_decimal(target.close_pct)}% "
+                    f"(~"
+                    f"{ApprovalBot._fmt_decimal(target.r_multiple)}R"
+                    f")"
+                )
+
+            tp_block = (
+                f"<b>Take-profit ladder "
+                f"({source_label})</b>\n"
+                + "\n".join(tp_lines)
+            )
+        else:
+            tp_block = (
+                "Take profit: <b>"
+                f"{ApprovalBot._fmt_decimal(plan.take_profit)}"
+                "</b>"
+            )
+
         order_lines = []
 
         for index, order in enumerate(
@@ -522,15 +559,6 @@ class ApprovalBot:
                 / weighted_entry
                 * Decimal("100")
             )
-
-            reward = (
-                (
-                    plan.take_profit
-                    - weighted_entry
-                )
-                / weighted_entry
-                * Decimal("100")
-            )
         else:
             risk = (
                 (
@@ -541,14 +569,62 @@ class ApprovalBot:
                 * Decimal("100")
             )
 
-            reward = (
-                (
-                    weighted_entry
-                    - plan.take_profit
+        if plan.take_profit_targets:
+            reward = Decimal("0")
+
+            for target in plan.take_profit_targets:
+                if intent.side is Side.LONG:
+                    target_reward = (
+                        (
+                            target.price
+                            - weighted_entry
+                        )
+                        / weighted_entry
+                        * Decimal("100")
+                    )
+                else:
+                    target_reward = (
+                        (
+                            weighted_entry
+                            - target.price
+                        )
+                        / weighted_entry
+                        * Decimal("100")
+                    )
+
+                reward += (
+                    target_reward
+                    * target.close_pct
+                    / Decimal("100")
                 )
-                / weighted_entry
-                * Decimal("100")
+
+            reward_label = (
+                "Blended reward if all TPs hit"
             )
+            rr_label = "Blended R:R"
+
+        else:
+            if intent.side is Side.LONG:
+                reward = (
+                    (
+                        plan.take_profit
+                        - weighted_entry
+                    )
+                    / weighted_entry
+                    * Decimal("100")
+                )
+            else:
+                reward = (
+                    (
+                        weighted_entry
+                        - plan.take_profit
+                    )
+                    / weighted_entry
+                    * Decimal("100")
+                )
+
+            reward_label = "Reward to TP"
+            rr_label = "R:R"
 
         rr = (
             reward / risk
@@ -601,10 +677,7 @@ class ApprovalBot:
             f"{ApprovalBot._fmt_decimal(plan.stop_loss)}"
             f"</b>\n"
 
-            f"Take profit: "
-            f"<b>"
-            f"{ApprovalBot._fmt_decimal(plan.take_profit)}"
-            f"</b>\n\n"
+            f"{tp_block}\n\n"
 
             f"<b>Execution plan — "
             f"{len(plan.orders)} order(s)</b>\n"
@@ -623,10 +696,10 @@ class ApprovalBot:
             f"Risk to SL: "
             f"<b>{float(risk):.2f}%</b>\n"
 
-            f"Reward to TP: "
+            f"{reward_label}: "
             f"<b>{float(reward):.2f}%</b>\n"
 
-            f"R:R: "
+            f"{rr_label}: "
             f"<b>{float(rr):.2f}</b>\n\n"
 
             f"Confidence: "

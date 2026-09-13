@@ -153,3 +153,98 @@ def test_two_percent_risk_doubles_risk_budget() -> None:
         plan.planned_max_loss_usdt
         > Decimal("68")
     )
+
+
+def test_missing_tp_builds_default_policy_ladder() -> None:
+    base = intent()
+
+    without_tp = TradingIntent(
+        source=base.source,
+        symbol=base.symbol,
+        side=base.side,
+        entry=base.entry,
+        stop_loss=base.stop_loss,
+        take_profit=None,
+        summary=base.summary,
+        confidence=base.confidence,
+    )
+
+    plan = ExecutionPlanner().plan(
+        without_tp,
+        policy(3),
+        context(),
+    )
+
+    assert [
+        target.name
+        for target
+        in plan.take_profit_targets
+    ] == [
+        "BASIC",
+        "MEDIUM",
+        "HIGH",
+    ]
+
+    assert [
+        target.close_pct
+        for target
+        in plan.take_profit_targets
+    ] == [
+        Decimal("25"),
+        Decimal("35"),
+        Decimal("40"),
+    ]
+
+    assert len(plan.orders) == 9
+
+    assert (
+        plan.planned_max_loss_usdt
+        <= Decimal("68")
+    )
+
+
+def test_explicit_trader_tp_does_not_use_default_ladder() -> None:
+    plan = ExecutionPlanner().plan(
+        intent(),
+        policy(3),
+        context(),
+    )
+
+    assert len(
+        plan.take_profit_targets
+    ) == 1
+
+    assert (
+        plan.take_profit_targets[0].name
+        == "TRADER"
+    )
+
+    assert len(plan.orders) == 3
+
+
+def test_five_entries_with_default_ladder_make_fifteen_orders() -> None:
+    base = intent()
+
+    without_tp = TradingIntent(
+        source=base.source,
+        symbol=base.symbol,
+        side=base.side,
+        entry=base.entry,
+        stop_loss=base.stop_loss,
+        take_profit=None,
+        summary=base.summary,
+        confidence=base.confidence,
+    )
+
+    plan = ExecutionPlanner().plan(
+        without_tp,
+        policy(5),
+        context(),
+    )
+
+    assert len(plan.orders) == 15
+
+    assert (
+        plan.planned_max_loss_usdt
+        <= Decimal("68")
+    )

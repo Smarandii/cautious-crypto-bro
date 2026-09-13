@@ -147,15 +147,23 @@ class BybitDemoExecutor:
     ) -> tuple[str, ...]:
         self._sync_clock()
 
-        if any(
-            order.order_type
-            is ExecutionOrderType.MARKET
+        market_orders = [
+            order
             for order in plan.orders
-        ):
-            if len(plan.orders) != 1:
+            if (
+                order.order_type
+                is ExecutionOrderType.MARKET
+            )
+        ]
+
+        if market_orders:
+            if (
+                len(market_orders)
+                != len(plan.orders)
+            ):
                 raise TradeExecutionError(
-                    "Market execution plan "
-                    "must contain exactly one order"
+                    "Execution plan cannot mix "
+                    "MARKET and LIMIT orders"
                 )
 
             market_price = (
@@ -231,6 +239,12 @@ class BybitDemoExecutor:
             index
         ]
 
+        take_profit = (
+            order.take_profit
+            if order.take_profit is not None
+            else plan.take_profit
+        )
+
         params: dict[
             str,
             object,
@@ -252,7 +266,7 @@ class BybitDemoExecutor:
                 order.quantity
             ),
             "takeProfit": self._fmt(
-                plan.take_profit
+                take_profit
             ),
             "stopLoss": self._fmt(
                 plan.stop_loss
@@ -474,36 +488,50 @@ class BybitDemoExecutor:
         plan: ExecutionPlan,
         market_price: Decimal,
     ) -> None:
-        order = plan.orders[0]
-
-        if (
-            plan.side is Side.LONG
-            and not (
-                plan.stop_loss
-                < market_price
-                < plan.take_profit
-            )
-        ):
-            raise TradeExecutionError(
-                "Market price is outside "
-                "LONG stop/target geometry"
+        for order in plan.orders:
+            take_profit = (
+                order.take_profit
+                if order.take_profit is not None
+                else plan.take_profit
             )
 
-        if (
-            plan.side is Side.SHORT
-            and not (
-                plan.take_profit
-                < market_price
-                < plan.stop_loss
-            )
-        ):
-            raise TradeExecutionError(
-                "Market price is outside "
-                "SHORT stop/target geometry"
-            )
+            if (
+                plan.side is Side.LONG
+                and not (
+                    plan.stop_loss
+                    < market_price
+                    < take_profit
+                )
+            ):
+                raise TradeExecutionError(
+                    "Market price is outside "
+                    "LONG stop/target geometry"
+                )
+
+            if (
+                plan.side is Side.SHORT
+                and not (
+                    take_profit
+                    < market_price
+                    < plan.stop_loss
+                )
+            ):
+                raise TradeExecutionError(
+                    "Market price is outside "
+                    "SHORT stop/target geometry"
+                )
+
+        total_quantity = sum(
+            (
+                order.quantity
+                for order
+                in plan.orders
+            ),
+            Decimal("0"),
+        )
 
         current_risk = (
-            order.quantity
+            total_quantity
             * abs(
                 market_price
                 - plan.stop_loss

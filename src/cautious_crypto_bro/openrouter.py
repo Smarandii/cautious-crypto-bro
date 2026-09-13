@@ -39,15 +39,16 @@ Context rules:
 
 MVP rules:
 - only USDT linear/perpetual-style symbols
-- required: symbol, LONG/SHORT, entry semantics, stop loss, take profit
-- MARKET only if the author clearly says enter now/at market or clearly
-  states they entered now
+- required: symbol, LONG/SHORT, entry semantics, and stop loss
+- take profit is optional; if the trader does not provide one, return take_profit=null and let deterministic execution policy derive fallback targets
+- MARKET only if the author clearly says enter now/at market, clearly states they entered now, or an exchange position screenshot clearly shows that the position is already open
 - LIMIT when there is one explicit numeric entry price
 - RANGE when the author clearly defines an entry area/zone and both numeric
   boundaries are explicit and clearly attributable to that entry area
 - for RANGE set range_low to the lower numeric boundary and range_high to
   the higher numeric boundary; do not collapse a range into one price
-- exactly one stop and one target
+- exactly one stop; use at most one trader-provided target
+- never invent a trader target; missing take profit is allowed
 - values visible in an image may be used only when they are explicit
   and clearly legible
 - never estimate prices from chart geometry, line position, vague levels,
@@ -57,8 +58,7 @@ MVP rules:
   the schema requires one
 - if the post is commentary, an update to an older idea, incomplete,
   ambiguous, or contains multiple conflicting setups, actionable=false
-- if trader guidance says a required field is often supplied later and it
-  is missing from the current post, actionable=false
+- a missing take profit alone does not make an otherwise complete trade setup non-actionable
 - confidence is extraction confidence, not probability of profit
 - summary is one short sentence describing the trader's stated thesis
 """.strip()

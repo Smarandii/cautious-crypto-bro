@@ -44,6 +44,15 @@ async def main() -> None:
     )
 
     parser.add_argument(
+        "--omit-tp",
+        action="store_true",
+        help=(
+            "Leave trader TP empty so the "
+            "ExecutionPolicy fallback ladder is used."
+        ),
+    )
+
+    parser.add_argument(
         "--execute",
         action="store_true",
         help="Actually submit the demo order(s).",
@@ -121,7 +130,11 @@ async def main() -> None:
             side=side,
             entry=entry,
             stop_loss=float(stop_loss),
-            take_profit=float(take_profit),
+            take_profit=(
+                None
+                if args.omit_tp
+                else float(take_profit)
+            ),
             summary="Synthetic Bybit Demo integration test.",
             confidence=1.0,
         )
@@ -164,7 +177,8 @@ async def main() -> None:
                 f"  {index}: "
                 f"{order.order_type} "
                 f"price={price} "
-                f"qty={order.quantity}"
+                f"qty={order.quantity} "
+                f"tp={order.take_profit}"
             )
 
         print(f"SL:           {plan.stop_loss}")

@@ -25,6 +25,11 @@ class ExecutionOrderType(StrEnum):
     LIMIT = "LIMIT"
 
 
+class TakeProfitSource(StrEnum):
+    TRADER = "TRADER"
+    POLICY = "POLICY"
+
+
 class IntentStatus(StrEnum):
     PENDING = "PENDING"
     EXECUTING = "EXECUTING"
@@ -146,7 +151,7 @@ class ExtractedIntent(BaseModel):
     side: Side
     entry: Entry
     stop_loss: float = Field(gt=0)
-    take_profit: float = Field(gt=0)
+    take_profit: float | None = Field(default=None, gt=0)
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
 
@@ -187,7 +192,7 @@ class TradingIntent(BaseModel):
     side: Side
     entry: Entry
     stop_loss: float = Field(gt=0)
-    take_profit: float = Field(gt=0)
+    take_profit: float | None = Field(default=None, gt=0)
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
     created_at: datetime = Field(
@@ -216,6 +221,9 @@ class TradingIntent(BaseModel):
             )
 
         if self.entry.type is EntryType.MARKET:
+            if self.take_profit is None:
+                return self
+
             if (
                 self.side is Side.LONG
                 and not self.stop_loss
@@ -257,35 +265,127 @@ class TradingIntent(BaseModel):
             if value is not None
         )
 
-        if (
-            self.side is Side.LONG
-            and not (
-                self.stop_loss
-                < low
-                <= high
-                < self.take_profit
-            )
+        if self.side is Side.LONG:
+            if not self.stop_loss < low:
+                raise ValueError(
+                    "LONG requires stop_loss below entry/range"
+                )
+
+            if (
+                self.take_profit is not None
+                and not high < self.take_profit
+            ):
+                raise ValueError(
+                    "LONG requires take_profit above entry/range"
+                )
+
+        else:
+            if not high < self.stop_loss:
+                raise ValueError(
+                    "SHORT requires stop_loss above entry/range"
+                )
+
+            if (
+                self.take_profit is not None
+                and not self.take_profit < low
+            ):
+                raise ValueError(
+                    "SHORT requires take_profit below entry/range"
+                )
+
+        return self
+
+
+class ExitPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    minimum_reward_bps: Decimal = Field(
+        default=Decimal("20"),
+        ge=0,
+        le=1000,
+    )
+
+    basic_r_multiple: Decimal = Field(
+        default=Decimal("0.5"),
+        gt=0,
+    )
+    basic_close_pct: Decimal = Field(
+        default=Decimal("25"),
+        gt=0,
+        lt=100,
+    )
+
+    medium_r_multiple: Decimal = Field(
+        default=Decimal("1"),
+        gt=0,
+    )
+    medium_close_pct: Decimal = Field(
+        default=Decimal("35"),
+        gt=0,
+        lt=100,
+    )
+
+    high_r_multiple: Decimal = Field(
+        default=Decimal("2"),
+        gt=0,
+    )
+    high_close_pct: Decimal = Field(
+        default=Decimal("40"),
+        gt=0,
+        lt=100,
+    )
+
+    @model_validator(mode="after")
+    def validate_ladder(
+        self,
+    ) -> "ExitPolicy":
+        if not (
+            self.basic_r_multiple
+            < self.medium_r_multiple
+            < self.high_r_multiple
         ):
             raise ValueError(
-                "LONG requires "
-                "stop_loss < entry/range < take_profit"
+                "TP R-multiples must increase "
+                "basic < medium < high"
             )
 
-        if (
-            self.side is Side.SHORT
-            and not (
-                self.take_profit
-                < low
-                <= high
-                < self.stop_loss
-            )
-        ):
+        total = (
+            self.basic_close_pct
+            + self.medium_close_pct
+            + self.high_close_pct
+        )
+
+        if total != Decimal("100"):
             raise ValueError(
-                "SHORT requires "
-                "take_profit < entry/range < stop_loss"
+                "TP close percentages must total 100"
             )
 
         return self
+
+    @property
+    def rules(
+        self,
+    ) -> tuple[
+        tuple[str, Decimal, Decimal],
+        ...,
+    ]:
+        return (
+            (
+                "BASIC",
+                self.basic_r_multiple,
+                self.basic_close_pct,
+            ),
+            (
+                "MEDIUM",
+                self.medium_r_multiple,
+                self.medium_close_pct,
+            ),
+            (
+                "HIGH",
+                self.high_r_multiple,
+                self.high_close_pct,
+            ),
+        )
 
 
 class ExecutionPolicy(BaseModel):
@@ -300,6 +400,9 @@ class ExecutionPolicy(BaseModel):
         ge=1,
         le=10,
     )
+    exit_policy: ExitPolicy = Field(
+        default_factory=ExitPolicy,
+    )
 
     @property
     def risk_budget_usdt(self) -> Decimal:
@@ -308,6 +411,19 @@ class ExecutionPolicy(BaseModel):
             * self.risk_per_trade_pct
             / Decimal("100")
         )
+
+
+class PlannedTakeProfit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    price: Decimal = Field(gt=0)
+    close_pct: Decimal = Field(
+        gt=0,
+        le=100,
+    )
+    r_multiple: Decimal = Field(gt=0)
+
 
 
 class PlannedOrder(BaseModel):
@@ -320,6 +436,10 @@ class PlannedOrder(BaseModel):
         gt=0,
     )
     reference_price: Decimal = Field(gt=0)
+    take_profit: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
 
     @model_validator(mode="after")
     def validate_shape(
@@ -353,10 +473,17 @@ class ExecutionPlan(BaseModel):
         ...,
     ] = Field(
         min_length=1,
-        max_length=10,
+        max_length=20,
     )
     stop_loss: Decimal = Field(gt=0)
     take_profit: Decimal = Field(gt=0)
+    take_profit_targets: tuple[
+        PlannedTakeProfit,
+        ...,
+    ] = ()
+    take_profit_source: TakeProfitSource = (
+        TakeProfitSource.TRADER
+    )
     policy: ExecutionPolicy
     planned_max_loss_usdt: Decimal = Field(
         ge=0
@@ -379,5 +506,21 @@ class ExecutionPlan(BaseModel):
                 "Execution plan exceeds "
                 "configured risk budget"
             )
+
+        if self.take_profit_targets:
+            total_close_pct = sum(
+                (
+                    target.close_pct
+                    for target
+                    in self.take_profit_targets
+                ),
+                Decimal("0"),
+            )
+
+            if total_close_pct != Decimal("100"):
+                raise ValueError(
+                    "Planned TP close percentages "
+                    "must total 100"
+                )
 
         return self

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from cautious_crypto_bro.domain import (
     ExecutionPolicy,
+    ExitPolicy,
 )
 from cautious_crypto_bro.storage import (
     IntentStore,
@@ -25,28 +26,46 @@ async def main() -> None:
     parser.add_argument(
         "--capital-usdt",
         type=Decimal,
-        help=(
-            "Simulated trading capital "
-            "in USDT."
-        ),
     )
-
     parser.add_argument(
         "--risk-pct",
         type=Decimal,
-        help=(
-            "Maximum price-risk percentage "
-            "per trade, e.g. 1 or 2."
-        ),
     )
-
     parser.add_argument(
         "--range-orders",
         type=int,
-        help=(
-            "Number of evenly spaced "
-            "limit orders for RANGE entries."
-        ),
+    )
+
+    parser.add_argument(
+        "--minimum-reward-bps",
+        type=Decimal,
+    )
+
+    parser.add_argument(
+        "--basic-r",
+        type=Decimal,
+    )
+    parser.add_argument(
+        "--basic-close-pct",
+        type=Decimal,
+    )
+
+    parser.add_argument(
+        "--medium-r",
+        type=Decimal,
+    )
+    parser.add_argument(
+        "--medium-close-pct",
+        type=Decimal,
+    )
+
+    parser.add_argument(
+        "--high-r",
+        type=Decimal,
+    )
+    parser.add_argument(
+        "--high-close-pct",
+        type=Decimal,
     )
 
     args = parser.parse_args()
@@ -61,61 +80,97 @@ async def main() -> None:
     store = IntentStore(
         database_path
     )
-
     await store.initialize()
 
     current = (
         await store.get_execution_policy()
     )
 
-    if (
-        args.capital_usdt is None
-        and args.risk_pct is None
-        and args.range_orders is None
-    ):
+    supplied = any(
+        value is not None
+        for value in (
+            args.capital_usdt,
+            args.risk_pct,
+            args.range_orders,
+            args.minimum_reward_bps,
+            args.basic_r,
+            args.basic_close_pct,
+            args.medium_r,
+            args.medium_close_pct,
+            args.high_r,
+            args.high_close_pct,
+        )
+    )
+
+    if not supplied:
         print_policy(
             current
         )
         return
 
-    updated = (
-        ExecutionPolicy.model_validate(
-            {
-                "trading_capital_usdt": (
-                    args.capital_usdt
-                    if (
-                        args.capital_usdt
-                        is not None
-                    )
-                    else (
-                        current
-                        .trading_capital_usdt
-                    )
-                ),
-                "risk_per_trade_pct": (
-                    args.risk_pct
-                    if (
-                        args.risk_pct
-                        is not None
-                    )
-                    else (
-                        current
-                        .risk_per_trade_pct
-                    )
-                ),
-                "range_order_count": (
-                    args.range_orders
-                    if (
-                        args.range_orders
-                        is not None
-                    )
-                    else (
-                        current
-                        .range_order_count
-                    )
-                ),
-            }
-        )
+    current_exit = (
+        current.exit_policy
+    )
+
+    exit_policy = ExitPolicy(
+        minimum_reward_bps=(
+            args.minimum_reward_bps
+            if args.minimum_reward_bps
+            is not None
+            else current_exit.minimum_reward_bps
+        ),
+        basic_r_multiple=(
+            args.basic_r
+            if args.basic_r is not None
+            else current_exit.basic_r_multiple
+        ),
+        basic_close_pct=(
+            args.basic_close_pct
+            if args.basic_close_pct
+            is not None
+            else current_exit.basic_close_pct
+        ),
+        medium_r_multiple=(
+            args.medium_r
+            if args.medium_r is not None
+            else current_exit.medium_r_multiple
+        ),
+        medium_close_pct=(
+            args.medium_close_pct
+            if args.medium_close_pct
+            is not None
+            else current_exit.medium_close_pct
+        ),
+        high_r_multiple=(
+            args.high_r
+            if args.high_r is not None
+            else current_exit.high_r_multiple
+        ),
+        high_close_pct=(
+            args.high_close_pct
+            if args.high_close_pct
+            is not None
+            else current_exit.high_close_pct
+        ),
+    )
+
+    updated = ExecutionPolicy(
+        trading_capital_usdt=(
+            args.capital_usdt
+            if args.capital_usdt is not None
+            else current.trading_capital_usdt
+        ),
+        risk_per_trade_pct=(
+            args.risk_pct
+            if args.risk_pct is not None
+            else current.risk_per_trade_pct
+        ),
+        range_order_count=(
+            args.range_orders
+            if args.range_orders is not None
+            else current.range_order_count
+        ),
+        exit_policy=exit_policy,
     )
 
     await store.set_execution_policy(
@@ -125,7 +180,6 @@ async def main() -> None:
     print(
         "Updated execution policy:"
     )
-
     print_policy(
         updated
     )
@@ -134,6 +188,10 @@ async def main() -> None:
 def print_policy(
     policy: ExecutionPolicy,
 ) -> None:
+    exit_policy = (
+        policy.exit_policy
+    )
+
     print(
         "capital_usdt="
         f"{policy.trading_capital_usdt}"
@@ -149,6 +207,27 @@ def print_policy(
     print(
         "risk_budget_usdt="
         f"{policy.risk_budget_usdt}"
+    )
+
+    print(
+        "minimum_reward_bps="
+        f"{exit_policy.minimum_reward_bps}"
+    )
+
+    print(
+        "basic="
+        f"{exit_policy.basic_r_multiple}R/"
+        f"{exit_policy.basic_close_pct}%"
+    )
+    print(
+        "medium="
+        f"{exit_policy.medium_r_multiple}R/"
+        f"{exit_policy.medium_close_pct}%"
+    )
+    print(
+        "high="
+        f"{exit_policy.high_r_multiple}R/"
+        f"{exit_policy.high_close_pct}%"
     )
 
 
