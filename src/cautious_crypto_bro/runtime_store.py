@@ -28,6 +28,24 @@ class ProviderCooldownStore(
         ...
 
 
+class OpenRouterEvaluationCache(
+    Protocol
+):
+    async def get_openrouter_evaluation(
+        self,
+        fingerprint: str,
+    ) -> str | None:
+        ...
+
+    async def cache_openrouter_evaluation(
+        self,
+        fingerprint: str,
+        payload_json: str,
+        duration_seconds: int,
+    ) -> None:
+        ...
+
+
 class RedisRuntimeStore:
     def __init__(
         self,
@@ -100,6 +118,9 @@ class RedisRuntimeStore:
         self,
     ) -> None:
         await self._redis.aclose()
+
+        if self._pool is not None:
+            await self._pool.aclose()
 
     async def get_openrouter_provider_cooldowns(
         self,
@@ -183,6 +204,58 @@ class RedisRuntimeStore:
             ),
             payload,
             ex=duration_seconds,
+        )
+
+    async def get_openrouter_evaluation(
+        self,
+        fingerprint: str,
+    ) -> str | None:
+        return await self._redis.get(
+            self._evaluation_key(
+                fingerprint
+            )
+        )
+
+    async def cache_openrouter_evaluation(
+        self,
+        fingerprint: str,
+        payload_json: str,
+        duration_seconds: int,
+    ) -> None:
+        if duration_seconds <= 0:
+            raise ValueError(
+                "Evaluation cache duration "
+                "must be positive"
+            )
+
+        await self._redis.set(
+            self._evaluation_key(
+                fingerprint
+            ),
+            payload_json,
+            ex=duration_seconds,
+        )
+
+    def _evaluation_key(
+        self,
+        fingerprint: str,
+    ) -> str:
+        fingerprint = (
+            fingerprint.strip()
+            .casefold()
+        )
+
+        if not fingerprint:
+            raise ValueError(
+                "Evaluation fingerprint "
+                "must not be empty"
+            )
+
+        return (
+            f"{self._key_prefix}:"
+            "openrouter:"
+            "evaluation:"
+            f"{fingerprint}"
         )
 
     def _provider_key_prefix(

@@ -55,7 +55,13 @@ async def main() -> int:
     )
 
     store = RedisRuntimeStore(
-        settings.redis_url
+        settings.redis_url,
+        max_connections=(
+            settings.redis_max_connections
+        ),
+        pool_timeout_seconds=(
+            settings.redis_pool_timeout_seconds
+        ),
     )
 
     redis = Redis.from_url(
@@ -78,12 +84,27 @@ async def main() -> int:
     )
 
     try:
+        semaphore = asyncio.Semaphore(
+            args.concurrency
+        )
+
+        async def write_cooldown(
+            provider: str,
+        ) -> None:
+            async with semaphore:
+                await (
+                    store
+                    .cooldown_openrouter_provider(
+                        provider,
+                        "stress test",
+                        60,
+                    )
+                )
+
         await asyncio.gather(
             *(
-                store.cooldown_openrouter_provider(
-                    provider,
-                    "stress test",
-                    60,
+                write_cooldown(
+                    provider
                 )
                 for provider in providers
             )

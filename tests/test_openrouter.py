@@ -487,3 +487,225 @@ def test_invalid_output_cools_down_named_provider() -> None:
     asyncio.run(
         run()
     )
+
+
+class FakeEvaluationCache:
+    def __init__(self) -> None:
+        self.values = {}
+        self.writes = []
+
+    async def get_openrouter_evaluation(
+        self,
+        fingerprint,
+    ):
+        return self.values.get(
+            fingerprint
+        )
+
+    async def cache_openrouter_evaluation(
+        self,
+        fingerprint,
+        payload_json,
+        duration_seconds,
+    ):
+        self.values[
+            fingerprint
+        ] = payload_json
+
+        self.writes.append(
+            (
+                fingerprint,
+                payload_json,
+                duration_seconds,
+            )
+        )
+
+
+def test_valid_evaluation_is_reused_from_cache() -> None:
+    import asyncio
+    import json
+
+    import httpx
+
+    from cautious_crypto_bro.openrouter import (
+        OpenRouterIntentExtractor,
+    )
+
+    async def run() -> None:
+        calls = 0
+        cache = FakeEvaluationCache()
+
+        def handler(
+            request: httpx.Request,
+        ) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+
+            return httpx.Response(
+                200,
+                json={
+                    "provider": "Healthy",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": (
+                                    json.dumps(
+                                        {
+                                            "actionable": False,
+                                            "reason": "commentary",
+                                            "intent": None,
+                                        }
+                                    )
+                                ),
+                            },
+                        }
+                    ],
+                },
+            )
+
+        extractor = OpenRouterIntentExtractor(
+            api_key="test",
+            model="test/model",
+            base_url=(
+                "https://openrouter.test"
+            ),
+            inference_timeout_seconds=5,
+            max_attempts=1,
+            evaluation_cache=cache,
+            evaluation_cache_seconds=21600,
+        )
+
+        await extractor._client.aclose()
+
+        extractor._client = (
+            httpx.AsyncClient(
+                base_url=(
+                    "https://openrouter.test"
+                ),
+                transport=(
+                    httpx.MockTransport(
+                        handler
+                    )
+                ),
+            )
+        )
+
+        try:
+            item = IncomingPost(
+                source=source()
+            )
+
+            first = await extractor.extract(
+                item
+            )
+
+            second = await extractor.extract(
+                item
+            )
+        finally:
+            await extractor.close()
+
+        assert first is None
+        assert second is None
+        assert calls == 1
+        assert len(cache.writes) == 1
+        assert cache.writes[0][2] == 21600
+
+    asyncio.run(
+        run()
+    )
+
+
+def test_guidance_change_invalidates_evaluation_cache() -> None:
+    import asyncio
+    import json
+
+    import httpx
+
+    from cautious_crypto_bro.openrouter import (
+        OpenRouterIntentExtractor,
+    )
+
+    async def run() -> None:
+        calls = 0
+        cache = FakeEvaluationCache()
+
+        def handler(
+            request: httpx.Request,
+        ) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+
+            return httpx.Response(
+                200,
+                json={
+                    "provider": "Healthy",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": (
+                                    json.dumps(
+                                        {
+                                            "actionable": False,
+                                            "reason": "commentary",
+                                            "intent": None,
+                                        }
+                                    )
+                                ),
+                            },
+                        }
+                    ],
+                },
+            )
+
+        extractor = OpenRouterIntentExtractor(
+            api_key="test",
+            model="test/model",
+            base_url=(
+                "https://openrouter.test"
+            ),
+            inference_timeout_seconds=5,
+            max_attempts=1,
+            evaluation_cache=cache,
+        )
+
+        await extractor._client.aclose()
+
+        extractor._client = (
+            httpx.AsyncClient(
+                base_url=(
+                    "https://openrouter.test"
+                ),
+                transport=(
+                    httpx.MockTransport(
+                        handler
+                    )
+                ),
+            )
+        )
+
+        try:
+            item = IncomingPost(
+                source=source()
+            )
+
+            await extractor.extract(
+                item,
+                global_guidance="rule A",
+            )
+
+            await extractor.extract(
+                item,
+                global_guidance="rule B",
+            )
+        finally:
+            await extractor.close()
+
+        assert calls == 2
+        assert len(cache.writes) == 2
+
+    asyncio.run(
+        run()
+    )

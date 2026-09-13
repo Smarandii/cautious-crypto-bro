@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import aiosqlite
 
@@ -42,6 +42,14 @@ class IntentStore:
                     channel_id INTEGER NOT NULL,
                     message_id INTEGER NOT NULL,
                     payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL
+                        DEFAULT 'COMPLETED',
+                    attempt_count INTEGER NOT NULL
+                        DEFAULT 1,
+                    last_error TEXT,
+                    claim_token TEXT,
+                    updated_at TEXT NOT NULL
+                        DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (channel_id, message_id)
                 );
 
@@ -155,36 +163,233 @@ class IntentStore:
                 """
             )
 
+            cursor = await db.execute(
+                "PRAGMA table_info(source_messages)"
+            )
+
+            source_columns = {
+                row[1]
+                for row
+                in await cursor.fetchall()
+            }
+
+            if "status" not in source_columns:
+                await db.execute(
+                    """
+                    ALTER TABLE source_messages
+                    ADD COLUMN status TEXT NOT NULL
+                    DEFAULT 'COMPLETED'
+                    """
+                )
+
+            if "attempt_count" not in source_columns:
+                await db.execute(
+                    """
+                    ALTER TABLE source_messages
+                    ADD COLUMN attempt_count INTEGER
+                    NOT NULL DEFAULT 1
+                    """
+                )
+
+            if "last_error" not in source_columns:
+                await db.execute(
+                    """
+                    ALTER TABLE source_messages
+                    ADD COLUMN last_error TEXT
+                    """
+                )
+
+            if "claim_token" not in source_columns:
+                await db.execute(
+                    """
+                    ALTER TABLE source_messages
+                    ADD COLUMN claim_token TEXT
+                    """
+                )
+
+            if "updated_at" not in source_columns:
+                await db.execute(
+                    """
+                    ALTER TABLE source_messages
+                    ADD COLUMN updated_at TEXT
+                    NOT NULL DEFAULT ''
+                    """
+                )
+
+            await db.execute(
+                """
+                UPDATE source_messages
+                SET updated_at = CURRENT_TIMESTAMP
+                WHERE updated_at = ''
+                """
+            )
+
             await db.commit()
 
-    async def save_source(
+    async def claim_source(
         self,
         source: SourceMessage,
+        *,
+        lease_seconds: int,
+    ) -> str | None:
+        if lease_seconds <= 0:
+            raise ValueError(
+                "Source processing lease "
+                "must be positive"
+            )
+
+        claim_token = uuid4().hex
+
+        async with aiosqlite.connect(
+            self._database_path
+        ) as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO source_messages(
+                    channel_id,
+                    message_id,
+                    payload_json,
+                    status,
+                    attempt_count,
+                    last_error,
+                    claim_token,
+                    updated_at
+                )
+                VALUES (
+                    ?,
+                    ?,
+                    ?,
+                    'PROCESSING',
+                    1,
+                    NULL,
+                    ?,
+                    CURRENT_TIMESTAMP
+                )
+                ON CONFLICT(
+                    channel_id,
+                    message_id
+                )
+                DO UPDATE SET
+                    payload_json =
+                        excluded.payload_json,
+                    status = 'PROCESSING',
+                    attempt_count =
+                        source_messages.attempt_count
+                        + 1,
+                    last_error = NULL,
+                    claim_token =
+                        excluded.claim_token,
+                    updated_at =
+                        CURRENT_TIMESTAMP
+                WHERE
+                    source_messages.status =
+                        'FAILED'
+                    OR (
+                        source_messages.status =
+                            'PROCESSING'
+                        AND
+                        source_messages.updated_at
+                            <= datetime(
+                                'now',
+                                ?
+                            )
+                    )
+                """,
+                (
+                    source.channel_id,
+                    source.message_id,
+                    source.model_dump_json(),
+                    claim_token,
+                    (
+                        f"-{lease_seconds} "
+                        "seconds"
+                    ),
+                ),
+            )
+
+            await db.commit()
+
+            if cursor.rowcount != 1:
+                return None
+
+            return claim_token
+
+    async def mark_source_completed(
+        self,
+        source: SourceMessage,
+        claim_token: str,
     ) -> bool:
         async with aiosqlite.connect(
             self._database_path
         ) as db:
             cursor = await db.execute(
                 """
-                INSERT OR IGNORE INTO source_messages(
-                    channel_id,
-                    message_id,
-                    payload_json
-                )
-                VALUES (?, ?, ?)
+                UPDATE source_messages
+                SET
+                    status = 'COMPLETED',
+                    last_error = NULL,
+                    claim_token = NULL,
+                    updated_at =
+                        CURRENT_TIMESTAMP
+                WHERE
+                    channel_id = ?
+                    AND message_id = ?
+                    AND status = 'PROCESSING'
+                    AND claim_token = ?
                 """,
                 (
                     source.channel_id,
                     source.message_id,
-                    source.model_dump_json(),
+                    claim_token,
                 ),
             )
 
             await db.commit()
             return cursor.rowcount == 1
 
-    async def create_intent_with_plan(
+    async def mark_source_failed(
         self,
+        source: SourceMessage,
+        claim_token: str,
+        error: str,
+    ) -> bool:
+        error = (
+            error.strip()
+            or "unknown processing failure"
+        )[:2000]
+
+        async with aiosqlite.connect(
+            self._database_path
+        ) as db:
+            cursor = await db.execute(
+                """
+                UPDATE source_messages
+                SET
+                    status = 'FAILED',
+                    last_error = ?,
+                    claim_token = NULL,
+                    updated_at =
+                        CURRENT_TIMESTAMP
+                WHERE
+                    channel_id = ?
+                    AND message_id = ?
+                    AND status = 'PROCESSING'
+                    AND claim_token = ?
+                """,
+                (
+                    error,
+                    source.channel_id,
+                    source.message_id,
+                    claim_token,
+                ),
+            )
+
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def _insert_intent_with_plan(
+        self,
+        db: aiosqlite.Connection,
         intent: TradingIntent,
         plan: ExecutionPlan,
     ) -> None:
@@ -196,50 +401,139 @@ class IntentStore:
 
         now = intent.created_at.isoformat()
 
+        await db.execute(
+            """
+            INSERT INTO intents(
+                intent_id,
+                channel_id,
+                message_id,
+                payload_json,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(intent.intent_id),
+                intent.source.channel_id,
+                intent.source.message_id,
+                intent.model_dump_json(),
+                intent.status.value,
+                now,
+                now,
+            ),
+        )
+
+        await db.execute(
+            """
+            INSERT INTO execution_plans(
+                intent_id,
+                payload_json,
+                created_at
+            )
+            VALUES (?, ?, ?)
+            """,
+            (
+                str(intent.intent_id),
+                plan.model_dump_json(),
+                plan.created_at.isoformat(),
+            ),
+        )
+
+    async def create_intent_with_plan(
+        self,
+        intent: TradingIntent,
+        plan: ExecutionPlan,
+    ) -> None:
+        async with aiosqlite.connect(
+            self._database_path
+        ) as db:
+            await self._insert_intent_with_plan(
+                db,
+                intent,
+                plan,
+            )
+            await db.commit()
+
+    async def create_intent_with_plan_and_complete_source(
+        self,
+        intent: TradingIntent,
+        plan: ExecutionPlan,
+        claim_token: str,
+    ) -> bool:
+        source = intent.source
+
         async with aiosqlite.connect(
             self._database_path
         ) as db:
             await db.execute(
-                """
-                INSERT INTO intents(
-                    intent_id,
-                    channel_id,
-                    message_id,
-                    payload_json,
-                    status,
-                    created_at,
-                    updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(intent.intent_id),
-                    intent.source.channel_id,
-                    intent.source.message_id,
-                    intent.model_dump_json(),
-                    intent.status.value,
-                    now,
-                    now,
-                ),
+                "BEGIN IMMEDIATE"
             )
 
-            await db.execute(
-                """
-                INSERT INTO execution_plans(
-                    intent_id,
-                    payload_json,
-                    created_at
+            try:
+                cursor = await db.execute(
+                    """
+                    SELECT 1
+                    FROM source_messages
+                    WHERE
+                        channel_id = ?
+                        AND message_id = ?
+                        AND status = 'PROCESSING'
+                        AND claim_token = ?
+                    """,
+                    (
+                        source.channel_id,
+                        source.message_id,
+                        claim_token,
+                    ),
                 )
-                VALUES (?, ?, ?)
-                """,
-                (
-                    str(intent.intent_id),
-                    plan.model_dump_json(),
-                    plan.created_at.isoformat(),
-                ),
-            )
 
-            await db.commit()
+                if (
+                    await cursor.fetchone()
+                    is None
+                ):
+                    await db.rollback()
+                    return False
+
+                await self._insert_intent_with_plan(
+                    db,
+                    intent,
+                    plan,
+                )
+
+                cursor = await db.execute(
+                    """
+                    UPDATE source_messages
+                    SET
+                        status = 'COMPLETED',
+                        last_error = NULL,
+                        claim_token = NULL,
+                        updated_at =
+                            CURRENT_TIMESTAMP
+                    WHERE
+                        channel_id = ?
+                        AND message_id = ?
+                        AND status = 'PROCESSING'
+                        AND claim_token = ?
+                    """,
+                    (
+                        source.channel_id,
+                        source.message_id,
+                        claim_token,
+                    ),
+                )
+
+                if cursor.rowcount != 1:
+                    await db.rollback()
+                    return False
+
+                await db.commit()
+                return True
+
+            except Exception:
+                await db.rollback()
+                raise
 
     async def get_intent(
         self,
