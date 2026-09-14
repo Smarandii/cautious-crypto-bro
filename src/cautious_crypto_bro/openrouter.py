@@ -435,7 +435,8 @@ class OpenRouterIntentExtractor:
             return
 
         logger.warning(
-            "OpenRouter provider %s cooled down for %.1f hour(s): %s",
+            "OpenRouter provider %s excluded after failure "
+            "(cooldown policy %.1f hour(s)): %s",
             provider,
             (self._provider_cooldown_seconds / 3600),
             failure,
@@ -712,16 +713,19 @@ class OpenRouterIntentExtractor:
                 message = "OpenRouter returned invalid structured output"
 
                 if response_provider is not None:
-                    failure = OpenRouterProviderFailure(
+                    provider = response_provider.strip().casefold()
+
+                    if provider:
+                        # Schema non-conformance may be
+                        # model/provider-specific for this
+                        # particular request. Exclude it
+                        # from this extraction retry only;
+                        # do not poison the global pool.
+                        ignored_providers.add(provider)
+
+                    last_error = OpenRouterProviderFailure(
                         response_provider,
                         message,
-                    )
-
-                    last_error = failure
-
-                    await self._cooldown_provider(
-                        failure,
-                        ignored_providers,
                     )
                 else:
                     last_error = RuntimeError(message)
