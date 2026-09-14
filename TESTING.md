@@ -7,7 +7,10 @@ Run commands from the repository root.
 ```bash
 uv run ruff format --check .
 uv run ruff check .
+uv run pyright
 uv run pytest
+uv run pre-commit run --all-files
+git diff --check
 ```
 
 Docker test equivalent:
@@ -40,6 +43,11 @@ pyapp scripts/replay_telegram_post.py '<telegram-post-url>' --send-approval
 Replay does not mark the source as seen. Historical MARKET signals may fail
 planning because planning uses current Bybit market data.
 
+Lifecycle replay output is split into OPEN trading intents and position actions.
+REDUCE/CLOSE are executable only when the current Telegram text/caption contains
+explicit destructive-action evidence. Vague reductions without a deterministic
+amount remain non-actionable.
+
 ## Audit recent signals
 
 Review all configured Telegram sources over a recent window without creating
@@ -59,6 +67,9 @@ docker compose run --rm -T \
 ```
 
 Use `--cache-only` to avoid fresh OpenRouter calls.
+
+The audit bundle includes both raw model extraction and derived executable
+outputs, including `derived_open_intents` and `derived_position_actions`.
 
 ## Configuration
 

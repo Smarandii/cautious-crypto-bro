@@ -7,7 +7,9 @@ Telegram text / images / albums
         ↓
 OpenRouter signal extraction
         ↓
-deterministic risk + execution plan
+OPEN / REDUCE / CLOSE normalization
+        ↓
+deterministic risk + lifecycle execution
         ↓
 account snapshot + Telegram approval
         ↓
@@ -15,8 +17,14 @@ Bybit Demo
 ```
 
 The LLM interprets trader posts. Deterministic code controls sizing, entries,
-stops, and fallback take-profit ladders. Nothing is executed without human
-approval.
+stops, fallback take-profit ladders, lifecycle authorization, and reduction
+percentages. Nothing is executed without human approval.
+
+REDUCE and CLOSE are account-wide actions on the current Bybit position for the
+symbol. They are not attributed to a specific source channel. A destructive
+action must be explicitly authorized by the current Telegram text/caption;
+images may identify the symbol or side but cannot authorize a close by
+themselves.
 
 > This project currently supports Bybit Demo only. Do not use production API
 > keys.
@@ -91,7 +99,8 @@ Telegram posts.
 When it finds an executable signal, it sends:
 
 1. current Bybit account state;
-2. the extracted trade and deterministic execution plan;
+2. either an OPEN trade with its deterministic execution plan or an account-wide
+   REDUCE/CLOSE position action;
 3. **Execute** / **Skip** buttons.
 
 ## Development
@@ -103,16 +112,17 @@ uv sync --python 3.12 --group dev
 uv run pre-commit install
 ```
 
-Run the same quality checks used by CI:
+Run the same main quality checks used by CI:
 
 ```bash
 uv run ruff format --check .
 uv run ruff check .
+uv run pyright
 uv run pytest
 ```
 
-GitHub Actions runs formatting, linting, and unit tests on pushes and pull
-requests.
+GitHub Actions also validates the Dockerfile and runtime image on pushes and
+pull requests.
 
 Useful replay, audit, diagnostics, and smoke-test commands are in
 [TESTING.md](TESTING.md).
@@ -126,3 +136,10 @@ Current roadmap: [TODO.md](TODO.md).
 - LLM output never directly places an order.
 - Position sizing and execution are deterministic.
 - Missing execution-critical values are never invented.
+- REDUCE/CLOSE require explicit evidence in the current Telegram text/caption.
+- Images may supply symbol/side context but cannot independently authorize a
+  destructive position action.
+- REDUCE percentages are derived deterministically from the trader's caption
+  evidence instead of trusting the model's numeric convention.
+- Lifecycle execution uses reduce-only orders and cancels stale CCB-created
+  entry orders for the symbol before reducing or closing the current position.
