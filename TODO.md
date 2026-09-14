@@ -1,23 +1,13 @@
 # Roadmap
 
-## Multi-intent, higher-recall extraction
+## Performance accounting
 
-Allow one Telegram post to produce multiple independent trade candidates.
+Persist fills, exits, and fees so realized signal performance can be
+reconstructed reliably.
 
-- Prefer surfacing supported candidates over rejecting an entire mixed post.
-- Existing-position screenshots should produce MARKET, not LIMIT at historical
-  average entry.
-- Updates/commentary must not automatically disqualify an otherwise complete
-  trade.
-- Keep execution-critical values strict: never invent symbol, side, entry, or
-  stop.
-
-## Trade lifecycle
-
-Add OPEN / REDUCE / CLOSE handling for trader follow-up messages.
-
-Persist fills, exits, and fees so per-channel performance can be reconstructed
-when same-symbol signals overlap in the shared Bybit position.
+The Bybit position is shared and lifecycle actions are account-wide by symbol,
+so performance reporting must not assume that a live position belongs to one
+source channel without an explicit attribution model.
 
 ## MENSA visual structure
 
