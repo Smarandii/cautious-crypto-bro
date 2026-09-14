@@ -147,6 +147,10 @@ class ExtractedIntent(BaseModel):
     symbol: str
     side: str | None = None
 
+    # Observed provider alias. Domain conversion still
+    # normalizes this into the strict Side enum.
+    direction: str | None = None
+
     # Providers/models have emitted both:
     #   "entry": "MARKET"
     # and:
@@ -181,6 +185,15 @@ class ExtractedPositionAction(BaseModel):
     # natural tendency to emit side instead.
     expected_side: str | None = None
     side: str | None = None
+
+    # Exact verbatim evidence from the CURRENT Telegram
+    # post text/caption authorizing REDUCE/CLOSE.
+    # Images may supply symbol/side context but cannot
+    # independently authorize destructive actions.
+    evidence_text: str | None = Field(
+        default=None,
+        max_length=300,
+    )
 
     # These fields are intentionally tolerated because
     # models sometimes copy OPEN-position information

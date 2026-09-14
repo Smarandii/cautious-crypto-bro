@@ -928,6 +928,16 @@ async def main() -> int:
 
                             record["derived_actionable"] = executable.actionable
 
+                            record["derived_open_intents"] = [
+                                json.loads(intent.model_dump_json())
+                                for intent in executable.open_intents
+                            ]
+
+                            record["derived_position_actions"] = [
+                                json.loads(action.model_dump_json())
+                                for action in executable.position_actions
+                            ]
+
                             if executable.actionable:
                                 record["category"] = "ACTIONABLE"
                             else:
