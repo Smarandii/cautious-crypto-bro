@@ -231,6 +231,7 @@ async def current_app_state(
     result: dict[str, Any] = {
         "source_processing": None,
         "persisted_intents": [],
+        "persisted_position_actions": [],
     }
 
     async with aiosqlite.connect(database_path) as db:
@@ -286,6 +287,37 @@ async def current_app_state(
         result["persisted_intents"] = [
             {
                 "intent_id": row["intent_id"],
+                "status": row["status"],
+                "error": row["error"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+        cursor = await db.execute(
+            """
+            SELECT
+                action_id,
+                status,
+                error,
+                created_at
+            FROM position_actions
+            WHERE
+                channel_id = ?
+                AND message_id = ?
+            ORDER BY created_at
+            """,
+            (
+                channel_id,
+                message_id,
+            ),
+        )
+
+        rows = await cursor.fetchall()
+
+        result["persisted_position_actions"] = [
+            {
+                "action_id": row["action_id"],
                 "status": row["status"],
                 "error": row["error"],
                 "created_at": row["created_at"],
@@ -572,6 +604,22 @@ def write_report(
                             "```",
                         ]
                     )
+
+                if evaluation.get("position_actions"):
+                    lines.extend(
+                        [
+                            "",
+                            "**Position actions**",
+                            "",
+                            "```json",
+                            json.dumps(
+                                evaluation["position_actions"],
+                                ensure_ascii=False,
+                                indent=2,
+                            ),
+                            "```",
+                        ]
+                    )
             else:
                 lines.append("- No validated OpenRouter evaluation")
 
@@ -648,6 +696,7 @@ async def main() -> int:
     cutoff = generated_at - timedelta(hours=args.hours)
 
     store = IntentStore(settings.database_path)
+    await store.initialize()
 
     runtime_store = RedisRuntimeStore(
         settings.redis_url,
@@ -871,7 +920,7 @@ async def main() -> int:
                                 extraction.model_dump_json()
                             )
 
-                            if extraction.actionable and extraction.intents:
+                            if extraction.actionable:
                                 record["category"] = "ACTIONABLE"
                             else:
                                 record["category"] = "NON_ACTIONABLE"

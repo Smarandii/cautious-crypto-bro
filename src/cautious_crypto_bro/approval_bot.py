@@ -39,6 +39,8 @@ from .domain import (
     ExecutionOrderType,
     ExecutionPlan,
     IntentStatus,
+    PositionActionIntent,
+    PositionActionType,
     Side,
     TakeProfitSource,
     TradingIntent,
@@ -61,6 +63,14 @@ class IntentAction(
 ):
     action: str
     intent_id: str
+
+
+class PositionActionCallback(
+    CallbackData,
+    prefix="position",
+):
+    action: str
+    action_id: str
 
 
 class ApprovalBot:
@@ -91,6 +101,14 @@ class ApprovalBot:
         )
 
         self._router.callback_query(IntentAction.filter(F.action == "skip"))(self._skip)
+
+        self._router.callback_query(
+            PositionActionCallback.filter(F.action == "execute")
+        )(self._execute_position_action)
+
+        self._router.callback_query(PositionActionCallback.filter(F.action == "skip"))(
+            self._skip_position_action
+        )
 
     async def start(self) -> None:
         await self._bot.delete_webhook(drop_pending_updates=False)
@@ -166,6 +184,72 @@ class ApprovalBot:
                 plan,
                 exposure=exposure,
                 exposure_error=exposure_error,
+            ),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=keyboard,
+        )
+
+    async def send_position_action(
+        self,
+        action: PositionActionIntent,
+        *,
+        account_state: AccountStateSummary | None = None,
+        account_state_error: str | None = None,
+        send_account_state: bool = True,
+    ) -> None:
+        if send_account_state:
+            try:
+                await self._bot.send_message(
+                    chat_id=self._approval_chat_id,
+                    text=self._render_account_state(
+                        account_state,
+                        error=account_state_error,
+                    ),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                logger.exception("Failed to send account snapshot")
+
+        execute_label = (
+            "Execute close"
+            if action.action is PositionActionType.CLOSE
+            else "Execute reduction"
+        )
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=execute_label,
+                        callback_data=(
+                            PositionActionCallback(
+                                action="execute",
+                                action_id=str(action.action_id),
+                            ).pack()
+                        ),
+                        style="danger",
+                    ),
+                    InlineKeyboardButton(
+                        text="Skip",
+                        callback_data=(
+                            PositionActionCallback(
+                                action="skip",
+                                action_id=str(action.action_id),
+                            ).pack()
+                        ),
+                    ),
+                ]
+            ]
+        )
+
+        await self._bot.send_message(
+            chat_id=self._approval_chat_id,
+            text=self._render_position_action(
+                action,
+                account_state=account_state,
+                account_state_error=(account_state_error),
             ),
             parse_mode="HTML",
             disable_web_page_preview=True,
@@ -271,6 +355,159 @@ class ApprovalBot:
             (f"\n\n<b>EXECUTED ON BYBIT DEMO</b>\n{ids_text}"),
         )
 
+    async def _execute_position_action(
+        self,
+        callback: CallbackQuery,
+        callback_data: PositionActionCallback,
+    ) -> None:
+        if callback.from_user.id != self._approver_user_id:
+            await callback.answer(
+                "Not authorized",
+                show_alert=True,
+            )
+            return
+
+        action_id = UUID(callback_data.action_id)
+
+        action = await self._store.get_position_action(action_id)
+
+        if action is None:
+            await callback.answer(
+                "Position action no longer exists",
+                show_alert=True,
+            )
+            return
+
+        if action.status is not IntentStatus.PENDING:
+            await callback.answer(
+                f"Already {action.status.value.lower()}",
+                show_alert=True,
+            )
+            return
+
+        age = (datetime.now(UTC) - action.created_at).total_seconds()
+
+        if age > self._max_age_seconds:
+            await callback.answer(
+                f"Position action is stale ({int(age)}s). Not executed.",
+                show_alert=True,
+            )
+            return
+
+        claimed = await self._store.claim_position_action_for_execution(
+            action_id,
+            callback.from_user.id,
+        )
+
+        if not claimed:
+            await callback.answer(
+                "Position action was already handled",
+                show_alert=True,
+            )
+            return
+
+        await callback.answer("Executing on Bybit Demo…")
+
+        try:
+            result = await self._executor.execute_position_action(action)
+
+        except Exception as exc:
+            logger.exception(
+                "Position action execution failed for %s",
+                action_id,
+            )
+
+            await self._store.mark_position_action_failed(
+                action_id,
+                str(exc),
+            )
+
+            await self._edit_position_action_card(
+                callback,
+                action,
+                (f"\n\n<b>FAILED</b>\n<code>{html.escape(str(exc))}</code>"),
+            )
+            return
+
+        await self._store.mark_position_action_executed(
+            action_id,
+            result.order_id,
+        )
+
+        suffix = (
+            "\n\n"
+            "<b>EXECUTED ON BYBIT DEMO</b>\n"
+            "Order: "
+            f"<code>{html.escape(result.order_id)}</code>\n"
+            "Position before: "
+            f"<b>{result.position_side.value} "
+            f"{self._fmt_decimal(result.position_size_before)}</b>"
+        )
+
+        if result.submitted_quantity is None:
+            suffix += "\nSubmitted: <b>full reduce-only close</b>"
+        else:
+            suffix += (
+                "\nSubmitted reduction: "
+                f"<b>"
+                f"{self._fmt_decimal(result.submitted_quantity)}"
+                f"</b>"
+            )
+
+        if result.cancelled_entry_orders:
+            suffix += (
+                f"\nCancelled CCB entry orders: <b>{result.cancelled_entry_orders}</b>"
+            )
+
+        await self._edit_position_action_card(
+            callback,
+            action,
+            suffix,
+        )
+
+    async def _skip_position_action(
+        self,
+        callback: CallbackQuery,
+        callback_data: PositionActionCallback,
+    ) -> None:
+        if callback.from_user.id != self._approver_user_id:
+            await callback.answer(
+                "Not authorized",
+                show_alert=True,
+            )
+            return
+
+        action_id = UUID(callback_data.action_id)
+
+        action = await self._store.get_position_action(action_id)
+
+        if action is None:
+            await callback.answer(
+                "Position action no longer exists",
+                show_alert=True,
+            )
+            return
+
+        skipped = await self._store.mark_position_action_skipped(
+            action_id,
+            callback.from_user.id,
+        )
+
+        if not skipped:
+            await callback.answer(
+                "Position action was already handled",
+                show_alert=True,
+            )
+            return
+
+        await callback.answer("Skipped")
+
+        await self._edit_position_action_card(
+            callback,
+            action,
+            "\n\n<b>SKIPPED</b>",
+        )
+
     async def _skip(
         self,
         callback: CallbackQuery,
@@ -342,6 +579,142 @@ class ApprovalBot:
                 disable_web_page_preview=True,
                 reply_markup=None,
             )
+
+    async def _edit_position_action_card(
+        self,
+        callback: CallbackQuery,
+        action: PositionActionIntent,
+        suffix: str,
+    ) -> None:
+        message = callback.message
+
+        if isinstance(message, Message):
+            await message.edit_text(
+                self._render_position_action(
+                    action,
+                )
+                + suffix,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=None,
+            )
+
+    @staticmethod
+    def _render_position_action(
+        action: PositionActionIntent,
+        *,
+        account_state: AccountStateSummary | None = None,
+        account_state_error: str | None = None,
+    ) -> str:
+        source_url = action.source.telegram_url
+
+        source_line = (
+            (f'<a href="{html.escape(source_url)}">Open source message</a>')
+            if source_url
+            else "Source link unavailable"
+        )
+
+        if action.action is PositionActionType.CLOSE:
+            instruction = "Close current position completely"
+        else:
+            assert action.close_pct is not None
+
+            instruction = f"Reduce current position by {action.close_pct:g}%"
+
+        position_lines: list[str] = []
+        pending_entries = 0
+
+        if account_state is None:
+            if account_state_error:
+                position_lines.extend(
+                    [
+                        "⚠️ Current account state unavailable.",
+                        (f"<code>{html.escape(account_state_error)}</code>"),
+                    ]
+                )
+            else:
+                position_lines.append(
+                    "Position size and side are "
+                    "resolved from live Bybit state "
+                    "when Execute is pressed."
+                )
+
+        else:
+            positions = [
+                position
+                for position in account_state.positions
+                if position.symbol == action.symbol
+            ]
+
+            exposure = account_state.exposure_for(action.symbol)
+
+            pending_entries = len(exposure.pending_entry_orders)
+
+            if not positions:
+                position_lines.append("⚠️ No current position found.")
+
+            elif len(positions) > 1:
+                position_lines.append(
+                    "⚠️ Multiple positions found; execution will fail safe."
+                )
+
+            else:
+                position = positions[0]
+
+                position_lines.extend(
+                    [
+                        (
+                            "Current position: "
+                            f"<b>"
+                            f"{html.escape(position.side.value)} "
+                            f"{ApprovalBot._fmt_decimal(position.size)}"
+                            f"</b>"
+                        ),
+                        (
+                            "Entry: "
+                            f"<b>"
+                            f"{ApprovalBot._fmt_decimal(position.avg_price)}"
+                            f"</b>"
+                            " → Mark: "
+                            f"<b>"
+                            f"{ApprovalBot._fmt_decimal(position.mark_price)}"
+                            f"</b>"
+                        ),
+                        (
+                            "Unrealized P&amp;L: "
+                            f"<b>"
+                            f"{ApprovalBot._fmt_signed(position.unrealised_pnl)} "
+                            "USDT</b>"
+                        ),
+                    ]
+                )
+
+        pending_line = f"Pending CCB entry orders to cancel: <b>{pending_entries}</b>"
+
+        expected = (
+            action.expected_side.value
+            if action.expected_side is not None
+            else "not specified"
+        )
+
+        return (
+            "⚠️ <b>POSITION ACTION — ACCOUNT WIDE</b>\n\n"
+            f"<b>{html.escape(action.action.value)} "
+            f"{html.escape(action.symbol)}</b>\n"
+            f"{html.escape(instruction)}\n\n"
+            + "\n".join(position_lines)
+            + "\n"
+            + pending_line
+            + "\n"
+            + "Expected side from signal: "
+            f"<b>{html.escape(expected)}</b>\n\n" + "This targets the current Bybit "
+            "position for this symbol regardless "
+            "of which channel or signal opened it.\n\n" + "Confidence: "
+            f"<b>{action.confidence:.0%}</b>\n" + "Reason: "
+            f"{html.escape(action.summary)}\n\n" + "Trader: "
+            f"{html.escape(action.source.channel_title)}\n" + "Published: "
+            f"{html.escape(action.source.published_at.isoformat())}\n" + source_line
+        )
 
     @staticmethod
     def _render(

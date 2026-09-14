@@ -47,7 +47,7 @@ class SignalService:
 
         claim_token = await self._store.claim_source(
             source,
-            lease_seconds=self._source_processing_lease_seconds,
+            lease_seconds=(self._source_processing_lease_seconds),
         )
 
         if claim_token is None:
@@ -64,7 +64,7 @@ class SignalService:
                 channel_guidance,
             ) = await self._store.get_guidance(source.channel_id)
 
-            intents = await self._extractor.extract(
+            signals = await self._extractor.extract(
                 post,
                 global_guidance=global_guidance,
                 channel_guidance=channel_guidance,
@@ -78,32 +78,16 @@ class SignalService:
             )
 
             logger.exception(
-                "Intent extraction failed for %s/%s",
+                "Signal extraction failed for %s/%s",
                 source.channel_id,
                 source.message_id,
             )
             return
 
-        if not intents:
+        if not signals.actionable:
             await self._store.mark_source_completed(
                 source,
                 claim_token,
-            )
-            return
-
-        try:
-            policy = await self._store.get_execution_policy()
-        except Exception as exc:
-            await self._store.mark_source_failed(
-                source,
-                claim_token,
-                f"{type(exc).__name__}: {exc}",
-            )
-
-            logger.exception(
-                "Execution policy load failed for %s/%s",
-                source.channel_id,
-                source.message_id,
             )
             return
 
@@ -116,53 +100,78 @@ class SignalService:
 
         planning_errors: list[str] = []
 
-        for intent in intents:
+        if signals.open_intents:
             try:
-                context = await self._executor.market_context(intent.symbol)
-
-                plan = self._planner.plan(
-                    intent,
-                    policy,
-                    context,
-                )
+                policy = await self._store.get_execution_policy()
 
             except Exception as exc:
-                error = f"{intent.symbol}: {type(exc).__name__}: {exc}"
-
-                planning_errors.append(error)
+                planning_errors.append(f"Execution policy: {type(exc).__name__}: {exc}")
 
                 logger.exception(
-                    "Execution planning failed for candidate %s from %s/%s",
-                    intent.symbol,
+                    "Execution policy load failed for %s/%s",
                     source.channel_id,
                     source.message_id,
                 )
-                continue
 
-            planned.append(
-                (
-                    intent,
-                    plan,
+            else:
+                for intent in signals.open_intents:
+                    try:
+                        context = await self._executor.market_context(intent.symbol)
+
+                        plan = self._planner.plan(
+                            intent,
+                            policy,
+                            context,
+                        )
+
+                    except Exception as exc:
+                        error = f"{intent.symbol}: {type(exc).__name__}: {exc}"
+
+                        planning_errors.append(error)
+
+                        logger.exception(
+                            "Execution planning failed for candidate %s from %s/%s",
+                            intent.symbol,
+                            source.channel_id,
+                            source.message_id,
+                        )
+                        continue
+
+                    planned.append(
+                        (
+                            intent,
+                            plan,
+                        )
+                    )
+
+        position_actions = signals.position_actions
+
+        if not planned and not position_actions:
+            if planning_errors:
+                await self._store.mark_source_failed(
+                    source,
+                    claim_token,
+                    (
+                        "No extracted OPEN candidate "
+                        "could be planned: " + " | ".join(planning_errors)
+                    ),
                 )
-            )
+            else:
+                await self._store.mark_source_completed(
+                    source,
+                    claim_token,
+                )
 
-        if not planned:
-            await self._store.mark_source_failed(
-                source,
-                claim_token,
-                (
-                    "No extracted candidate could be planned: "
-                    + " | ".join(planning_errors)
-                ),
-            )
             return
 
         if planning_errors:
             logger.warning(
-                "Planning kept %d/%d candidate(s) for %s/%s; "
-                "%d candidate(s) were omitted",
+                "Signal batch kept %d OPEN "
+                "candidate(s) and %d position "
+                "action(s) for %s/%s; "
+                "%d OPEN candidate(s) failed",
                 len(planned),
-                len(intents),
+                len(position_actions),
                 source.channel_id,
                 source.message_id,
                 len(planning_errors),
@@ -177,8 +186,6 @@ class SignalService:
         except Exception as exc:
             account_state_error = f"{type(exc).__name__}: {exc}"
 
-            # Account state is informational.
-            # Failure must not discard valid signals.
             logger.exception(
                 "Account-state check failed for %s/%s",
                 source.channel_id,
@@ -186,8 +193,9 @@ class SignalService:
             )
 
         try:
-            finalized = await self._store.create_intents_with_plans_and_complete_source(
+            finalized = await self._store.create_signal_batch_and_complete_source(
                 planned,
+                position_actions,
                 claim_token,
             )
 
@@ -199,7 +207,7 @@ class SignalService:
             )
 
             logger.exception(
-                "Intent batch persistence failed for %s/%s",
+                "Signal batch persistence failed for %s/%s",
                 source.channel_id,
                 source.message_id,
             )
@@ -207,13 +215,15 @@ class SignalService:
 
         if not finalized:
             logger.warning(
-                "Lost processing claim before intent batch persistence for %s/%s",
+                "Lost processing claim before signal batch persistence for %s/%s",
                 source.channel_id,
                 source.message_id,
             )
             return
 
-        for index, (intent, plan) in enumerate(planned):
+        cards_sent = 0
+
+        for intent, plan in planned:
             exposure = None
 
             if account_state is not None:
@@ -224,25 +234,48 @@ class SignalService:
                     intent,
                     plan,
                     exposure=exposure,
-                    exposure_error=account_state_error,
+                    exposure_error=(account_state_error),
                     account_state=account_state,
-                    account_state_error=account_state_error,
-                    send_account_state=(index == 0),
+                    account_state_error=(account_state_error),
+                    send_account_state=(cards_sent == 0),
                 )
 
             except Exception:
-                # All intent/plan pairs are already durable.
-                # Delivery retry/outbox remains separate debt.
                 logger.exception(
                     "Approval delivery failed for persisted intent %s",
                     intent.intent_id,
                 )
                 continue
 
+            cards_sent += 1
+
             logger.info(
-                "Created trading intent %s with %d planned order(s) "
-                "from %d candidate(s) in source post",
+                "Created OPEN trading intent %s with %d planned order(s)",
                 intent.intent_id,
                 len(plan.orders),
-                len(intents),
+            )
+
+        for action in position_actions:
+            try:
+                await self._approval_bot.send_position_action(
+                    action,
+                    account_state=account_state,
+                    account_state_error=(account_state_error),
+                    send_account_state=(cards_sent == 0),
+                )
+
+            except Exception:
+                logger.exception(
+                    "Approval delivery failed for persisted position action %s",
+                    action.action_id,
+                )
+                continue
+
+            cards_sent += 1
+
+            logger.info(
+                "Created position action %s: %s %s",
+                action.action_id,
+                action.action.value,
+                action.symbol,
             )

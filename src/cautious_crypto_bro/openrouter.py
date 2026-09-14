@@ -14,6 +14,8 @@ from pydantic import ValidationError
 from .domain import (
     IncomingPost,
     IntentExtraction,
+    PositionActionIntent,
+    SignalExtraction,
     SourceMessage,
     TradingIntent,
 )
@@ -63,65 +65,68 @@ SYSTEM_PROMPT = """
 You are a conservative crypto trading-signal parser.
 Do not give trading advice and do not invent missing information.
 
-Inspect ONE Telegram post, including all attached images, and extract
-zero or more independent, complete, immediately actionable OPEN trade
-proposals representable by the supplied schema.
+Inspect ONE Telegram post, including all attached images, and extract:
+1. zero or more independent new OPEN trade proposals;
+2. zero or more executable actions on EXISTING positions.
 
 Output rules:
-- return every independently supported actionable OPEN candidate in intents
-- actionable=true if and only if intents contains at least one candidate
-- actionable=false and intents=[] when no complete OPEN candidate exists
-- maximum five candidates
-- do not reject an otherwise valid candidate merely because another setup
-  in the same post is incomplete, ambiguous, commentary, or non-actionable
-- if one candidate is ambiguous, omit that candidate and preserve other
-  independently complete candidates
-- REDUCE, CLOSE, HOLD, move-stop, take-profit updates, and other lifecycle
-  instructions are not OPEN candidates in this version; do not convert them
-  into new trades
+- use the exact supplied JSON schema field names
+- for OPEN intents use side and entry; never use aliases such as
+  direction or entry_semantics
+- actionable=true if at least one valid OPEN intent or position action exists
+- actionable=false only when both intents and position_actions are empty
+- maximum five OPEN intents and five position actions
+- omit ambiguous candidates without discarding unrelated valid candidates
+
+OPEN trade rules:
+- only USDT linear/perpetual-style symbols
+- each OPEN candidate requires symbol, LONG/SHORT, entry semantics,
+  and stop loss
+- take profit is optional
+- MARKET when the author clearly says enter now/at market, clearly states
+  they entered now, or an exchange screenshot clearly shows the position
+  is already open
+- for an already-open position screenshot, MARKET takes precedence over
+  historical/average entry prices shown in the screenshot
+- LIMIT requires one explicit intended entry price
+- RANGE requires two explicit numeric boundaries
+- for RANGE set range_low to the lower boundary and range_high to the higher
+  boundary
+- never estimate prices from chart geometry
+- never invent a stop, entry, target, or range boundary
+
+Existing-position action rules:
+- position actions are account-wide operations on the current position for
+  the extracted symbol; they are NOT new opposite-side trades
+- REDUCE means partially close an existing position
+- REDUCE requires an explicit deterministic amount in close_pct
+- explicit percentages are allowed
+- exact fractions are allowed when unambiguous:
+  half = 50%, quarter = 25%
+- vague phrases such as "take some profit", "fix a part", "trim a little",
+  or equivalent wording without a deterministic amount are NOT executable;
+  omit them from position_actions
+- CLOSE means fully close the existing position
+- for CLOSE set close_pct=null
+- HOLD, keep holding, wait, do nothing, and similar instructions are
+  informational and must be omitted
+- do not convert CLOSE or REDUCE into an opposite-side OPEN trade
+- expected_side is optional; populate it only when LONG/SHORT is clearly
+  stated or clearly visible in the current post/image
+- do not infer expected_side merely from old context
+- an action requires a clearly attributable symbol
 
 Context rules:
-- use the text/caption and attached images together
-- global guidance contains interpretation rules that apply to all traders
-- channel-specific guidance explains conventions used by this trader
-- channel-specific guidance is more specific than global guidance when
-  interpreting trader terminology or chart conventions
-- the current post and images are always the primary evidence
-- guidance explains conventions only; never copy example prices from
-  guidance into the current trade
-- a derived numeric value may be used only when guidance provides an
-  explicit deterministic rule and every required numeric input is clearly
-  available in the current post/images
-- otherwise do not guess
+- use caption/text and images together
+- the current post/images are primary evidence
+- global guidance applies to all traders
+- channel guidance explains that trader's conventions
+- guidance may explain deterministic conventions but must never supply
+  prices or facts missing from the current post
 
-Trade rules:
-- only USDT linear/perpetual-style symbols
-- each candidate requires symbol, LONG/SHORT, entry semantics, and stop loss
-- take profit is optional; if absent return take_profit=null and deterministic
-  execution policy will derive fallback targets
-- MARKET when the author clearly says enter now/at market, clearly states
-  they entered now, or an exchange position screenshot clearly shows the
-  position is already open
-- when a screenshot clearly shows an already-open position, MARKET takes
-  precedence over any historical/average entry price displayed in that
-  position; do not turn the average entry into a new LIMIT order
-- LIMIT when there is one explicit numeric intended entry price and there is
-  no stronger evidence that the position is already open
-- RANGE when the author clearly defines an entry area/zone and both numeric
-  boundaries are explicit and attributable to that entry area
-- for RANGE set range_low to the lower boundary and range_high to the higher
-  boundary; do not collapse a range into one price
-- exactly one stop per candidate
-- use at most one trader-provided target per candidate
-- never invent a trader target; missing take profit is allowed
-- values visible in images may be used only when explicit and clearly legible
-- never estimate prices from chart geometry, line position, vague levels,
-  or unlabeled visual elements
-- never invent a range boundary from the visual size of a rectangle
-- never assign a visible price to stop loss or take profit merely because
-  the schema requires one
+General rules:
 - confidence is extraction confidence, not probability of profit
-- summary is one short sentence describing that candidate's stated thesis
+- summary is one short sentence describing the candidate/action
 """.strip()
 
 
@@ -201,13 +206,13 @@ def _evaluation_fingerprint(
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 2,
+        "cache_version": 3,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
         "request": {
             "temperature": 0,
-            "max_tokens": 1024,
+            "max_tokens": 1536,
             "reasoning": {
                 "effort": "none",
             },
@@ -241,17 +246,14 @@ def _evaluation_fingerprint(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _trading_intents_from_extraction(
+def _signals_from_extraction(
     source: SourceMessage,
     extraction: IntentExtraction,
-) -> tuple[
-    TradingIntent,
-    ...,
-]:
+) -> SignalExtraction:
     if not extraction.actionable:
-        return ()
+        return SignalExtraction()
 
-    return tuple(
+    opens = tuple(
         TradingIntent(
             source=source,
             symbol=raw.symbol,
@@ -263,6 +265,24 @@ def _trading_intents_from_extraction(
             confidence=raw.confidence,
         )
         for raw in extraction.intents
+    )
+
+    actions = tuple(
+        PositionActionIntent(
+            source=source,
+            symbol=raw.symbol,
+            action=raw.action,
+            close_pct=raw.close_pct,
+            expected_side=raw.expected_side,
+            summary=raw.summary,
+            confidence=raw.confidence,
+        )
+        for raw in extraction.position_actions
+    )
+
+    return SignalExtraction(
+        open_intents=opens,
+        position_actions=actions,
     )
 
 
@@ -490,10 +510,7 @@ class OpenRouterIntentExtractor:
         global_guidance: str | None = None,
         channel_guidance: str | None = None,
         debug_dir: Path | None = None,
-    ) -> tuple[
-        TradingIntent,
-        ...,
-    ]:
+    ) -> SignalExtraction:
         source = post.source
 
         evaluation_fingerprint = _evaluation_fingerprint(
@@ -515,7 +532,7 @@ class OpenRouterIntentExtractor:
                     source.message_id,
                 )
 
-                if not cached_extraction.actionable or not cached_extraction.intents:
+                if not cached_extraction.actionable:
                     logger.info(
                         "No actionable intent for %s/%s: %s",
                         source.channel_id,
@@ -523,7 +540,7 @@ class OpenRouterIntentExtractor:
                         cached_extraction.reason,
                     )
 
-                return _trading_intents_from_extraction(
+                return _signals_from_extraction(
                     source,
                     cached_extraction,
                 )
@@ -545,7 +562,7 @@ class OpenRouterIntentExtractor:
                 },
             ],
             "temperature": 0,
-            "max_tokens": 1024,
+            "max_tokens": 1536,
             "reasoning": {
                 "effort": "none",
             },
@@ -836,7 +853,7 @@ class OpenRouterIntentExtractor:
                 extraction,
             )
 
-        if not extraction.actionable or not extraction.intents:
+        if not extraction.actionable:
             logger.info(
                 "No actionable intent for %s/%s: %s",
                 source.channel_id,
@@ -844,7 +861,7 @@ class OpenRouterIntentExtractor:
                 extraction.reason,
             )
 
-        return _trading_intents_from_extraction(
+        return _signals_from_extraction(
             source,
             extraction,
         )

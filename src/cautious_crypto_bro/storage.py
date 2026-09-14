@@ -12,11 +12,12 @@ from .domain import (
     ExecutionPolicy,
     ExitPolicy,
     IntentStatus,
+    PositionActionIntent,
     SourceMessage,
     TradingIntent,
 )
 
-LATEST_SCHEMA_VERSION = 1
+LATEST_SCHEMA_VERSION = 2
 
 
 async def _source_message_columns(
@@ -224,8 +225,41 @@ async def _migrate_to_v1(
     )
 
 
+async def _migrate_to_v2(
+    db: aiosqlite.Connection,
+) -> None:
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS position_actions (
+            action_id TEXT PRIMARY KEY,
+            channel_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            decision_user_id INTEGER,
+            bybit_order_id TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+    await db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS
+            ix_position_actions_source
+        ON position_actions(
+            channel_id,
+            message_id
+        )
+        """
+    )
+
+
 MIGRATIONS = {
     1: _migrate_to_v1,
+    2: _migrate_to_v2,
 }
 
 
@@ -468,6 +502,48 @@ class IntentStore:
             ),
         )
 
+    async def _insert_position_action(
+        self,
+        db: aiosqlite.Connection,
+        action: PositionActionIntent,
+    ) -> None:
+        now = action.created_at.isoformat()
+
+        await db.execute(
+            """
+            INSERT INTO position_actions(
+                action_id,
+                channel_id,
+                message_id,
+                payload_json,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(action.action_id),
+                action.source.channel_id,
+                action.source.message_id,
+                action.model_dump_json(),
+                action.status.value,
+                now,
+                now,
+            ),
+        )
+
+    async def create_position_action(
+        self,
+        action: PositionActionIntent,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await self._insert_position_action(
+                db,
+                action,
+            )
+            await db.commit()
+
     async def create_intent_with_plan(
         self,
         intent: TradingIntent,
@@ -481,7 +557,7 @@ class IntentStore:
             )
             await db.commit()
 
-    async def create_intents_with_plans_and_complete_source(
+    async def create_signal_batch_and_complete_source(
         self,
         items: Sequence[
             tuple[
@@ -489,27 +565,32 @@ class IntentStore:
                 ExecutionPlan,
             ]
         ],
+        position_actions: Sequence[PositionActionIntent],
         claim_token: str,
     ) -> bool:
-        if not items:
-            raise ValueError("At least one intent/plan pair is required")
+        sources = [intent.source for intent, _ in items]
+        sources.extend(action.source for action in position_actions)
 
-        source = items[0][0].source
+        if not sources:
+            raise ValueError("At least one signal output is required")
+
+        source = sources[0]
         source_key = (
             source.channel_id,
             source.message_id,
         )
 
-        for intent, plan in items:
+        for candidate_source in sources:
             if (
-                intent.source.channel_id,
-                intent.source.message_id,
+                candidate_source.channel_id,
+                candidate_source.message_id,
             ) != source_key:
                 raise ValueError(
-                    "All intents in a source batch must belong "
-                    "to the same Telegram post"
+                    "All signal outputs in a batch "
+                    "must belong to the same Telegram post"
                 )
 
+        for intent, plan in items:
             if plan.intent_id != intent.intent_id:
                 raise ValueError("ExecutionPlan intent_id does not match TradingIntent")
 
@@ -545,6 +626,12 @@ class IntentStore:
                         plan,
                     )
 
+                for action in position_actions:
+                    await self._insert_position_action(
+                        db,
+                        action,
+                    )
+
                 cursor = await db.execute(
                     """
                     UPDATE source_messages
@@ -576,6 +663,22 @@ class IntentStore:
             except Exception:
                 await db.rollback()
                 raise
+
+    async def create_intents_with_plans_and_complete_source(
+        self,
+        items: Sequence[
+            tuple[
+                TradingIntent,
+                ExecutionPlan,
+            ]
+        ],
+        claim_token: str,
+    ) -> bool:
+        return await self.create_signal_batch_and_complete_source(
+            items,
+            (),
+            claim_token,
+        )
 
     async def create_intent_with_plan_and_complete_source(
         self,
@@ -688,6 +791,87 @@ class IntentStore:
                     IntentStatus.SKIPPED.value,
                     user_id,
                     str(intent_id),
+                    IntentStatus.PENDING.value,
+                ),
+            )
+
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def get_position_action(
+        self,
+        action_id: UUID,
+    ) -> PositionActionIntent | None:
+        async with aiosqlite.connect(self._database_path) as db:
+            db.row_factory = aiosqlite.Row
+
+            cursor = await db.execute(
+                """
+                SELECT payload_json, status
+                FROM position_actions
+                WHERE action_id = ?
+                """,
+                (str(action_id),),
+            )
+
+            row = await cursor.fetchone()
+
+        if row is None:
+            return None
+
+        action = PositionActionIntent.model_validate_json(row["payload_json"])
+
+        return action.model_copy(update={"status": IntentStatus(row["status"])})
+
+    async def claim_position_action_for_execution(
+        self,
+        action_id: UUID,
+        user_id: int,
+    ) -> bool:
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE position_actions
+                SET
+                    status = ?,
+                    decision_user_id = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE
+                    action_id = ?
+                    AND status = ?
+                """,
+                (
+                    IntentStatus.EXECUTING.value,
+                    user_id,
+                    str(action_id),
+                    IntentStatus.PENDING.value,
+                ),
+            )
+
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def mark_position_action_skipped(
+        self,
+        action_id: UUID,
+        user_id: int,
+    ) -> bool:
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE position_actions
+                SET
+                    status = ?,
+                    decision_user_id = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE
+                    action_id = ?
+                    AND status = ?
+                """,
+                (
+                    IntentStatus.SKIPPED.value,
+                    user_id,
+                    str(action_id),
                     IntentStatus.PENDING.value,
                 ),
             )
@@ -934,6 +1118,55 @@ class IntentStore:
                     str(exit_policy.medium_close_pct),
                     str(exit_policy.high_r_multiple),
                     str(exit_policy.high_close_pct),
+                ),
+            )
+
+            await db.commit()
+
+    async def mark_position_action_executed(
+        self,
+        action_id: UUID,
+        order_id: str,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                UPDATE position_actions
+                SET
+                    status = ?,
+                    bybit_order_id = ?,
+                    error = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE action_id = ?
+                """,
+                (
+                    IntentStatus.EXECUTED.value,
+                    order_id,
+                    str(action_id),
+                ),
+            )
+
+            await db.commit()
+
+    async def mark_position_action_failed(
+        self,
+        action_id: UUID,
+        error: str,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                UPDATE position_actions
+                SET
+                    status = ?,
+                    error = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE action_id = ?
+                """,
+                (
+                    IntentStatus.FAILED.value,
+                    error[:2000],
+                    str(action_id),
                 ),
             )
 

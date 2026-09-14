@@ -247,7 +247,7 @@ def test_failed_provider_is_excluded_on_retry() -> None:
         finally:
             await extractor.close()
 
-        assert result == ()
+        assert not result.actionable
         assert len(payloads) == 2
 
         first_ignore = set(payloads[0]["provider"]["ignore"])
@@ -358,7 +358,7 @@ def test_invalid_output_is_excluded_only_for_current_extraction() -> None:
         finally:
             await extractor.close()
 
-        assert result == ()
+        assert not result.actionable
         assert calls == 2
 
         assert store.recorded == []
@@ -465,8 +465,8 @@ def test_valid_evaluation_is_reused_from_cache() -> None:
         finally:
             await extractor.close()
 
-        assert first == ()
-        assert second == ()
+        assert not first.actionable
+        assert not second.actionable
         assert calls == 1
         assert len(cache.writes) == 1
         assert cache.writes[0][2] == 21600
@@ -634,12 +634,106 @@ def test_multiple_actionable_intents_are_returned() -> None:
         )
 
         try:
-            intents = await extractor.extract(IncomingPost(source=source()))
+            signals = await extractor.extract(IncomingPost(source=source()))
         finally:
             await extractor.close()
 
-        assert len(intents) == 2
-        assert intents[0].symbol == "BTCUSDT"
-        assert intents[1].symbol == "ETHUSDT"
+        assert len(signals.open_intents) == 2
+        assert signals.open_intents[0].symbol == "BTCUSDT"
+        assert signals.open_intents[1].symbol == "ETHUSDT"
+        assert signals.position_actions == ()
+
+    asyncio.run(run())
+
+
+def test_position_actions_are_returned_separately() -> None:
+    import asyncio
+    import json
+
+    import httpx
+
+    from cautious_crypto_bro.domain import (
+        PositionActionType,
+        Side,
+    )
+    from cautious_crypto_bro.openrouter import (
+        OpenRouterIntentExtractor,
+    )
+
+    async def run() -> None:
+        payload = {
+            "actionable": True,
+            "reason": "Lifecycle instructions",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "NEARUSDT",
+                    "action": "REDUCE",
+                    "close_pct": 50,
+                    "expected_side": "LONG",
+                    "summary": "Close half of NEAR",
+                    "confidence": 1,
+                },
+                {
+                    "symbol": "TAOUSDT",
+                    "action": "CLOSE",
+                    "close_pct": None,
+                    "expected_side": None,
+                    "summary": "Close TAO completely",
+                    "confidence": 0.95,
+                },
+            ],
+        }
+
+        def handler(
+            request: httpx.Request,
+        ) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "provider": "Healthy",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(payload),
+                            },
+                        }
+                    ],
+                },
+            )
+
+        extractor = OpenRouterIntentExtractor(
+            api_key="test",
+            model="test/model",
+            base_url="https://openrouter.test",
+            inference_timeout_seconds=5,
+            max_attempts=1,
+        )
+
+        await extractor._client.aclose()
+
+        extractor._client = httpx.AsyncClient(
+            base_url="https://openrouter.test",
+            transport=httpx.MockTransport(handler),
+        )
+
+        try:
+            signals = await extractor.extract(IncomingPost(source=source()))
+        finally:
+            await extractor.close()
+
+        assert signals.open_intents == ()
+        assert len(signals.position_actions) == 2
+
+        reduce = signals.position_actions[0]
+        close = signals.position_actions[1]
+
+        assert reduce.action is PositionActionType.REDUCE
+        assert reduce.close_pct == 50
+        assert reduce.expected_side is Side.LONG
+
+        assert close.action is PositionActionType.CLOSE
+        assert close.close_pct is None
 
     asyncio.run(run())

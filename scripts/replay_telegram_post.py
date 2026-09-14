@@ -141,7 +141,7 @@ async def main() -> int:
     )
 
     try:
-        intents = await extractor.extract(
+        signals = await extractor.extract(
             post,
             global_guidance=global_guidance,
             channel_guidance=channel_guidance,
@@ -152,26 +152,39 @@ async def main() -> int:
         await runtime_store.close()
 
     print()
-    print("=== TRADING INTENTS ===")
+    print("=== OPEN TRADING INTENTS ===")
 
-    if not intents:
-        print("NO ACTIONABLE INTENT")
-        return 0
-
-    print(f"Candidates: {len(intents)}")
+    print(f"Candidates: {len(signals.open_intents)}")
 
     for index, intent in enumerate(
-        intents,
+        signals.open_intents,
         start=1,
     ):
         print()
-        print(f"=== INTENT {index} ===")
+        print(f"=== OPEN INTENT {index} ===")
         print(intent.model_dump_json(indent=2))
+
+    print()
+    print("=== POSITION ACTIONS ===")
+    print(f"Candidates: {len(signals.position_actions)}")
+
+    for index, action in enumerate(
+        signals.position_actions,
+        start=1,
+    ):
+        print()
+        print(f"=== POSITION ACTION {index} ===")
+        print(action.model_dump_json(indent=2))
+
+    if not signals.actionable:
+        print()
+        print("NO ACTIONABLE SIGNAL")
+        return 0
 
     if args.intent_only:
         return 0
 
-    policy = await store.get_execution_policy()
+    policy = await store.get_execution_policy() if signals.open_intents else None
 
     executor = BybitDemoExecutor(
         api_key=settings.bybit_api_key,
@@ -196,11 +209,13 @@ async def main() -> int:
 
     try:
         for index, intent in enumerate(
-            intents,
+            signals.open_intents,
             start=1,
         ):
             try:
                 context = await executor.market_context(intent.symbol)
+
+                assert policy is not None
 
                 plan = planner.plan(
                     intent,
@@ -234,6 +249,34 @@ async def main() -> int:
             await bot.send_intent(
                 intent,
                 plan,
+                send_account_state=(approvals_sent == 0),
+            )
+
+            approvals_sent += 1
+
+        for action in signals.position_actions:
+            print()
+            print(f"=== POSITION ACTION {action.symbol} ===")
+            print(action.model_dump_json(indent=2))
+
+            if not args.send_approval:
+                continue
+
+            await store.create_position_action(action)
+
+            assert bot is not None
+
+            try:
+                account_state = await executor.account_state()
+                account_state_error = None
+            except Exception as exc:
+                account_state = None
+                account_state_error = f"{type(exc).__name__}: {exc}"
+
+            await bot.send_position_action(
+                action,
+                account_state=account_state,
+                account_state_error=(account_state_error),
                 send_account_state=(approvals_sent == 0),
             )
 

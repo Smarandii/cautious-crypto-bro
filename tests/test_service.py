@@ -6,6 +6,7 @@ from datetime import (
 
 from cautious_crypto_bro.domain import (
     IncomingPost,
+    SignalExtraction,
     SourceMessage,
 )
 from cautious_crypto_bro.service import (
@@ -131,7 +132,7 @@ class FailOnceExtractor:
         if self.calls == 1:
             raise RuntimeError("temporary failure")
 
-        return ()
+        return SignalExtraction()
 
 
 def test_extraction_failure_is_retryable() -> None:
@@ -195,12 +196,14 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
         async def get_execution_policy(self):
             return object()
 
-        async def create_intents_with_plans_and_complete_source(
+        async def create_signal_batch_and_complete_source(
             self,
             items,
+            position_actions,
             claim_token,
         ):
             assert claim_token == "claim"
+            assert position_actions == ()
             self.persisted = list(items)
             return True
 
@@ -221,7 +224,7 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
             post,
             **kwargs,
         ):
-            return self.intents
+            return SignalExtraction(open_intents=tuple(self.intents))
 
     class Planner:
         def plan(
@@ -340,5 +343,115 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
 
         assert bot.calls[0][2]["exposure"] == ("exposure:BTCUSDT")
         assert bot.calls[1][2]["exposure"] == ("exposure:ETHUSDT")
+
+    asyncio.run(run())
+
+
+def test_position_action_is_persisted_and_sent() -> None:
+    from cautious_crypto_bro.domain import (
+        PositionActionIntent,
+        PositionActionType,
+    )
+
+    source_post = post()
+
+    action = PositionActionIntent(
+        source=source_post.source,
+        symbol="NEARUSDT",
+        action=PositionActionType.REDUCE,
+        close_pct=50,
+        summary="Close half",
+        confidence=1,
+    )
+
+    class Store:
+        def __init__(self) -> None:
+            self.actions = None
+
+        async def claim_source(
+            self,
+            source,
+            *,
+            lease_seconds,
+        ):
+            return "claim"
+
+        async def get_guidance(
+            self,
+            channel_id,
+        ):
+            return None, None
+
+        async def create_signal_batch_and_complete_source(
+            self,
+            items,
+            position_actions,
+            claim_token,
+        ):
+            assert claim_token == "claim"
+            assert items == []
+            self.actions = position_actions
+            return True
+
+        async def mark_source_failed(
+            self,
+            source,
+            claim_token,
+            error,
+        ):
+            raise AssertionError(f"Unexpected source failure: {error}")
+
+    class Extractor:
+        async def extract(
+            self,
+            post,
+            **kwargs,
+        ):
+            return SignalExtraction(position_actions=(action,))
+
+    class Executor:
+        def __init__(self) -> None:
+            self.account_state_calls = 0
+
+        async def account_state(self):
+            self.account_state_calls += 1
+            return None
+
+    class Bot:
+        def __init__(self) -> None:
+            self.actions = []
+
+        async def send_position_action(
+            self,
+            action,
+            **kwargs,
+        ):
+            self.actions.append(
+                (
+                    action,
+                    kwargs,
+                )
+            )
+
+    async def run() -> None:
+        store = Store()
+        executor = Executor()
+        bot = Bot()
+
+        service = SignalService(
+            store=store,
+            extractor=Extractor(),
+            planner=MustNotBeCalled(),
+            executor=executor,
+            approval_bot=bot,
+        )
+
+        await service.on_message(source_post)
+
+        assert store.actions == (action,)
+        assert executor.account_state_calls == 1
+        assert len(bot.actions) == 1
+        assert bot.actions[0][0] == action
+        assert bot.actions[0][1]["send_account_state"] is True
 
     asyncio.run(run())
