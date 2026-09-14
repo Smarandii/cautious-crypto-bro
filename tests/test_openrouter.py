@@ -1134,3 +1134,112 @@ def test_exact_current_caption_authorizes_close() -> None:
 
     assert len(signals.position_actions) == 1
     assert signals.position_actions[0].action is PositionActionType.CLOSE
+
+
+def test_reduce_half_is_derived_as_50_percent() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Close half",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "NEARUSDT",
+                    "action": "REDUCE",
+                    # Observed Gemma output.
+                    "close_pct": 0.5,
+                    "expected_side": "LONG",
+                    "evidence_text": ("Закрываем половину"),
+                    "summary": "Close half",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": ("Закрываем половину 🕺")}),
+        extraction,
+    )
+
+    assert len(signals.position_actions) == 1
+
+    assert signals.position_actions[0].close_pct == 50
+
+
+def test_explicit_sub_one_percent_is_preserved() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Explicit percentage",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "NEARUSDT",
+                    "action": "REDUCE",
+                    "close_pct": 50,
+                    "expected_side": "LONG",
+                    "evidence_text": ("Close 0.5%"),
+                    "summary": "Reduce 0.5%",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": "Close 0.5%"}),
+        extraction,
+    )
+
+    assert signals.position_actions[0].close_pct == 0.5
+
+
+def test_vague_reduce_cannot_use_model_percentage() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Vague reduction",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "NEARUSDT",
+                    "action": "REDUCE",
+                    "close_pct": 50,
+                    "expected_side": "LONG",
+                    "evidence_text": ("Фиксируем часть"),
+                    "summary": "Reduce position",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": "Фиксируем часть"}),
+        extraction,
+    )
+
+    assert not signals.actionable
+    assert signals.position_actions == ()
