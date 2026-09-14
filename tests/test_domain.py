@@ -9,6 +9,8 @@ from pydantic import ValidationError
 from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
+    PositionActionIntent,
+    PositionActionType,
     Side,
     SourceMessage,
     TradingIntent,
@@ -95,3 +97,30 @@ def test_private_channel_url() -> None:
     )
 
     assert private_source.telegram_url == ("https://t.me/c/2132062264/11482")
+
+
+def test_open_intent_rejects_quote_only_symbol() -> None:
+    with pytest.raises(ValidationError):
+        TradingIntent(
+            source=source(),
+            symbol="USDT",
+            side=Side.LONG,
+            entry=Entry(
+                type=EntryType.MARKET,
+            ),
+            stop_loss=1,
+            take_profit=None,
+            summary="Invalid quote-only symbol",
+            confidence=1,
+        )
+
+
+def test_position_action_rejects_quote_only_symbol() -> None:
+    with pytest.raises(ValidationError):
+        PositionActionIntent(
+            source=source(),
+            symbol="USDT",
+            action=PositionActionType.CLOSE,
+            summary="Invalid quote-only symbol",
+            confidence=1,
+        )

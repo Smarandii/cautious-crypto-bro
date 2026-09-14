@@ -43,6 +43,22 @@ class IntentStatus(StrEnum):
     FAILED = "FAILED"
 
 
+def _normalize_usdt_symbol(
+    symbol: str,
+) -> str:
+    normalized = symbol.strip().upper().replace("/", "").replace("-", "")
+
+    if not normalized.endswith("USDT"):
+        raise ValueError("MVP supports only USDT linear symbols")
+
+    base_asset = normalized[:-4]
+
+    if not base_asset or not base_asset.isalnum():
+        raise ValueError("USDT symbol requires a non-empty alphanumeric base asset")
+
+    return normalized
+
+
 class SourceMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -263,10 +279,7 @@ class TradingIntent(BaseModel):
     def validate_trade_geometry(
         self,
     ) -> TradingIntent:
-        self.symbol = self.symbol.upper().replace("/", "").replace("-", "")
-
-        if not self.symbol.endswith("USDT"):
-            raise ValueError("MVP supports only USDT linear symbols")
+        self.symbol = _normalize_usdt_symbol(self.symbol)
 
         if self.entry.type is EntryType.MARKET:
             if self.take_profit is None:
@@ -333,10 +346,7 @@ class PositionActionIntent(BaseModel):
     def validate_position_action(
         self,
     ) -> PositionActionIntent:
-        self.symbol = self.symbol.upper().replace("/", "").replace("-", "")
-
-        if not self.symbol.endswith("USDT"):
-            raise ValueError("MVP supports only USDT linear symbols")
+        self.symbol = _normalize_usdt_symbol(self.symbol)
 
         if self.action is PositionActionType.REDUCE and self.close_pct is None:
             raise ValueError("REDUCE requires close_pct")
