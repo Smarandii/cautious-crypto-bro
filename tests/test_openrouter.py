@@ -671,6 +671,7 @@ def test_position_actions_are_returned_separately() -> None:
                     "action": "REDUCE",
                     "close_pct": 50,
                     "expected_side": "LONG",
+                    "evidence_text": "Close half of NEAR",
                     "summary": "Close half of NEAR",
                     "confidence": 1,
                 },
@@ -679,6 +680,7 @@ def test_position_actions_are_returned_separately() -> None:
                     "action": "CLOSE",
                     "close_pct": None,
                     "expected_side": None,
+                    "evidence_text": "Close TAO completely",
                     "summary": "Close TAO completely",
                     "confidence": 0.95,
                 },
@@ -719,7 +721,11 @@ def test_position_actions_are_returned_separately() -> None:
         )
 
         try:
-            signals = await extractor.extract(IncomingPost(source=source()))
+            lifecycle_source = source().model_copy(
+                update={"text": ("Close half of NEAR. Close TAO completely.")}
+            )
+
+            signals = await extractor.extract(IncomingPost(source=lifecycle_source))
         finally:
             await extractor.close()
 
@@ -881,6 +887,7 @@ def test_position_action_side_alias_is_accepted() -> None:
                     "action": "REDUCE",
                     "close_pct": 50,
                     "side": "LONG",
+                    "evidence_text": "Close half",
                     "summary": "Close half",
                     "confidence": 1,
                 }
@@ -889,7 +896,7 @@ def test_position_action_side_alias_is_accepted() -> None:
     )
 
     signals = _signals_from_extraction(
-        source(),
+        source().model_copy(update={"text": "Close half"}),
         extraction,
     )
 
@@ -957,6 +964,7 @@ def test_invalid_open_candidate_does_not_drop_valid_close() -> None:
                     "action": "CLOSE",
                     "close_pct": None,
                     "expected_side": "LONG",
+                    "evidence_text": "Close POL",
                     "summary": "Close POL",
                     "confidence": 1,
                 }
@@ -965,10 +973,164 @@ def test_invalid_open_candidate_does_not_drop_valid_close() -> None:
     )
 
     signals = _signals_from_extraction(
-        source(),
+        source().model_copy(update={"text": "Close POL"}),
         extraction,
     )
 
     assert signals.open_intents == ()
+    assert len(signals.position_actions) == 1
+    assert signals.position_actions[0].action is PositionActionType.CLOSE
+
+
+def test_direction_alias_is_accepted_for_open_intent() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+        Side,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Provider used direction alias",
+            "intents": [
+                {
+                    "symbol": "BTCUSDT",
+                    "direction": "LONG",
+                    "entry": "MARKET",
+                    "stop_loss": 75000,
+                    "take_profit": None,
+                    "summary": "BTC long",
+                    "confidence": 1,
+                }
+            ],
+            "position_actions": [],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source(),
+        extraction,
+    )
+
+    assert len(signals.open_intents) == 1
+    assert signals.open_intents[0].side is Side.LONG
+
+
+def test_image_only_close_cannot_authorize_lifecycle_action() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Exchange screenshot contains close UI",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "TRUMPUSDT",
+                    "action": "CLOSE",
+                    "close_pct": None,
+                    "expected_side": "LONG",
+                    "evidence_text": "Закрыть с помощью",
+                    "summary": "Close TRUMP",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": ""}),
+        extraction,
+    )
+
+    assert not signals.actionable
+    assert signals.position_actions == ()
+
+
+def test_embedded_old_chat_cannot_authorize_close() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Historical chat contains close command",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "FILUSDT",
+                    "action": "CLOSE",
+                    "close_pct": None,
+                    "expected_side": "LONG",
+                    "evidence_text": "Закрывай",
+                    "summary": "Close FIL",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(
+            update={
+                "text": (
+                    "С утра мы забрали +500% "
+                    "профита по FIL. "
+                    "Наберу людей на личную торговлю."
+                )
+            }
+        ),
+        extraction,
+    )
+
+    assert not signals.actionable
+    assert signals.position_actions == ()
+
+
+def test_exact_current_caption_authorizes_close() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+        PositionActionType,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Explicit current close",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "NEARUSDT",
+                    "action": "CLOSE",
+                    "close_pct": None,
+                    "expected_side": "LONG",
+                    "evidence_text": "Закрываем",
+                    "summary": "Close NEAR",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": "Закрываем 🙂‍↕️"}),
+        extraction,
+    )
+
     assert len(signals.position_actions) == 1
     assert signals.position_actions[0].action is PositionActionType.CLOSE

@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import time
+import unicodedata
 from pathlib import Path
 
 import httpx
@@ -124,6 +125,21 @@ Existing-position action rules:
   stated or clearly visible in the current post/image
 - do not infer expected_side merely from old context
 - an action requires a clearly attributable symbol
+- REDUCE and CLOSE require an explicit instruction in the CURRENT Telegram
+  post text/caption itself
+- for every REDUCE/CLOSE, evidence_text must be an exact verbatim excerpt
+  from the CURRENT post text/caption that explicitly instructs the action
+- images may identify which symbol/side the text instruction refers to, but
+  image text alone must NEVER authorize REDUCE/CLOSE
+- NEVER create REDUCE/CLOSE from exchange UI controls such as a Close button
+- NEVER create REDUCE/CLOSE from embedded old chat screenshots, testimonials,
+  examples of previous trades, performance recaps, or promotional material
+- an exchange screenshot merely showing an already-open position is NOT a
+  lifecycle action
+- never use REDUCE merely to represent that an existing position is visible
+- if an already-open exchange position is being presented as the current
+  trade and has the required stop, treat it as an OPEN MARKET candidate
+  unless the current caption explicitly instructs REDUCE/CLOSE
 
 Context rules:
 - use caption/text and images together
@@ -215,7 +231,7 @@ def _evaluation_fingerprint(
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 4,
+        "cache_version": 5,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
@@ -340,6 +356,34 @@ def _entry_from_transport(
         return None
 
 
+def _normalize_evidence_text(
+    value: str,
+) -> str:
+    normalized = unicodedata.normalize(
+        "NFKC",
+        value,
+    )
+
+    return " ".join(normalized.casefold().split())
+
+
+def _has_current_post_action_evidence(
+    source: SourceMessage,
+    evidence_text: str | None,
+) -> bool:
+    if evidence_text is None:
+        return False
+
+    evidence = _normalize_evidence_text(evidence_text)
+
+    post_text = _normalize_evidence_text(source.text)
+
+    if not evidence or not post_text:
+        return False
+
+    return evidence in post_text
+
+
 def _signals_from_extraction(
     source: SourceMessage,
     extraction: IntentExtraction,
@@ -347,7 +391,7 @@ def _signals_from_extraction(
     opens: list[TradingIntent] = []
 
     for raw in extraction.intents:
-        side = _side_from_transport(raw.side)
+        side = _side_from_transport(raw.side) or _side_from_transport(raw.direction)
 
         entry = _entry_from_transport(raw)
 
@@ -400,6 +444,22 @@ def _signals_from_extraction(
             logger.warning(
                 "Dropping unsupported position action %r from %s/%s",
                 raw.action,
+                source.channel_id,
+                source.message_id,
+            )
+            continue
+
+        if not _has_current_post_action_evidence(
+            source,
+            raw.evidence_text,
+        ):
+            logger.warning(
+                "Dropping %s position action "
+                "for %s from %s/%s: no exact "
+                "destructive-action evidence in "
+                "current post text/caption",
+                action_type.value,
+                raw.symbol,
                 source.channel_id,
                 source.message_id,
             )
