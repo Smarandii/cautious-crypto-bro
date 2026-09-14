@@ -269,7 +269,7 @@ def test_failed_provider_is_excluded_on_retry() -> None:
     asyncio.run(run())
 
 
-def test_invalid_output_cools_down_named_provider() -> None:
+def test_invalid_output_is_excluded_only_for_current_extraction() -> None:
     import asyncio
     import json
 
@@ -361,9 +361,9 @@ def test_invalid_output_cools_down_named_provider() -> None:
         assert result == ()
         assert calls == 2
 
-        assert store.recorded[0][0] == "venice"
+        assert store.recorded == []
 
-        assert "invalid structured output" in store.recorded[0][1]
+        assert calls == 2
 
     asyncio.run(run())
 

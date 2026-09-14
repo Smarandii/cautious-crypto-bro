@@ -73,3 +73,57 @@ def test_openrouter_evaluation_cache_uses_ttl() -> None:
         await store.close()
 
     asyncio.run(run())
+
+
+def test_read_only_provider_cooldown_store_does_not_write() -> None:
+    import asyncio
+
+    from cautious_crypto_bro.runtime_store import (
+        ReadOnlyProviderCooldownStore,
+    )
+
+    class Store:
+        def __init__(self) -> None:
+            self.writes = []
+
+        async def get_openrouter_provider_cooldowns(
+            self,
+        ):
+            return (
+                "venice",
+                "darkbloom",
+            )
+
+        async def cooldown_openrouter_provider(
+            self,
+            provider,
+            reason,
+            duration_seconds,
+        ):
+            self.writes.append(
+                (
+                    provider,
+                    reason,
+                    duration_seconds,
+                )
+            )
+
+    async def run() -> None:
+        store = Store()
+
+        wrapper = ReadOnlyProviderCooldownStore(store)
+
+        assert (await wrapper.get_openrouter_provider_cooldowns()) == (
+            "venice",
+            "darkbloom",
+        )
+
+        await wrapper.cooldown_openrouter_provider(
+            "siliconflow",
+            "failure",
+            3600,
+        )
+
+        assert store.writes == []
+
+    asyncio.run(run())
