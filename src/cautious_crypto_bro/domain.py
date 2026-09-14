@@ -20,6 +20,11 @@ class EntryType(StrEnum):
     RANGE = "RANGE"
 
 
+class PositionActionType(StrEnum):
+    REDUCE = "REDUCE"
+    CLOSE = "CLOSE"
+
+
 class ExecutionOrderType(StrEnum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
@@ -130,6 +135,33 @@ class ExtractedIntent(BaseModel):
     confidence: float = Field(ge=0, le=1)
 
 
+class ExtractedPositionAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    action: PositionActionType
+    close_pct: float | None = Field(
+        default=None,
+        gt=0,
+        lt=100,
+    )
+    expected_side: Side | None = None
+    summary: str = Field(min_length=1, max_length=500)
+    confidence: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_action(
+        self,
+    ) -> ExtractedPositionAction:
+        if self.action is PositionActionType.REDUCE and self.close_pct is None:
+            raise ValueError("REDUCE requires close_pct")
+
+        if self.action is PositionActionType.CLOSE and self.close_pct is not None:
+            raise ValueError("CLOSE must not contain close_pct")
+
+        return self
+
+
 class IntentExtraction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -142,16 +174,27 @@ class IntentExtraction(BaseModel):
         default=(),
         max_length=5,
     )
+    position_actions: tuple[
+        ExtractedPositionAction,
+        ...,
+    ] = Field(
+        default=(),
+        max_length=5,
+    )
 
     @model_validator(mode="after")
     def consistent_actionability(
         self,
     ) -> IntentExtraction:
-        if self.actionable and not self.intents:
-            raise ValueError("actionable=true requires at least one intent")
+        has_actions = bool(self.intents or self.position_actions)
 
-        if not self.actionable and self.intents:
-            raise ValueError("actionable=false requires intents=[]")
+        if self.actionable and not has_actions:
+            raise ValueError(
+                "actionable=true requires at least one open intent or position action"
+            )
+
+        if not self.actionable and has_actions:
+            raise ValueError("actionable=false requires empty outputs")
 
         return self
 
@@ -221,6 +264,61 @@ class TradingIntent(BaseModel):
                 raise ValueError("SHORT requires take_profit below entry/range")
 
         return self
+
+
+class PositionActionIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_id: UUID = Field(default_factory=uuid4)
+    source: SourceMessage
+    symbol: str
+    action: PositionActionType
+    close_pct: float | None = Field(
+        default=None,
+        gt=0,
+        lt=100,
+    )
+    expected_side: Side | None = None
+    summary: str = Field(min_length=1, max_length=500)
+    confidence: float = Field(ge=0, le=1)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    status: IntentStatus = Field(
+        default=IntentStatus.PENDING,
+        exclude=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_position_action(
+        self,
+    ) -> PositionActionIntent:
+        self.symbol = self.symbol.upper().replace("/", "").replace("-", "")
+
+        if not self.symbol.endswith("USDT"):
+            raise ValueError("MVP supports only USDT linear symbols")
+
+        if self.action is PositionActionType.REDUCE and self.close_pct is None:
+            raise ValueError("REDUCE requires close_pct")
+
+        if self.action is PositionActionType.CLOSE and self.close_pct is not None:
+            raise ValueError("CLOSE must not contain close_pct")
+
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class SignalExtraction:
+    open_intents: tuple[
+        TradingIntent,
+        ...,
+    ] = ()
+    position_actions: tuple[
+        PositionActionIntent,
+        ...,
+    ] = ()
+
+    @property
+    def actionable(self) -> bool:
+        return bool(self.open_intents or self.position_actions)
 
 
 class ExitPolicy(BaseModel):

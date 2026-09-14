@@ -12,7 +12,7 @@ from datetime import (
     datetime,
     timedelta,
 )
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from urllib.parse import urlencode
 
 import httpx
@@ -20,6 +20,8 @@ import httpx
 from .domain import (
     ExecutionOrderType,
     ExecutionPlan,
+    PositionActionIntent,
+    PositionActionType,
     Side,
 )
 from .execution import InstrumentContext
@@ -47,6 +49,18 @@ class PositionExposure:
     side: Side
     size: Decimal
     avg_price: Decimal
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class PositionActionExecutionResult:
+    order_id: str
+    position_side: Side
+    position_size_before: Decimal
+    submitted_quantity: Decimal | None
+    cancelled_entry_orders: int
 
 
 @dataclass(
@@ -268,6 +282,15 @@ class BybitDemoExecutor:
         return await asyncio.to_thread(
             self._execute_sync,
             plan,
+        )
+
+    async def execute_position_action(
+        self,
+        action: PositionActionIntent,
+    ) -> PositionActionExecutionResult:
+        return await asyncio.to_thread(
+            self._execute_position_action_sync,
+            action,
         )
 
     async def cancel_all_orders(
@@ -631,6 +654,218 @@ class BybitDemoExecutor:
             positions=tuple(positions),
             pending_entry_orders=tuple(pending_orders),
         )
+
+    def _execute_position_action_sync(
+        self,
+        action: PositionActionIntent,
+    ) -> PositionActionExecutionResult:
+        self._sync_clock()
+
+        initial_exposure = self._exposure_sync(action.symbol)
+
+        # Validate before causing any side effects.
+        self._position_for_action(
+            action,
+            initial_exposure,
+        )
+
+        # A lifecycle instruction supersedes stale
+        # CCB entry orders for this symbol. Otherwise
+        # an old scale-in order could rebuild exposure
+        # immediately after a REDUCE/CLOSE.
+        cancelled_entries = self._cancel_ccb_entry_orders_sync(action.symbol)
+
+        # Resolve position size again after cancellation.
+        # An entry could have filled concurrently while
+        # cancellations were being processed.
+        current_exposure = self._exposure_sync(action.symbol)
+
+        position = self._position_for_action(
+            action,
+            current_exposure,
+        )
+
+        submitted_quantity: Decimal | None
+
+        if action.action is PositionActionType.CLOSE:
+            submitted_quantity = None
+            qty = "0"
+
+        else:
+            assert action.close_pct is not None
+
+            quantity = self._partial_reduce_quantity(
+                action.symbol,
+                position.size,
+                Decimal(str(action.close_pct)),
+            )
+
+            submitted_quantity = quantity
+            qty = self._fmt(quantity)
+
+        side = "Sell" if position.side is Side.LONG else "Buy"
+
+        body: dict[
+            str,
+            object,
+        ] = {
+            "category": "linear",
+            "symbol": action.symbol,
+            "side": side,
+            "orderType": "Market",
+            "qty": qty,
+            "timeInForce": "IOC",
+            "positionIdx": 0,
+            "reduceOnly": True,
+            "orderLinkId": (f"ccb-action-{action.action_id.hex[:24]}"),
+        }
+
+        if action.action is PositionActionType.CLOSE:
+            body["closeOnTrigger"] = True
+
+        response = self._private_post(
+            "/v5/order/create",
+            body,
+        )
+
+        order_id = response.get("result", {}).get("orderId")
+
+        if not order_id:
+            raise TradeExecutionError("Bybit returned success without orderId")
+
+        return PositionActionExecutionResult(
+            order_id=str(order_id),
+            position_side=position.side,
+            position_size_before=position.size,
+            submitted_quantity=(submitted_quantity),
+            cancelled_entry_orders=(cancelled_entries),
+        )
+
+    @staticmethod
+    def _position_for_action(
+        action: PositionActionIntent,
+        exposure: SymbolExposure,
+    ) -> PositionExposure:
+        if not exposure.positions:
+            raise TradeExecutionError(f"No active position for {action.symbol}")
+
+        if len(exposure.positions) != 1:
+            raise TradeExecutionError(
+                f"Expected exactly one active position for {action.symbol}"
+            )
+
+        position = exposure.positions[0]
+
+        if (
+            action.expected_side is not None
+            and position.side is not action.expected_side
+        ):
+            raise TradeExecutionError(
+                "Current position side does not "
+                "match signal expectation: "
+                f"current={position.side.value}, "
+                f"expected="
+                f"{action.expected_side.value}"
+            )
+
+        return position
+
+    def _partial_reduce_quantity(
+        self,
+        symbol: str,
+        position_size: Decimal,
+        close_pct: Decimal,
+    ) -> Decimal:
+        response = self._public_get(
+            "/v5/market/instruments-info",
+            {
+                "category": "linear",
+                "symbol": symbol,
+            },
+        )
+
+        items = response.get("result", {}).get("list", [])
+
+        if not items:
+            raise TradeExecutionError(f"No Bybit instrument found for {symbol}")
+
+        lot = items[0]["lotSizeFilter"]
+
+        qty_step = Decimal(str(lot["qtyStep"]))
+        min_qty = Decimal(str(lot["minOrderQty"]))
+
+        raw = position_size * close_pct / Decimal("100")
+
+        units = (raw / qty_step).to_integral_value(rounding=ROUND_DOWN)
+
+        quantity = units * qty_step
+
+        if quantity <= 0 or quantity < min_qty:
+            raise TradeExecutionError(
+                "Requested partial reduction rounds below Bybit minimum quantity"
+            )
+
+        if quantity >= position_size:
+            raise TradeExecutionError(
+                "REDUCE would close the full position; use CLOSE instead"
+            )
+
+        return quantity
+
+    def _cancel_ccb_entry_orders_sync(
+        self,
+        symbol: str,
+    ) -> int:
+        cancelled: set[str] = set()
+
+        for _ in range(5):
+            exposure = self._exposure_sync(symbol)
+
+            pending = exposure.pending_entry_orders
+
+            if not pending:
+                return len(cancelled)
+
+            for order in pending:
+                link_id = order.order_link_id
+
+                if link_id in cancelled:
+                    continue
+
+                response = self._private_post(
+                    "/v5/order/cancel",
+                    {
+                        "category": "linear",
+                        "symbol": symbol,
+                        "orderLinkId": link_id,
+                    },
+                )
+
+                result = response.get(
+                    "result",
+                    {},
+                )
+
+                if not result.get("orderId"):
+                    raise TradeExecutionError(
+                        "Bybit accepted no order ID "
+                        "while cancelling CCB entry "
+                        f"{link_id}"
+                    )
+
+                cancelled.add(link_id)
+
+            time.sleep(0.25)
+
+        remaining = self._exposure_sync(symbol).pending_entry_orders
+
+        if remaining:
+            raise TradeExecutionError(
+                "CCB entry orders are still active "
+                "after cancellation; refusing full close"
+            )
+
+        return len(cancelled)
 
     def _cancel_all_orders_sync(
         self,
