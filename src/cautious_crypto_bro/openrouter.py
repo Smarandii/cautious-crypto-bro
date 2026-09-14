@@ -63,9 +63,22 @@ SYSTEM_PROMPT = """
 You are a conservative crypto trading-signal parser.
 Do not give trading advice and do not invent missing information.
 
-Decide whether ONE Telegram post, including any attached images,
-contains one complete, immediately actionable trade proposal
-representable by the supplied schema.
+Inspect ONE Telegram post, including all attached images, and extract
+zero or more independent, complete, immediately actionable OPEN trade
+proposals representable by the supplied schema.
+
+Output rules:
+- return every independently supported actionable OPEN candidate in intents
+- actionable=true if and only if intents contains at least one candidate
+- actionable=false and intents=[] when no complete OPEN candidate exists
+- maximum five candidates
+- do not reject an otherwise valid candidate merely because another setup
+  in the same post is incomplete, ambiguous, commentary, or non-actionable
+- if one candidate is ambiguous, omit that candidate and preserve other
+  independently complete candidates
+- REDUCE, CLOSE, HOLD, move-stop, take-profit updates, and other lifecycle
+  instructions are not OPEN candidates in this version; do not convert them
+  into new trades
 
 Context rules:
 - use the text/caption and attached images together
@@ -73,38 +86,42 @@ Context rules:
 - channel-specific guidance explains conventions used by this trader
 - channel-specific guidance is more specific than global guidance when
   interpreting trader terminology or chart conventions
-- the current post and image are always the primary evidence
+- the current post and images are always the primary evidence
 - guidance explains conventions only; never copy example prices from
   guidance into the current trade
 - a derived numeric value may be used only when guidance provides an
   explicit deterministic rule and every required numeric input is clearly
-  available in the current post/image
+  available in the current post/images
 - otherwise do not guess
 
-MVP rules:
+Trade rules:
 - only USDT linear/perpetual-style symbols
-- required: symbol, LONG/SHORT, entry semantics, and stop loss
-- take profit is optional; if the trader does not provide one, return take_profit=null and let deterministic execution policy derive fallback targets
-- MARKET only if the author clearly says enter now/at market, clearly states they entered now, or an exchange position screenshot clearly shows that the position is already open
-- LIMIT when there is one explicit numeric entry price
+- each candidate requires symbol, LONG/SHORT, entry semantics, and stop loss
+- take profit is optional; if absent return take_profit=null and deterministic
+  execution policy will derive fallback targets
+- MARKET when the author clearly says enter now/at market, clearly states
+  they entered now, or an exchange position screenshot clearly shows the
+  position is already open
+- when a screenshot clearly shows an already-open position, MARKET takes
+  precedence over any historical/average entry price displayed in that
+  position; do not turn the average entry into a new LIMIT order
+- LIMIT when there is one explicit numeric intended entry price and there is
+  no stronger evidence that the position is already open
 - RANGE when the author clearly defines an entry area/zone and both numeric
-  boundaries are explicit and clearly attributable to that entry area
-- for RANGE set range_low to the lower numeric boundary and range_high to
-  the higher numeric boundary; do not collapse a range into one price
-- exactly one stop; use at most one trader-provided target
+  boundaries are explicit and attributable to that entry area
+- for RANGE set range_low to the lower boundary and range_high to the higher
+  boundary; do not collapse a range into one price
+- exactly one stop per candidate
+- use at most one trader-provided target per candidate
 - never invent a trader target; missing take profit is allowed
-- values visible in an image may be used only when they are explicit
-  and clearly legible
+- values visible in images may be used only when explicit and clearly legible
 - never estimate prices from chart geometry, line position, vague levels,
   or unlabeled visual elements
 - never invent a range boundary from the visual size of a rectangle
 - never assign a visible price to stop loss or take profit merely because
   the schema requires one
-- if the post is commentary, an update to an older idea, incomplete,
-  ambiguous, or contains multiple conflicting setups, actionable=false
-- a missing take profit alone does not make an otherwise complete trade setup non-actionable
 - confidence is extraction confidence, not probability of profit
-- summary is one short sentence describing the trader's stated thesis
+- summary is one short sentence describing that candidate's stated thesis
 """.strip()
 
 
@@ -184,13 +201,13 @@ def _evaluation_fingerprint(
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 1,
+        "cache_version": 2,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
         "request": {
             "temperature": 0,
-            "max_tokens": 512,
+            "max_tokens": 1024,
             "reasoning": {
                 "effort": "none",
             },
@@ -224,24 +241,28 @@ def _evaluation_fingerprint(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _trading_intent_from_extraction(
+def _trading_intents_from_extraction(
     source: SourceMessage,
     extraction: IntentExtraction,
-) -> TradingIntent | None:
-    if not extraction.actionable or extraction.intent is None:
-        return None
+) -> tuple[
+    TradingIntent,
+    ...,
+]:
+    if not extraction.actionable:
+        return ()
 
-    raw = extraction.intent
-
-    return TradingIntent(
-        source=source,
-        symbol=raw.symbol,
-        side=raw.side,
-        entry=raw.entry,
-        stop_loss=raw.stop_loss,
-        take_profit=raw.take_profit,
-        summary=raw.summary,
-        confidence=raw.confidence,
+    return tuple(
+        TradingIntent(
+            source=source,
+            symbol=raw.symbol,
+            side=raw.side,
+            entry=raw.entry,
+            stop_loss=raw.stop_loss,
+            take_profit=raw.take_profit,
+            summary=raw.summary,
+            confidence=raw.confidence,
+        )
+        for raw in extraction.intents
     )
 
 
@@ -468,7 +489,10 @@ class OpenRouterIntentExtractor:
         global_guidance: str | None = None,
         channel_guidance: str | None = None,
         debug_dir: Path | None = None,
-    ) -> TradingIntent | None:
+    ) -> tuple[
+        TradingIntent,
+        ...,
+    ]:
         source = post.source
 
         evaluation_fingerprint = _evaluation_fingerprint(
@@ -490,7 +514,7 @@ class OpenRouterIntentExtractor:
                     source.message_id,
                 )
 
-                if not cached_extraction.actionable or cached_extraction.intent is None:
+                if not cached_extraction.actionable or not cached_extraction.intents:
                     logger.info(
                         "No actionable intent for %s/%s: %s",
                         source.channel_id,
@@ -498,7 +522,7 @@ class OpenRouterIntentExtractor:
                         cached_extraction.reason,
                     )
 
-                return _trading_intent_from_extraction(
+                return _trading_intents_from_extraction(
                     source,
                     cached_extraction,
                 )
@@ -520,7 +544,7 @@ class OpenRouterIntentExtractor:
                 },
             ],
             "temperature": 0,
-            "max_tokens": 512,
+            "max_tokens": 1024,
             "reasoning": {
                 "effort": "none",
             },
@@ -808,7 +832,7 @@ class OpenRouterIntentExtractor:
                 extraction,
             )
 
-        if not extraction.actionable or extraction.intent is None:
+        if not extraction.actionable or not extraction.intents:
             logger.info(
                 "No actionable intent for %s/%s: %s",
                 source.channel_id,
@@ -816,7 +840,7 @@ class OpenRouterIntentExtractor:
                 extraction.reason,
             )
 
-        return _trading_intent_from_extraction(
+        return _trading_intents_from_extraction(
             source,
             extraction,
         )

@@ -215,7 +215,7 @@ def test_failed_provider_is_excluded_on_retry() -> None:
                                         {
                                             "actionable": False,
                                             "reason": ("commentary"),
-                                            "intent": None,
+                                            "intents": [],
                                         }
                                     )
                                 ),
@@ -247,7 +247,7 @@ def test_failed_provider_is_excluded_on_retry() -> None:
         finally:
             await extractor.close()
 
-        assert result is None
+        assert result == ()
         assert len(payloads) == 2
 
         first_ignore = set(payloads[0]["provider"]["ignore"])
@@ -304,7 +304,7 @@ def test_invalid_output_cools_down_named_provider() -> None:
                                             {
                                                 "actionable": True,
                                                 "reason": "invalid",
-                                                "intent": None,
+                                                "intents": [],
                                             }
                                         )
                                     ),
@@ -327,7 +327,7 @@ def test_invalid_output_cools_down_named_provider() -> None:
                                         {
                                             "actionable": False,
                                             "reason": ("commentary"),
-                                            "intent": None,
+                                            "intents": [],
                                         }
                                     )
                                 ),
@@ -358,7 +358,7 @@ def test_invalid_output_cools_down_named_provider() -> None:
         finally:
             await extractor.close()
 
-        assert result is None
+        assert result == ()
         assert calls == 2
 
         assert store.recorded[0][0] == "venice"
@@ -429,7 +429,7 @@ def test_valid_evaluation_is_reused_from_cache() -> None:
                                         {
                                             "actionable": False,
                                             "reason": "commentary",
-                                            "intent": None,
+                                            "intents": [],
                                         }
                                     )
                                 ),
@@ -465,8 +465,8 @@ def test_valid_evaluation_is_reused_from_cache() -> None:
         finally:
             await extractor.close()
 
-        assert first is None
-        assert second is None
+        assert first == ()
+        assert second == ()
         assert calls == 1
         assert len(cache.writes) == 1
         assert cache.writes[0][2] == 21600
@@ -507,7 +507,7 @@ def test_guidance_change_invalidates_evaluation_cache() -> None:
                                         {
                                             "actionable": False,
                                             "reason": "commentary",
-                                            "intent": None,
+                                            "intents": [],
                                         }
                                     )
                                 ),
@@ -550,5 +550,96 @@ def test_guidance_change_invalidates_evaluation_cache() -> None:
 
         assert calls == 2
         assert len(cache.writes) == 2
+
+    asyncio.run(run())
+
+
+def test_multiple_actionable_intents_are_returned() -> None:
+    import asyncio
+    import json
+
+    import httpx
+
+    from cautious_crypto_bro.openrouter import (
+        OpenRouterIntentExtractor,
+    )
+
+    async def run() -> None:
+        response_payload = {
+            "actionable": True,
+            "reason": "Two complete independent setups",
+            "intents": [
+                {
+                    "symbol": "BTCUSDT",
+                    "side": "LONG",
+                    "entry": {
+                        "type": "LIMIT",
+                        "price": 100,
+                        "range_low": None,
+                        "range_high": None,
+                    },
+                    "stop_loss": 90,
+                    "take_profit": 120,
+                    "summary": "BTC long setup",
+                    "confidence": 0.95,
+                },
+                {
+                    "symbol": "ETHUSDT",
+                    "side": "SHORT",
+                    "entry": {
+                        "type": "LIMIT",
+                        "price": 200,
+                        "range_low": None,
+                        "range_high": None,
+                    },
+                    "stop_loss": 220,
+                    "take_profit": 170,
+                    "summary": "ETH short setup",
+                    "confidence": 0.9,
+                },
+            ],
+        }
+
+        def handler(
+            request: httpx.Request,
+        ) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "provider": "Healthy",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(response_payload),
+                            },
+                        }
+                    ],
+                },
+            )
+
+        extractor = OpenRouterIntentExtractor(
+            api_key="test",
+            model="test/model",
+            base_url="https://openrouter.test",
+            inference_timeout_seconds=5,
+            max_attempts=1,
+        )
+
+        await extractor._client.aclose()
+
+        extractor._client = httpx.AsyncClient(
+            base_url="https://openrouter.test",
+            transport=httpx.MockTransport(handler),
+        )
+
+        try:
+            intents = await extractor.extract(IncomingPost(source=source()))
+        finally:
+            await extractor.close()
+
+        assert len(intents) == 2
+        assert intents[0].symbol == "BTCUSDT"
+        assert intents[1].symbol == "ETHUSDT"
 
     asyncio.run(run())

@@ -111,26 +111,26 @@ class ApprovalBot:
         *,
         exposure: SymbolExposure | None = None,
         exposure_error: str | None = None,
-        account_state: (AccountStateSummary | None) = None,
+        account_state: AccountStateSummary | None = None,
         account_state_error: str | None = None,
+        send_account_state: bool = True,
     ) -> None:
-        try:
-            await self._bot.send_message(
-                chat_id=(self._approval_chat_id),
-                text=(
-                    self._render_account_state(
+        if send_account_state:
+            try:
+                await self._bot.send_message(
+                    chat_id=self._approval_chat_id,
+                    text=self._render_account_state(
                         account_state,
-                        error=(account_state_error),
-                    )
-                ),
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-        except Exception:
-            # The snapshot is informational and
-            # must never prevent delivery of the
-            # actionable approval card.
-            logger.exception("Failed to send account snapshot")
+                        error=account_state_error,
+                    ),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                # The snapshot is informational and
+                # must never prevent delivery of the
+                # actionable approval card.
+                logger.exception("Failed to send account snapshot")
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -160,12 +160,12 @@ class ApprovalBot:
         )
 
         await self._bot.send_message(
-            chat_id=(self._approval_chat_id),
+            chat_id=self._approval_chat_id,
             text=self._render(
                 intent,
                 plan,
                 exposure=exposure,
-                exposure_error=(exposure_error),
+                exposure_error=exposure_error,
             ),
             parse_mode="HTML",
             disable_web_page_preview=True,

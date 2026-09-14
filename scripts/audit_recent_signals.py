@@ -556,15 +556,15 @@ def write_report(
                     ]
                 )
 
-                if evaluation.get("intent") is not None:
+                if evaluation.get("intents"):
                     lines.extend(
                         [
                             "",
-                            "**Extracted intent**",
+                            "**Extracted intents**",
                             "",
                             "```json",
                             json.dumps(
-                                evaluation["intent"],
+                                evaluation["intents"],
                                 ensure_ascii=False,
                                 indent=2,
                             ),
@@ -870,7 +870,7 @@ async def main() -> int:
                                 extraction.model_dump_json()
                             )
 
-                            if extraction.actionable and extraction.intent is not None:
+                            if extraction.actionable and extraction.intents:
                                 record["category"] = "ACTIONABLE"
                             else:
                                 record["category"] = "NON_ACTIONABLE"

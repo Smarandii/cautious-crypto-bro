@@ -107,7 +107,7 @@ async def main() -> None:
     )
 
     try:
-        intent = await extractor.extract(
+        intents = await extractor.extract(
             post,
             global_guidance=global_guidance,
             channel_guidance=channel_guidance,
@@ -115,11 +115,19 @@ async def main() -> None:
     finally:
         await extractor.close()
 
-    if intent is None:
+    if not intents:
         print("NO ACTIONABLE INTENT")
         return
 
-    print(intent.model_dump_json(indent=2))
+    print(f"ACTIONABLE INTENTS: {len(intents)}")
+
+    for index, intent in enumerate(
+        intents,
+        start=1,
+    ):
+        print()
+        print(f"=== INTENT {index} ===")
+        print(intent.model_dump_json(indent=2))
 
 
 if __name__ == "__main__":

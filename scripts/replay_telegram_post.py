@@ -140,10 +140,10 @@ async def main() -> int:
     )
 
     try:
-        intent = await extractor.extract(
+        intents = await extractor.extract(
             post,
-            global_guidance=(global_guidance),
-            channel_guidance=(channel_guidance),
+            global_guidance=global_guidance,
+            channel_guidance=channel_guidance,
             debug_dir=args.debug_dir,
         )
     finally:
@@ -151,13 +151,21 @@ async def main() -> int:
         await runtime_store.close()
 
     print()
-    print("=== TRADING INTENT ===")
+    print("=== TRADING INTENTS ===")
 
-    if intent is None:
+    if not intents:
         print("NO ACTIONABLE INTENT")
         return 0
 
-    print(intent.model_dump_json(indent=2))
+    print(f"Candidates: {len(intents)}")
+
+    for index, intent in enumerate(
+        intents,
+        start=1,
+    ):
+        print()
+        print(f"=== INTENT {index} ===")
+        print(intent.model_dump_json(indent=2))
 
     if args.intent_only:
         return 0
@@ -165,79 +173,89 @@ async def main() -> int:
     policy = await store.get_execution_policy()
 
     executor = BybitDemoExecutor(
-        api_key=(settings.bybit_api_key),
-        api_secret=(settings.bybit_api_secret),
+        api_key=settings.bybit_api_key,
+        api_secret=settings.bybit_api_secret,
     )
 
-    try:
-        context = await executor.market_context(intent.symbol)
+    bot = None
 
-        try:
-            plan = ExecutionPlanner().plan(
-                intent,
-                policy,
-                context,
-            )
-        except Exception as exc:
-            print()
-            print("=== EXECUTION PLAN ===")
-            print("PLANNING FAILED")
-            print(f"{type(exc).__name__}: {exc}")
-
-            print()
-            print(
-                "The TradingIntent above is "
-                "still the extractor result. "
-                "Historical MARKET signals may "
-                "fail planning because planning "
-                "uses current Bybit market data."
-            )
-
-            return 2
-
-        print()
-        print("=== EXECUTION PLAN ===")
-        print(plan.model_dump_json(indent=2))
-
-        if not args.send_approval:
-            print()
-            print("Replay complete. Nothing was persisted or executed.")
-            print("Use --send-approval to create a normal approval card.")
-            return 0
-
-        await store.create_intent_with_plan(
-            intent,
-            plan,
-        )
-
+    if args.send_approval:
         bot = ApprovalBot(
-            token=(settings.telegram_bot_token),
-            approval_chat_id=(settings.telegram_approval_chat_id),
-            approver_user_id=(settings.telegram_approver_user_id),
-            max_age_seconds=(settings.intent_max_age_seconds),
+            token=settings.telegram_bot_token,
+            approval_chat_id=settings.telegram_approval_chat_id,
+            approver_user_id=settings.telegram_approver_user_id,
+            max_age_seconds=settings.intent_max_age_seconds,
             store=store,
             executor=executor,
         )
 
-        try:
-            await bot.send_intent(
+    planner = ExecutionPlanner()
+    planning_failures = 0
+    approvals_sent = 0
+
+    try:
+        for index, intent in enumerate(
+            intents,
+            start=1,
+        ):
+            try:
+                context = await executor.market_context(intent.symbol)
+
+                plan = planner.plan(
+                    intent,
+                    policy,
+                    context,
+                )
+
+            except Exception as exc:
+                planning_failures += 1
+
+                print()
+                print(f"=== EXECUTION PLAN {index} ({intent.symbol}) ===")
+                print("PLANNING FAILED")
+                print(f"{type(exc).__name__}: {exc}")
+                continue
+
+            print()
+            print(f"=== EXECUTION PLAN {index} ({intent.symbol}) ===")
+            print(plan.model_dump_json(indent=2))
+
+            if not args.send_approval:
+                continue
+
+            await store.create_intent_with_plan(
                 intent,
                 plan,
             )
-        finally:
-            await bot.close()
+
+            assert bot is not None
+
+            await bot.send_intent(
+                intent,
+                plan,
+                send_account_state=(approvals_sent == 0),
+            )
+
+            approvals_sent += 1
 
         print()
-        print("Approval card sent.")
-        print(
-            "Pressing Execute uses the normal "
-            "live approval path and places "
-            "Bybit Demo orders."
-        )
 
-        return 0
+        if args.send_approval:
+            print(f"Approval cards sent: {approvals_sent}")
+            print(
+                "Pressing Execute uses the normal "
+                "approval path and places Bybit Demo orders."
+            )
+        else:
+            print("Replay complete. Nothing was persisted or executed.")
+            print("Use --send-approval to create normal approval cards.")
+
+        return 2 if planning_failures else 0
 
     finally:
+        if bot is not None:
+            await bot.close()
+
         executor.close()
 
 

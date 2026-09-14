@@ -135,17 +135,23 @@ class IntentExtraction(BaseModel):
 
     actionable: bool
     reason: str = Field(min_length=1, max_length=500)
-    intent: ExtractedIntent | None = None
+    intents: tuple[
+        ExtractedIntent,
+        ...,
+    ] = Field(
+        default=(),
+        max_length=5,
+    )
 
     @model_validator(mode="after")
     def consistent_actionability(
         self,
     ) -> IntentExtraction:
-        if self.actionable and self.intent is None:
-            raise ValueError("actionable=true requires intent")
+        if self.actionable and not self.intents:
+            raise ValueError("actionable=true requires at least one intent")
 
-        if not self.actionable and self.intent is not None:
-            raise ValueError("actionable=false requires intent=null")
+        if not self.actionable and self.intents:
+            raise ValueError("actionable=false requires intents=[]")
 
         return self
 

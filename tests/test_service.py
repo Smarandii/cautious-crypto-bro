@@ -131,7 +131,7 @@ class FailOnceExtractor:
         if self.calls == 1:
             raise RuntimeError("temporary failure")
 
-        return None
+        return ()
 
 
 def test_extraction_failure_is_retryable() -> None:
@@ -160,5 +160,185 @@ def test_extraction_failure_is_retryable() -> None:
         assert extractor.calls == 2
         assert store.status == "COMPLETED"
         assert store.completed == 1
+
+    asyncio.run(run())
+
+
+def test_multiple_intents_are_planned_persisted_and_sent() -> None:
+    from types import SimpleNamespace
+
+    from cautious_crypto_bro.domain import (
+        Entry,
+        EntryType,
+        Side,
+        TradingIntent,
+    )
+
+    class Store:
+        def __init__(self) -> None:
+            self.persisted = []
+
+        async def claim_source(
+            self,
+            source,
+            *,
+            lease_seconds,
+        ):
+            return "claim"
+
+        async def get_guidance(
+            self,
+            channel_id,
+        ):
+            return None, None
+
+        async def get_execution_policy(self):
+            return object()
+
+        async def create_intents_with_plans_and_complete_source(
+            self,
+            items,
+            claim_token,
+        ):
+            assert claim_token == "claim"
+            self.persisted = list(items)
+            return True
+
+        async def mark_source_failed(
+            self,
+            source,
+            claim_token,
+            error,
+        ):
+            raise AssertionError(f"source unexpectedly failed: {error}")
+
+    class Extractor:
+        def __init__(self, intents) -> None:
+            self.intents = intents
+
+        async def extract(
+            self,
+            post,
+            **kwargs,
+        ):
+            return self.intents
+
+    class Planner:
+        def plan(
+            self,
+            intent,
+            policy,
+            context,
+        ):
+            return SimpleNamespace(
+                intent_id=intent.intent_id,
+                orders=(object(),),
+            )
+
+    class AccountState:
+        def exposure_for(
+            self,
+            symbol,
+        ):
+            return f"exposure:{symbol}"
+
+    class Executor:
+        def __init__(self) -> None:
+            self.market_context_calls = []
+            self.account_state_calls = 0
+
+        async def market_context(
+            self,
+            symbol,
+        ):
+            self.market_context_calls.append(symbol)
+            return symbol
+
+        async def account_state(self):
+            self.account_state_calls += 1
+            return AccountState()
+
+    class Bot:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def send_intent(
+            self,
+            intent,
+            plan,
+            **kwargs,
+        ):
+            self.calls.append(
+                (
+                    intent,
+                    plan,
+                    kwargs,
+                )
+            )
+
+    async def run() -> None:
+        source_post = post()
+
+        first = TradingIntent(
+            source=source_post.source,
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            entry=Entry(
+                type=EntryType.LIMIT,
+                price=100,
+            ),
+            stop_loss=90,
+            take_profit=120,
+            summary="BTC",
+            confidence=1,
+        )
+
+        second = TradingIntent(
+            source=source_post.source,
+            symbol="ETHUSDT",
+            side=Side.SHORT,
+            entry=Entry(
+                type=EntryType.LIMIT,
+                price=200,
+            ),
+            stop_loss=220,
+            take_profit=170,
+            summary="ETH",
+            confidence=1,
+        )
+
+        store = Store()
+        executor = Executor()
+        bot = Bot()
+
+        service = SignalService(
+            store=store,
+            extractor=Extractor(
+                (
+                    first,
+                    second,
+                )
+            ),
+            planner=Planner(),
+            executor=executor,
+            approval_bot=bot,
+        )
+
+        await service.on_message(source_post)
+
+        assert len(store.persisted) == 2
+        assert executor.market_context_calls == [
+            "BTCUSDT",
+            "ETHUSDT",
+        ]
+        assert executor.account_state_calls == 1
+
+        assert len(bot.calls) == 2
+
+        assert bot.calls[0][2]["send_account_state"] is True
+        assert bot.calls[1][2]["send_account_state"] is False
+
+        assert bot.calls[0][2]["exposure"] == ("exposure:BTCUSDT")
+        assert bot.calls[1][2]["exposure"] == ("exposure:ETHUSDT")
 
     asyncio.run(run())
