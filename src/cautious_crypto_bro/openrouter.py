@@ -12,9 +12,14 @@ import httpx
 from pydantic import ValidationError
 
 from .domain import (
+    Entry,
+    EntryType,
+    ExtractedEntryPayload,
     IncomingPost,
     IntentExtraction,
     PositionActionIntent,
+    PositionActionType,
+    Side,
     SignalExtraction,
     SourceMessage,
     TradingIntent,
@@ -71,8 +76,12 @@ Inspect ONE Telegram post, including all attached images, and extract:
 
 Output rules:
 - use the exact supplied JSON schema field names
-- for OPEN intents use side and entry; never use aliases such as
-  direction or entry_semantics
+- for OPEN intents, entry should normally be the string
+  MARKET, LIMIT, or RANGE
+- for LIMIT put the numeric entry in top-level price
+- for RANGE put the numeric boundaries in top-level range_low
+  and range_high
+- do not attach a historical/average price to MARKET
 - actionable=true if at least one valid OPEN intent or position action exists
 - actionable=false only when both intents and position_actions are empty
 - maximum five OPEN intents and five position actions
@@ -206,7 +215,7 @@ def _evaluation_fingerprint(
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 3,
+        "cache_version": 4,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
@@ -246,43 +255,188 @@ def _evaluation_fingerprint(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _side_from_transport(
+    value: str | None,
+) -> Side | None:
+    if value is None:
+        return None
+
+    try:
+        return Side(value.strip().upper())
+    except ValueError:
+        return None
+
+
+def _entry_from_transport(
+    raw,
+) -> Entry | None:
+    nested: ExtractedEntryPayload | None = None
+    entry_name: str | None = None
+
+    if isinstance(raw.entry, str):
+        entry_name = raw.entry
+
+    elif isinstance(
+        raw.entry,
+        ExtractedEntryPayload,
+    ):
+        nested = raw.entry
+        entry_name = nested.type
+
+    if not entry_name:
+        entry_name = raw.entry_semantics
+
+    if not entry_name:
+        return None
+
+    try:
+        entry_type = EntryType(entry_name.strip().upper())
+    except ValueError:
+        return None
+
+    price = (
+        raw.price
+        if raw.price is not None
+        else (nested.price if nested is not None else None)
+    )
+
+    range_low = (
+        raw.range_low
+        if raw.range_low is not None
+        else (nested.range_low if nested is not None else None)
+    )
+
+    range_high = (
+        raw.range_high
+        if raw.range_high is not None
+        else (nested.range_high if nested is not None else None)
+    )
+
+    try:
+        if entry_type is EntryType.MARKET:
+            # Historical/average price attached to a
+            # MARKET signal is intentionally ignored.
+            return Entry(type=EntryType.MARKET)
+
+        if entry_type is EntryType.LIMIT:
+            if price is None:
+                return None
+
+            return Entry(
+                type=EntryType.LIMIT,
+                price=price,
+            )
+
+        if range_low is None or range_high is None:
+            return None
+
+        return Entry(
+            type=EntryType.RANGE,
+            range_low=range_low,
+            range_high=range_high,
+        )
+
+    except ValidationError:
+        return None
+
+
 def _signals_from_extraction(
     source: SourceMessage,
     extraction: IntentExtraction,
 ) -> SignalExtraction:
-    if not extraction.actionable:
-        return SignalExtraction()
+    opens: list[TradingIntent] = []
 
-    opens = tuple(
-        TradingIntent(
-            source=source,
-            symbol=raw.symbol,
-            side=raw.side,
-            entry=raw.entry,
-            stop_loss=raw.stop_loss,
-            take_profit=raw.take_profit,
-            summary=raw.summary,
-            confidence=raw.confidence,
-        )
-        for raw in extraction.intents
-    )
+    for raw in extraction.intents:
+        side = _side_from_transport(raw.side)
 
-    actions = tuple(
-        PositionActionIntent(
-            source=source,
-            symbol=raw.symbol,
-            action=raw.action,
-            close_pct=raw.close_pct,
-            expected_side=raw.expected_side,
-            summary=raw.summary,
-            confidence=raw.confidence,
+        entry = _entry_from_transport(raw)
+
+        if side is None or entry is None or raw.stop_loss is None:
+            logger.warning(
+                "Dropping incomplete OPEN candidate from %s/%s for %s",
+                source.channel_id,
+                source.message_id,
+                raw.symbol,
+            )
+            continue
+
+        try:
+            intent = TradingIntent(
+                source=source,
+                symbol=raw.symbol,
+                side=side,
+                entry=entry,
+                stop_loss=raw.stop_loss,
+                take_profit=raw.take_profit,
+                summary=raw.summary,
+                confidence=raw.confidence,
+            )
+
+        except ValidationError as exc:
+            logger.warning(
+                "Dropping invalid OPEN candidate from %s/%s for %s: %s",
+                source.channel_id,
+                source.message_id,
+                raw.symbol,
+                exc,
+            )
+            continue
+
+        opens.append(intent)
+
+    actions: list[PositionActionIntent] = []
+
+    for raw in extraction.position_actions:
+        action_name = raw.action.strip().upper()
+
+        # HOLD is useful model interpretation but is
+        # deliberately non-executable.
+        if action_name == "HOLD":
+            continue
+
+        try:
+            action_type = PositionActionType(action_name)
+        except ValueError:
+            logger.warning(
+                "Dropping unsupported position action %r from %s/%s",
+                raw.action,
+                source.channel_id,
+                source.message_id,
+            )
+            continue
+
+        expected_side = _side_from_transport(raw.expected_side) or _side_from_transport(
+            raw.side
         )
-        for raw in extraction.position_actions
-    )
+
+        close_pct = None if action_type is PositionActionType.CLOSE else raw.close_pct
+
+        try:
+            action = PositionActionIntent(
+                source=source,
+                symbol=raw.symbol,
+                action=action_type,
+                close_pct=close_pct,
+                expected_side=expected_side,
+                summary=raw.summary,
+                confidence=raw.confidence,
+            )
+
+        except ValidationError as exc:
+            logger.warning(
+                "Dropping invalid position action from %s/%s for %s: %s",
+                source.channel_id,
+                source.message_id,
+                raw.symbol,
+                exc,
+            )
+            continue
+
+        actions.append(action)
 
     return SignalExtraction(
-        open_intents=opens,
-        position_actions=actions,
+        open_intents=tuple(opens),
+        position_actions=tuple(actions),
     )
 
 
@@ -532,7 +686,12 @@ class OpenRouterIntentExtractor:
                     source.message_id,
                 )
 
-                if not cached_extraction.actionable:
+                cached_signals = _signals_from_extraction(
+                    source,
+                    cached_extraction,
+                )
+
+                if not cached_signals.actionable:
                     logger.info(
                         "No actionable intent for %s/%s: %s",
                         source.channel_id,
@@ -540,10 +699,7 @@ class OpenRouterIntentExtractor:
                         cached_extraction.reason,
                     )
 
-                return _signals_from_extraction(
-                    source,
-                    cached_extraction,
-                )
+                return cached_signals
 
         payload = {
             "model": self._model,
@@ -853,7 +1009,12 @@ class OpenRouterIntentExtractor:
                 extraction,
             )
 
-        if not extraction.actionable:
+        signals = _signals_from_extraction(
+            source,
+            extraction,
+        )
+
+        if not signals.actionable:
             logger.info(
                 "No actionable intent for %s/%s: %s",
                 source.channel_id,
@@ -861,7 +1022,4 @@ class OpenRouterIntentExtractor:
                 extraction.reason,
             )
 
-        return _signals_from_extraction(
-            source,
-            extraction,
-        )
+        return signals

@@ -28,6 +28,7 @@ from cautious_crypto_bro.openrouter import (
     SYSTEM_PROMPT,
     OpenRouterIntentExtractor,
     _evaluation_fingerprint,
+    _signals_from_extraction,
 )
 from cautious_crypto_bro.runtime_store import (
     ReadOnlyProviderCooldownStore,
@@ -920,7 +921,14 @@ async def main() -> int:
                                 extraction.model_dump_json()
                             )
 
-                            if extraction.actionable:
+                            executable = _signals_from_extraction(
+                                post.source,
+                                extraction,
+                            )
+
+                            record["derived_actionable"] = executable.actionable
+
+                            if executable.actionable:
                                 record["category"] = "ACTIONABLE"
                             else:
                                 record["category"] = "NON_ACTIONABLE"

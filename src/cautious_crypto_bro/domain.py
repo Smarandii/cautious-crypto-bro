@@ -123,50 +123,94 @@ class Entry(BaseModel):
         return self
 
 
+class ExtractedEntryPayload(BaseModel):
+    """Tolerant transport shape for LLM entry output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str | None = None
+    price: float | None = None
+    range_low: float | None = None
+    range_high: float | None = None
+
+
 class ExtractedIntent(BaseModel):
+    """LLM transport DTO.
+
+    Deliberately more permissive than TradingIntent.
+    Strict trading validation happens when this DTO is
+    converted into the executable domain model.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     symbol: str
-    side: Side
-    entry: Entry
-    stop_loss: float = Field(gt=0)
-    take_profit: float | None = Field(default=None, gt=0)
+    side: str | None = None
+
+    # Providers/models have emitted both:
+    #   "entry": "MARKET"
+    # and:
+    #   "entry": {"type": "MARKET", ...}
+    entry: str | ExtractedEntryPayload | None = None
+
+    # Compatibility with observed provider vocabulary.
+    entry_semantics: str | None = None
+
+    # Flat entry fields are preferred.
+    price: float | None = None
+    range_low: float | None = None
+    range_high: float | None = None
+
+    stop_loss: float | None = None
+    take_profit: float | None = None
+
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
 
 
 class ExtractedPositionAction(BaseModel):
+    """Tolerant transport DTO for lifecycle instructions."""
+
     model_config = ConfigDict(extra="forbid")
 
     symbol: str
-    action: PositionActionType
-    close_pct: float | None = Field(
-        default=None,
-        gt=0,
-        lt=100,
-    )
-    expected_side: Side | None = None
+    action: str
+    close_pct: float | None = None
+
+    # Prefer expected_side, but tolerate the model's
+    # natural tendency to emit side instead.
+    expected_side: str | None = None
+    side: str | None = None
+
+    # These fields are intentionally tolerated because
+    # models sometimes copy OPEN-position information
+    # into HOLD/REDUCE/CLOSE objects. They are ignored
+    # by lifecycle execution.
+    entry: str | ExtractedEntryPayload | None = None
+    entry_semantics: str | None = None
+    price: float | None = None
+    range_low: float | None = None
+    range_high: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
 
-    @model_validator(mode="after")
-    def validate_action(
-        self,
-    ) -> ExtractedPositionAction:
-        if self.action is PositionActionType.REDUCE and self.close_pct is None:
-            raise ValueError("REDUCE requires close_pct")
-
-        if self.action is PositionActionType.CLOSE and self.close_pct is not None:
-            raise ValueError("CLOSE must not contain close_pct")
-
-        return self
-
 
 class IntentExtraction(BaseModel):
+    """Raw model response.
+
+    `actionable` is advisory model output only. The
+    application derives real actionability after strict
+    domain conversion.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     actionable: bool
     reason: str = Field(min_length=1, max_length=500)
+
     intents: tuple[
         ExtractedIntent,
         ...,
@@ -174,6 +218,7 @@ class IntentExtraction(BaseModel):
         default=(),
         max_length=5,
     )
+
     position_actions: tuple[
         ExtractedPositionAction,
         ...,
@@ -181,22 +226,6 @@ class IntentExtraction(BaseModel):
         default=(),
         max_length=5,
     )
-
-    @model_validator(mode="after")
-    def consistent_actionability(
-        self,
-    ) -> IntentExtraction:
-        has_actions = bool(self.intents or self.position_actions)
-
-        if self.actionable and not has_actions:
-            raise ValueError(
-                "actionable=true requires at least one open intent or position action"
-            )
-
-        if not self.actionable and has_actions:
-            raise ValueError("actionable=false requires empty outputs")
-
-        return self
 
 
 class TradingIntent(BaseModel):

@@ -304,7 +304,7 @@ def test_invalid_output_is_excluded_only_for_current_extraction() -> None:
                                             {
                                                 "actionable": True,
                                                 "reason": "invalid",
-                                                "intents": [],
+                                                "intents": "not-a-list",
                                             }
                                         )
                                     ),
@@ -737,3 +737,238 @@ def test_position_actions_are_returned_separately() -> None:
         assert close.close_pct is None
 
     asyncio.run(run())
+
+
+def test_market_string_with_price_is_normalized_safely() -> None:
+    from cautious_crypto_bro.domain import (
+        EntryType,
+        IntentExtraction,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Open position screenshot",
+            "intents": [
+                {
+                    "symbol": "NEARUSDT",
+                    "side": "LONG",
+                    "entry": "MARKET",
+                    "price": 2.3,
+                    "stop_loss": 2.221,
+                    "take_profit": None,
+                    "summary": "NEAR long",
+                    "confidence": 1,
+                }
+            ],
+            "position_actions": [],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source(),
+        extraction,
+    )
+
+    assert len(signals.open_intents) == 1
+
+    intent = signals.open_intents[0]
+
+    assert intent.entry.type is EntryType.MARKET
+    assert intent.entry.price is None
+
+
+def test_nested_market_with_price_is_normalized_safely() -> None:
+    from cautious_crypto_bro.domain import (
+        EntryType,
+        IntentExtraction,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Open position screenshot",
+            "intents": [
+                {
+                    "symbol": "NEARUSDT",
+                    "side": "LONG",
+                    "entry": {
+                        "type": "MARKET",
+                        "price": 2.3,
+                    },
+                    "stop_loss": 2.221,
+                    "take_profit": None,
+                    "summary": "NEAR long",
+                    "confidence": 1,
+                }
+            ],
+            "position_actions": [],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source(),
+        extraction,
+    )
+
+    assert len(signals.open_intents) == 1
+    assert signals.open_intents[0].entry.type is EntryType.MARKET
+    assert signals.open_intents[0].entry.price is None
+
+
+def test_hold_with_open_fields_is_non_executable() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Existing positions shown",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "NEARUSDT",
+                    "action": "HOLD",
+                    "side": "LONG",
+                    "entry": "MARKET",
+                    "stop_loss": 2.221,
+                    "take_profit": None,
+                    "close_pct": None,
+                    "summary": "Keep holding",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source(),
+        extraction,
+    )
+
+    assert not signals.actionable
+    assert signals.position_actions == ()
+
+
+def test_position_action_side_alias_is_accepted() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+        PositionActionType,
+        Side,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Close half",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "NEARUSDT",
+                    "action": "REDUCE",
+                    "close_pct": 50,
+                    "side": "LONG",
+                    "summary": "Close half",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source(),
+        extraction,
+    )
+
+    assert len(signals.position_actions) == 1
+
+    action = signals.position_actions[0]
+
+    assert action.action is PositionActionType.REDUCE
+    assert action.expected_side is Side.LONG
+    assert action.close_pct == 50
+
+
+def test_model_actionable_flag_does_not_override_domain() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Model claimed actionable",
+            "intents": [],
+            "position_actions": [],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source(),
+        extraction,
+    )
+
+    assert not signals.actionable
+
+
+def test_invalid_open_candidate_does_not_drop_valid_close() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+        PositionActionType,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Mixed output",
+            "intents": [
+                {
+                    "symbol": "BTCUSDT",
+                    "side": "LONG",
+                    "entry": "MARKET",
+                    "stop_loss": 0,
+                    "take_profit": None,
+                    "summary": "Invalid BTC",
+                    "confidence": 1,
+                }
+            ],
+            "position_actions": [
+                {
+                    "symbol": "POLUSDT",
+                    "action": "CLOSE",
+                    "close_pct": None,
+                    "expected_side": "LONG",
+                    "summary": "Close POL",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source(),
+        extraction,
+    )
+
+    assert signals.open_intents == ()
+    assert len(signals.position_actions) == 1
+    assert signals.position_actions[0].action is PositionActionType.CLOSE
