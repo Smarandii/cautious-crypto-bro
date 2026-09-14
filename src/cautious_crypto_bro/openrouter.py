@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import time
 import unicodedata
 from pathlib import Path
@@ -384,6 +385,72 @@ def _has_current_post_action_evidence(
     return evidence in post_text
 
 
+def _reduction_pct_from_evidence(
+    evidence_text: str | None,
+) -> float | None:
+    if evidence_text is None:
+        return None
+
+    text = _normalize_evidence_text(evidence_text)
+
+    # Explicit percentages are authoritative.
+    # Examples: 30%, 0.5%, 30 percent,
+    # 30 процентов.
+    percent_match = re.search(
+        r"(?<![\d.,])"
+        r"(\d+(?:[.,]\d+)?)"
+        r"\s*%",
+        text,
+    )
+
+    if percent_match is None:
+        percent_match = re.search(
+            r"(?<![\d.,])"
+            r"(\d+(?:[.,]\d+)?)"
+            r"\s+"
+            r"(?:percent(?:s)?|"
+            r"процент(?:а|ов)?)"
+            r"\b",
+            text,
+        )
+
+    if percent_match is not None:
+        value = float(percent_match.group(1).replace(",", "."))
+
+        if 0 < value < 100:
+            return value
+
+        return None
+
+    # Explicit mathematical fractions.
+    fraction_match = re.search(
+        r"(?<!\d)"
+        r"(\d+)"
+        r"\s*/\s*"
+        r"(\d+)"
+        r"(?!\d)",
+        text,
+    )
+
+    if fraction_match is not None:
+        numerator = int(fraction_match.group(1))
+        denominator = int(fraction_match.group(2))
+
+        if denominator > 0 and 0 < numerator < denominator:
+            return numerator / denominator * 100
+
+        return None
+
+    # Common exact natural-language fractions.
+    if re.search(r"\bhalf\b", text) or "половин" in text:
+        return 50.0
+
+    if re.search(r"\bquarter\b", text) or "четверт" in text:
+        return 25.0
+
+    return None
+
+
 def _signals_from_extraction(
     source: SourceMessage,
     extraction: IntentExtraction,
@@ -469,7 +536,31 @@ def _signals_from_extraction(
             raw.side
         )
 
-        close_pct = None if action_type is PositionActionType.CLOSE else raw.close_pct
+        if action_type is PositionActionType.CLOSE:
+            close_pct = None
+        else:
+            close_pct = _reduction_pct_from_evidence(raw.evidence_text)
+
+            if close_pct is None:
+                logger.warning(
+                    "Dropping REDUCE position "
+                    "action for %s from %s/%s: "
+                    "no deterministic reduction "
+                    "amount in current caption "
+                    "evidence",
+                    raw.symbol,
+                    source.channel_id,
+                    source.message_id,
+                )
+                continue
+
+            if raw.close_pct is not None and abs(raw.close_pct - close_pct) > 1e-9:
+                logger.warning(
+                    "Normalizing REDUCE close_pct for %s from model=%s to evidence=%s",
+                    raw.symbol,
+                    raw.close_pct,
+                    close_pct,
+                )
 
         try:
             action = PositionActionIntent(
