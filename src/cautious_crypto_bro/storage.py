@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -480,13 +481,37 @@ class IntentStore:
             )
             await db.commit()
 
-    async def create_intent_with_plan_and_complete_source(
+    async def create_intents_with_plans_and_complete_source(
         self,
-        intent: TradingIntent,
-        plan: ExecutionPlan,
+        items: Sequence[
+            tuple[
+                TradingIntent,
+                ExecutionPlan,
+            ]
+        ],
         claim_token: str,
     ) -> bool:
-        source = intent.source
+        if not items:
+            raise ValueError("At least one intent/plan pair is required")
+
+        source = items[0][0].source
+        source_key = (
+            source.channel_id,
+            source.message_id,
+        )
+
+        for intent, plan in items:
+            if (
+                intent.source.channel_id,
+                intent.source.message_id,
+            ) != source_key:
+                raise ValueError(
+                    "All intents in a source batch must belong "
+                    "to the same Telegram post"
+                )
+
+            if plan.intent_id != intent.intent_id:
+                raise ValueError("ExecutionPlan intent_id does not match TradingIntent")
 
         async with aiosqlite.connect(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
@@ -513,11 +538,12 @@ class IntentStore:
                     await db.rollback()
                     return False
 
-                await self._insert_intent_with_plan(
-                    db,
-                    intent,
-                    plan,
-                )
+                for intent, plan in items:
+                    await self._insert_intent_with_plan(
+                        db,
+                        intent,
+                        plan,
+                    )
 
                 cursor = await db.execute(
                     """
@@ -526,8 +552,7 @@ class IntentStore:
                         status = 'COMPLETED',
                         last_error = NULL,
                         claim_token = NULL,
-                        updated_at =
-                            CURRENT_TIMESTAMP
+                        updated_at = CURRENT_TIMESTAMP
                     WHERE
                         channel_id = ?
                         AND message_id = ?
@@ -551,6 +576,22 @@ class IntentStore:
             except Exception:
                 await db.rollback()
                 raise
+
+    async def create_intent_with_plan_and_complete_source(
+        self,
+        intent: TradingIntent,
+        plan: ExecutionPlan,
+        claim_token: str,
+    ) -> bool:
+        return await self.create_intents_with_plans_and_complete_source(
+            (
+                (
+                    intent,
+                    plan,
+                ),
+            ),
+            claim_token,
+        )
 
     async def get_intent(
         self,

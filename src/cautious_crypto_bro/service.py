@@ -4,7 +4,11 @@ import logging
 
 from .approval_bot import ApprovalBot
 from .bybit import BybitDemoExecutor
-from .domain import IncomingPost
+from .domain import (
+    ExecutionPlan,
+    IncomingPost,
+    TradingIntent,
+)
 from .execution import ExecutionPlanner
 from .openrouter import (
     OpenRouterIntentExtractor,
@@ -43,7 +47,7 @@ class SignalService:
 
         claim_token = await self._store.claim_source(
             source,
-            lease_seconds=(self._source_processing_lease_seconds),
+            lease_seconds=self._source_processing_lease_seconds,
         )
 
         if claim_token is None:
@@ -60,17 +64,17 @@ class SignalService:
                 channel_guidance,
             ) = await self._store.get_guidance(source.channel_id)
 
-            intent = await self._extractor.extract(
+            intents = await self._extractor.extract(
                 post,
-                global_guidance=(global_guidance),
-                channel_guidance=(channel_guidance),
+                global_guidance=global_guidance,
+                channel_guidance=channel_guidance,
             )
 
         except Exception as exc:
             await self._store.mark_source_failed(
                 source,
                 claim_token,
-                (f"{type(exc).__name__}: {exc}"),
+                f"{type(exc).__name__}: {exc}",
             )
 
             logger.exception(
@@ -80,7 +84,7 @@ class SignalService:
             )
             return
 
-        if intent is None:
+        if not intents:
             await self._store.mark_source_completed(
                 source,
                 claim_token,
@@ -89,45 +93,92 @@ class SignalService:
 
         try:
             policy = await self._store.get_execution_policy()
-
-            context = await self._executor.market_context(intent.symbol)
-
-            plan = self._planner.plan(
-                intent,
-                policy,
-                context,
-            )
-
         except Exception as exc:
             await self._store.mark_source_failed(
                 source,
                 claim_token,
-                (f"{type(exc).__name__}: {exc}"),
+                f"{type(exc).__name__}: {exc}",
             )
 
             logger.exception(
-                "Execution planning failed for %s/%s",
+                "Execution policy load failed for %s/%s",
                 source.channel_id,
                 source.message_id,
             )
             return
 
+        planned: list[
+            tuple[
+                TradingIntent,
+                ExecutionPlan,
+            ]
+        ] = []
+
+        planning_errors: list[str] = []
+
+        for intent in intents:
+            try:
+                context = await self._executor.market_context(intent.symbol)
+
+                plan = self._planner.plan(
+                    intent,
+                    policy,
+                    context,
+                )
+
+            except Exception as exc:
+                error = f"{intent.symbol}: {type(exc).__name__}: {exc}"
+
+                planning_errors.append(error)
+
+                logger.exception(
+                    "Execution planning failed for candidate %s from %s/%s",
+                    intent.symbol,
+                    source.channel_id,
+                    source.message_id,
+                )
+                continue
+
+            planned.append(
+                (
+                    intent,
+                    plan,
+                )
+            )
+
+        if not planned:
+            await self._store.mark_source_failed(
+                source,
+                claim_token,
+                (
+                    "No extracted candidate could be planned: "
+                    + " | ".join(planning_errors)
+                ),
+            )
+            return
+
+        if planning_errors:
+            logger.warning(
+                "Planning kept %d/%d candidate(s) for %s/%s; "
+                "%d candidate(s) were omitted",
+                len(planned),
+                len(intents),
+                source.channel_id,
+                source.message_id,
+                len(planning_errors),
+            )
+
         account_state = None
         account_state_error = None
-        exposure = None
-        exposure_error = None
 
         try:
             account_state = await self._executor.account_state()
 
-            exposure = account_state.exposure_for(intent.symbol)
-
         except Exception as exc:
             account_state_error = f"{type(exc).__name__}: {exc}"
-            exposure_error = account_state_error
 
             # Account state is informational.
-            # Failure must not discard a valid signal.
+            # Failure must not discard valid signals.
             logger.exception(
                 "Account-state check failed for %s/%s",
                 source.channel_id,
@@ -135,9 +186,8 @@ class SignalService:
             )
 
         try:
-            finalized = await self._store.create_intent_with_plan_and_complete_source(
-                intent,
-                plan,
+            finalized = await self._store.create_intents_with_plans_and_complete_source(
+                planned,
                 claim_token,
             )
 
@@ -145,11 +195,11 @@ class SignalService:
             await self._store.mark_source_failed(
                 source,
                 claim_token,
-                (f"{type(exc).__name__}: {exc}"),
+                f"{type(exc).__name__}: {exc}",
             )
 
             logger.exception(
-                "Intent persistence failed for %s/%s",
+                "Intent batch persistence failed for %s/%s",
                 source.channel_id,
                 source.message_id,
             )
@@ -157,34 +207,42 @@ class SignalService:
 
         if not finalized:
             logger.warning(
-                "Lost processing claim before intent persistence for %s/%s",
+                "Lost processing claim before intent batch persistence for %s/%s",
                 source.channel_id,
                 source.message_id,
             )
             return
 
-        try:
-            await self._approval_bot.send_intent(
-                intent,
-                plan,
-                exposure=exposure,
-                exposure_error=(exposure_error),
-                account_state=(account_state),
-                account_state_error=(account_state_error),
-            )
-        except Exception:
-            # The durable intent/plan already exists.
-            # Retrying the whole source here could create
-            # duplicate intents. Approval delivery needs
-            # its own retry/outbox mechanism.
-            logger.exception(
-                "Approval delivery failed for persisted intent %s",
-                intent.intent_id,
-            )
-            return
+        for index, (intent, plan) in enumerate(planned):
+            exposure = None
 
-        logger.info(
-            "Created trading intent %s with %d planned order(s)",
-            intent.intent_id,
-            len(plan.orders),
-        )
+            if account_state is not None:
+                exposure = account_state.exposure_for(intent.symbol)
+
+            try:
+                await self._approval_bot.send_intent(
+                    intent,
+                    plan,
+                    exposure=exposure,
+                    exposure_error=account_state_error,
+                    account_state=account_state,
+                    account_state_error=account_state_error,
+                    send_account_state=(index == 0),
+                )
+
+            except Exception:
+                # All intent/plan pairs are already durable.
+                # Delivery retry/outbox remains separate debt.
+                logger.exception(
+                    "Approval delivery failed for persisted intent %s",
+                    intent.intent_id,
+                )
+                continue
+
+            logger.info(
+                "Created trading intent %s with %d planned order(s) "
+                "from %d candidate(s) in source post",
+                intent.intent_id,
+                len(plan.orders),
+                len(intents),
+            )
