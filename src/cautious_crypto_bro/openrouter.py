@@ -38,6 +38,8 @@ STATIC_IGNORED_PROVIDERS = (
     "parasail",
 )
 
+DEFAULT_REDUCTION_PCT = 50.0
+
 
 class OpenRouterProviderFailure(ValueError):
     def __init__(
@@ -110,13 +112,15 @@ Existing-position action rules:
 - position actions are account-wide operations on the current position for
   the extracted symbol; they are NOT new opposite-side trades
 - REDUCE means partially close an existing position
-- REDUCE requires an explicit deterministic amount in close_pct
-- explicit percentages are allowed
-- exact fractions are allowed when unambiguous:
+- an explicit partial-close instruction is executable even when the author
+  does not specify an amount
+- explicit percentages are authoritative
+- exact fractions are authoritative when unambiguous:
   half = 50%, quarter = 25%
-- vague phrases such as "take some profit", "fix a part", "trim a little",
-  or equivalent wording without a deterministic amount are NOT executable;
-  omit them from position_actions
+- when the current text clearly instructs a partial close but gives no
+  percentage/fraction, use close_pct=50
+- examples such as "take some profit", "fix a part", "trim the position",
+  "фиксируем часть" and equivalent wording are REDUCE actions
 - CLOSE means fully close the existing position
 - for CLOSE set close_pct=null
 - HOLD, keep holding, wait, do nothing, and similar instructions are
@@ -232,7 +236,7 @@ def _evaluation_fingerprint(
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 5,
+        "cache_version": 6,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
@@ -302,6 +306,9 @@ def _entry_from_transport(
 
     if not entry_name:
         entry_name = raw.entry_semantics
+
+    if not entry_name:
+        entry_name = raw.entry_type
 
     if not entry_name:
         return None
@@ -448,7 +455,11 @@ def _reduction_pct_from_evidence(
     if re.search(r"\bquarter\b", text) or "четверт" in text:
         return 25.0
 
-    return None
+    # This helper is called only after the model has
+    # classified the current caption as an explicit
+    # REDUCE instruction and the exact caption evidence
+    # has passed the destructive-action evidence gate.
+    return DEFAULT_REDUCTION_PCT
 
 
 def _signals_from_extraction(

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import logging
+from datetime import (
+    UTC,
+    datetime,
+    timedelta,
+)
 
 from .approval_bot import ApprovalBot
 from .bybit import BybitDemoExecutor
@@ -38,6 +43,42 @@ class SignalService:
         self._executor = executor
         self._approval_bot = approval_bot
         self._source_processing_lease_seconds = source_processing_lease_seconds
+
+    async def _sync_account_pnl(
+        self,
+    ):
+        now = datetime.now(UTC)
+
+        sync_state = await self._store.get_account_pnl_sync_state()
+
+        if sync_state is None:
+            history_start = now - timedelta(days=7)
+            sync_start = history_start
+
+        else:
+            history_start = sync_state.history_start_at
+
+            # Re-read one overlapping day because
+            # a Bybit closed-PnL row may be updated
+            # after the first fill/partial close.
+            sync_start = min(
+                sync_state.last_synced_at,
+                now,
+            ) - timedelta(days=1)
+
+        records = await self._executor.closed_pnl_history(
+            sync_start,
+            now,
+        )
+
+        await self._store.upsert_closed_pnl(records)
+
+        await self._store.mark_account_pnl_synced(
+            history_start_at=history_start,
+            last_synced_at=now,
+        )
+
+        return await self._store.get_account_pnl_summary()
 
     async def on_message(
         self,
@@ -179,6 +220,20 @@ class SignalService:
 
         account_state = None
         account_state_error = None
+        account_pnl = None
+        account_pnl_error = None
+
+        try:
+            account_pnl = await self._sync_account_pnl()
+
+        except Exception as exc:
+            account_pnl_error = f"{type(exc).__name__}: {exc}"
+
+            logger.exception(
+                "Account P&L sync failed for %s/%s",
+                source.channel_id,
+                source.message_id,
+            )
 
         try:
             account_state = await self._executor.account_state()
@@ -237,6 +292,8 @@ class SignalService:
                     exposure_error=(account_state_error),
                     account_state=account_state,
                     account_state_error=(account_state_error),
+                    account_pnl=account_pnl,
+                    account_pnl_error=(account_pnl_error),
                     send_account_state=(cards_sent == 0),
                 )
 
@@ -261,6 +318,8 @@ class SignalService:
                     action,
                     account_state=account_state,
                     account_state_error=(account_state_error),
+                    account_pnl=account_pnl,
+                    account_pnl_error=(account_pnl_error),
                     send_account_state=(cards_sent == 0),
                 )
 

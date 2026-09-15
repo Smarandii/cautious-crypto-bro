@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import aiosqlite
 
 from .domain import (
+    ClosedPnlRecord,
     ExecutionPlan,
     ExecutionPolicy,
     ExitPolicy,
@@ -17,7 +21,7 @@ from .domain import (
     TradingIntent,
 )
 
-LATEST_SCHEMA_VERSION = 2
+LATEST_SCHEMA_VERSION = 3
 
 
 async def _source_message_columns(
@@ -257,10 +261,76 @@ async def _migrate_to_v2(
     )
 
 
+async def _migrate_to_v3(
+    db: aiosqlite.Connection,
+) -> None:
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS account_closed_pnl (
+            record_id TEXT PRIMARY KEY,
+            order_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            position_side TEXT NOT NULL,
+            closed_pnl TEXT NOT NULL,
+            closed_size TEXT NOT NULL,
+            avg_entry_price TEXT,
+            avg_exit_price TEXT,
+            closed_at TEXT NOT NULL,
+            synced_at TEXT NOT NULL
+                DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    await db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS
+            ix_account_closed_pnl_closed_at
+        ON account_closed_pnl(closed_at)
+        """
+    )
+
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS account_pnl_sync (
+            id INTEGER PRIMARY KEY
+                CHECK(id = 1),
+            history_start_at TEXT NOT NULL,
+            last_synced_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+                DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
 MIGRATIONS = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
+    3: _migrate_to_v3,
 }
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class AccountPnlSyncState:
+    history_start_at: datetime
+    last_synced_at: datetime
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class AccountPnlSummary:
+    realized_pnl: Decimal
+    record_count: int
+    positive_count: int
+    negative_count: int
+    history_start_at: datetime
+    last_synced_at: datetime
 
 
 class IntentStore:
@@ -972,6 +1042,194 @@ class IntentStore:
             )
 
             await db.commit()
+
+    async def upsert_closed_pnl(
+        self,
+        records: Sequence[ClosedPnlRecord],
+    ) -> None:
+        if not records:
+            return
+
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.executemany(
+                """
+                INSERT INTO account_closed_pnl(
+                    record_id,
+                    order_id,
+                    symbol,
+                    position_side,
+                    closed_pnl,
+                    closed_size,
+                    avg_entry_price,
+                    avg_exit_price,
+                    closed_at,
+                    synced_at
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    CURRENT_TIMESTAMP
+                )
+                ON CONFLICT(record_id)
+                DO UPDATE SET
+                    order_id =
+                        excluded.order_id,
+                    symbol =
+                        excluded.symbol,
+                    position_side =
+                        excluded.position_side,
+                    closed_pnl =
+                        excluded.closed_pnl,
+                    closed_size =
+                        excluded.closed_size,
+                    avg_entry_price =
+                        excluded.avg_entry_price,
+                    avg_exit_price =
+                        excluded.avg_exit_price,
+                    closed_at =
+                        excluded.closed_at,
+                    synced_at =
+                        CURRENT_TIMESTAMP
+                """,
+                [
+                    (
+                        record.record_id,
+                        record.order_id,
+                        record.symbol,
+                        record.position_side.value,
+                        str(record.closed_pnl),
+                        str(record.closed_size),
+                        (
+                            str(record.avg_entry_price)
+                            if record.avg_entry_price is not None
+                            else None
+                        ),
+                        (
+                            str(record.avg_exit_price)
+                            if record.avg_exit_price is not None
+                            else None
+                        ),
+                        (record.updated_at.isoformat()),
+                    )
+                    for record in records
+                ],
+            )
+
+            await db.commit()
+
+    async def get_account_pnl_sync_state(
+        self,
+    ) -> AccountPnlSyncState | None:
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT
+                    history_start_at,
+                    last_synced_at
+                FROM account_pnl_sync
+                WHERE id = 1
+                """
+            )
+
+            row = await cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return AccountPnlSyncState(
+            history_start_at=(datetime.fromisoformat(row[0])),
+            last_synced_at=(datetime.fromisoformat(row[1])),
+        )
+
+    async def mark_account_pnl_synced(
+        self,
+        *,
+        history_start_at: datetime,
+        last_synced_at: datetime,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                INSERT INTO account_pnl_sync(
+                    id,
+                    history_start_at,
+                    last_synced_at,
+                    updated_at
+                )
+                VALUES (
+                    1,
+                    ?,
+                    ?,
+                    CURRENT_TIMESTAMP
+                )
+                ON CONFLICT(id)
+                DO UPDATE SET
+                    history_start_at =
+                        CASE
+                            WHEN
+                                excluded.history_start_at
+                                <
+                                account_pnl_sync.history_start_at
+                            THEN
+                                excluded.history_start_at
+                            ELSE
+                                account_pnl_sync.history_start_at
+                        END,
+                    last_synced_at =
+                        CASE
+                            WHEN
+                                excluded.last_synced_at
+                                >
+                                account_pnl_sync.last_synced_at
+                            THEN
+                                excluded.last_synced_at
+                            ELSE
+                                account_pnl_sync.last_synced_at
+                        END,
+                    updated_at =
+                        CURRENT_TIMESTAMP
+                """,
+                (
+                    history_start_at.isoformat(),
+                    last_synced_at.isoformat(),
+                ),
+            )
+
+            await db.commit()
+
+    async def get_account_pnl_summary(
+        self,
+    ) -> AccountPnlSummary | None:
+        sync_state = await self.get_account_pnl_sync_state()
+
+        if sync_state is None:
+            return None
+
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT
+                    closed_pnl
+                FROM account_closed_pnl
+                """
+            )
+
+            rows = await cursor.fetchall()
+
+        values = [Decimal(row[0]) for row in rows]
+
+        realized = sum(
+            values,
+            Decimal("0"),
+        )
+
+        return AccountPnlSummary(
+            realized_pnl=realized,
+            record_count=len(values),
+            positive_count=sum(1 for value in values if value > 0),
+            negative_count=sum(1 for value in values if value < 0),
+            history_start_at=(sync_state.history_start_at),
+            last_synced_at=(sync_state.last_synced_at),
+        )
 
     async def get_execution_policy(
         self,

@@ -14,6 +14,22 @@ class Side(StrEnum):
     SHORT = "SHORT"
 
 
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ClosedPnlRecord:
+    record_id: str
+    order_id: str
+    symbol: str
+    position_side: Side
+    closed_pnl: Decimal
+    closed_size: Decimal
+    avg_entry_price: Decimal | None
+    avg_exit_price: Decimal | None
+    updated_at: datetime
+
+
 class EntryType(StrEnum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
@@ -175,6 +191,7 @@ class ExtractedIntent(BaseModel):
 
     # Compatibility with observed provider vocabulary.
     entry_semantics: str | None = None
+    entry_type: str | None = None
 
     # Flat entry fields are preferred.
     price: float | None = None

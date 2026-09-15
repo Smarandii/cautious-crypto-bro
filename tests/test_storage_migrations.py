@@ -46,6 +46,28 @@ def test_fresh_database_is_migrated_to_latest_version(
             cursor = await db.execute("SELECT COUNT(*) FROM execution_exit_policy")
             assert (await cursor.fetchone())[0] == 1
 
+            cursor = await db.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE
+                    type = 'table'
+                    AND name = 'account_closed_pnl'
+                """
+            )
+            assert await cursor.fetchone() is not None
+
+            cursor = await db.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE
+                    type = 'table'
+                    AND name = 'account_pnl_sync'
+                """
+            )
+            assert await cursor.fetchone() is not None
+
     asyncio.run(run())
 
 

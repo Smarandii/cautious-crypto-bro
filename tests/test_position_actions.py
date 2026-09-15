@@ -17,6 +17,7 @@ from cautious_crypto_bro.domain import (
     SourceMessage,
 )
 from cautious_crypto_bro.storage import (
+    LATEST_SCHEMA_VERSION,
     IntentStore,
 )
 
@@ -91,7 +92,7 @@ def test_position_action_batch_is_persisted_atomically(
 
         async with aiosqlite.connect(tmp_path / "state.sqlite3") as db:
             cursor = await db.execute("PRAGMA user_version")
-            assert (await cursor.fetchone())[0] == 2
+            assert (await cursor.fetchone())[0] == LATEST_SCHEMA_VERSION
 
     asyncio.run(run())
 
