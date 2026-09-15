@@ -18,6 +18,7 @@ from urllib.parse import urlencode
 import httpx
 
 from .domain import (
+    ClosedPnlRecord,
     ExecutionOrderType,
     ExecutionPlan,
     PositionActionIntent,
@@ -171,16 +172,11 @@ class AccountOrder:
 )
 class AccountStateSummary:
     as_of: datetime
-    realized_pnl_today: Decimal
     positions: tuple[
         AccountPosition,
         ...,
     ]
     open_orders: tuple[
-        AccountOrder,
-        ...,
-    ]
-    terminal_orders_24h: tuple[
         AccountOrder,
         ...,
     ]
@@ -266,6 +262,17 @@ class BybitDemoExecutor:
     ) -> AccountStateSummary:
         return await asyncio.to_thread(self._account_state_sync)
 
+    async def closed_pnl_history(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[ClosedPnlRecord, ...]:
+        return await asyncio.to_thread(
+            self._closed_pnl_history_sync,
+            start,
+            end,
+        )
+
     async def exposure(
         self,
         symbol: str,
@@ -311,13 +318,6 @@ class BybitDemoExecutor:
         self._sync_clock()
 
         now = datetime.now(UTC)
-        day_start = now.replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-
         position_items = self._paginate_private_list(
             "/v5/position/list",
             {
@@ -379,58 +379,8 @@ class BybitDemoExecutor:
             if self._decimal(item.get("leavesQty")) > 0
         )
 
-        history_start = now - timedelta(hours=24)
-
-        history_items = self._paginate_private_list(
-            "/v5/order/history",
-            {
-                "category": "linear",
-                "settleCoin": "USDT",
-                "startTime": int(history_start.timestamp() * 1000),
-                "endTime": int(now.timestamp() * 1000),
-                "limit": 50,
-            },
-        )
-
-        terminal_statuses = {
-            "Filled",
-            "Cancelled",
-            "Rejected",
-            "Deactivated",
-            "PartiallyFilledCanceled",
-            "PartiallyFilledCancelled",
-        }
-
-        terminal_orders = tuple(
-            sorted(
-                (
-                    self._account_order_from_item(item)
-                    for item in history_items
-                    if str(item.get("orderStatus") or "") in terminal_statuses
-                ),
-                key=lambda order: order.updated_at,
-                reverse=True,
-            )
-        )
-
-        pnl_items = self._paginate_private_list(
-            "/v5/position/closed-pnl",
-            {
-                "category": "linear",
-                "startTime": int(day_start.timestamp() * 1000),
-                "endTime": int(now.timestamp() * 1000),
-                "limit": 100,
-            },
-        )
-
-        realized_pnl = sum(
-            (self._decimal(item.get("closedPnl")) for item in pnl_items),
-            Decimal("0"),
-        )
-
         return AccountStateSummary(
             as_of=now,
-            realized_pnl_today=(realized_pnl),
             positions=tuple(
                 sorted(
                     positions,
@@ -444,7 +394,128 @@ class BybitDemoExecutor:
                     reverse=True,
                 )
             ),
-            terminal_orders_24h=(terminal_orders),
+        )
+
+    def _closed_pnl_history_sync(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[ClosedPnlRecord, ...]:
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("Closed-PnL range must be timezone-aware")
+
+        start = start.astimezone(UTC)
+        end = end.astimezone(UTC)
+
+        if end <= start:
+            return ()
+
+        self._sync_clock()
+
+        records: dict[
+            str,
+            ClosedPnlRecord,
+        ] = {}
+
+        window_start = start
+
+        while window_start < end:
+            window_end = min(
+                window_start + timedelta(days=7),
+                end,
+            )
+
+            items = self._paginate_private_list(
+                "/v5/position/closed-pnl",
+                {
+                    "category": "linear",
+                    "startTime": int(window_start.timestamp() * 1000),
+                    "endTime": int(window_end.timestamp() * 1000),
+                    "limit": 100,
+                },
+            )
+
+            for item in items:
+                record = self._closed_pnl_record_from_item(item)
+
+                records[record.record_id] = record
+
+            window_start = window_end
+
+        return tuple(
+            sorted(
+                records.values(),
+                key=lambda item: item.updated_at,
+            )
+        )
+
+    def _closed_pnl_record_from_item(
+        self,
+        item: dict,
+    ) -> ClosedPnlRecord:
+        symbol = str(item.get("symbol") or "").upper()
+
+        order_id = str(item.get("orderId") or "")
+
+        updated_ms = int(item.get("updatedTime") or item.get("createdTime") or 0)
+
+        if not symbol:
+            raise TradeExecutionError("Closed-PnL record has no symbol")
+
+        if updated_ms <= 0:
+            raise TradeExecutionError("Closed-PnL record has no timestamp")
+
+        if order_id:
+            record_id = f"{symbol}:{order_id}"
+
+        else:
+            # Some non-standard settlement records
+            # may not carry an orderId. Build a
+            # deterministic identifier rather than
+            # silently dropping realized P&L.
+            identity = {
+                "symbol": symbol,
+                "side": item.get("side"),
+                "execType": item.get("execType"),
+                "closedSize": (item.get("closedSize")),
+                "closedPnl": (item.get("closedPnl")),
+                "avgEntryPrice": (item.get("avgEntryPrice")),
+                "avgExitPrice": (item.get("avgExitPrice")),
+                "updatedTime": updated_ms,
+            }
+
+            digest = hashlib.sha256(
+                json.dumps(
+                    identity,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+
+            record_id = f"{symbol}:synthetic:{digest}"
+
+        close_side = str(item.get("side") or "")
+
+        if close_side == "Sell":
+            position_side = Side.LONG
+        elif close_side == "Buy":
+            position_side = Side.SHORT
+        else:
+            raise TradeExecutionError("Closed-PnL record has invalid side")
+
+        return ClosedPnlRecord(
+            record_id=record_id,
+            order_id=order_id,
+            symbol=symbol,
+            position_side=position_side,
+            closed_pnl=self._decimal(item.get("closedPnl")),
+            closed_size=self._decimal(item.get("closedSize")),
+            avg_entry_price=(self._optional_decimal(item.get("avgEntryPrice"))),
+            avg_exit_price=(self._optional_decimal(item.get("avgExitPrice"))),
+            updated_at=datetime.fromtimestamp(
+                updated_ms / 1000,
+                tz=UTC,
+            ),
         )
 
     def _paginate_private_list(

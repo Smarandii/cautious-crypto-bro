@@ -30,6 +30,7 @@ from aiogram.utils.backoff import (
 
 from .bybit import (
     AccountOrder,
+    AccountPosition,
     AccountStateSummary,
     BybitDemoExecutor,
     SymbolExposure,
@@ -45,7 +46,10 @@ from .domain import (
     TakeProfitSource,
     TradingIntent,
 )
-from .storage import IntentStore
+from .storage import (
+    AccountPnlSummary,
+    IntentStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +135,8 @@ class ApprovalBot:
         exposure_error: str | None = None,
         account_state: AccountStateSummary | None = None,
         account_state_error: str | None = None,
+        account_pnl: AccountPnlSummary | None = None,
+        account_pnl_error: str | None = None,
         send_account_state: bool = True,
     ) -> None:
         if send_account_state:
@@ -140,6 +146,8 @@ class ApprovalBot:
                     text=self._render_account_state(
                         account_state,
                         error=account_state_error,
+                        pnl=account_pnl,
+                        pnl_error=account_pnl_error,
                     ),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
@@ -196,6 +204,8 @@ class ApprovalBot:
         *,
         account_state: AccountStateSummary | None = None,
         account_state_error: str | None = None,
+        account_pnl: AccountPnlSummary | None = None,
+        account_pnl_error: str | None = None,
         send_account_state: bool = True,
     ) -> None:
         if send_account_state:
@@ -205,6 +215,8 @@ class ApprovalBot:
                     text=self._render_account_state(
                         account_state,
                         error=account_state_error,
+                        pnl=account_pnl,
+                        pnl_error=account_pnl_error,
                     ),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
@@ -615,30 +627,21 @@ class ApprovalBot:
         )
 
         if action.action is PositionActionType.CLOSE:
-            instruction = "Close current position completely"
+            instruction = "Close 100%"
         else:
             assert action.close_pct is not None
+            instruction = f"Reduce {action.close_pct:g}%"
 
-            instruction = f"Reduce current position by {action.close_pct:g}%"
-
-        position_lines: list[str] = []
+        context_lines: list[str] = []
         pending_entries = 0
 
         if account_state is None:
             if account_state_error:
-                position_lines.extend(
-                    [
-                        "⚠️ Current account state unavailable.",
-                        (f"<code>{html.escape(account_state_error)}</code>"),
-                    ]
-                )
+                context_lines.append("⚠️ Current position unavailable.")
             else:
-                position_lines.append(
-                    "Position size and side are "
-                    "resolved from live Bybit state "
-                    "when Execute is pressed."
+                context_lines.append(
+                    "Current position will be resolved from Bybit on Execute."
                 )
-
         else:
             positions = [
                 position
@@ -651,45 +654,26 @@ class ApprovalBot:
             pending_entries = len(exposure.pending_entry_orders)
 
             if not positions:
-                position_lines.append("⚠️ No current position found.")
+                context_lines.append("⚠️ No current position found.")
 
             elif len(positions) > 1:
-                position_lines.append(
+                context_lines.append(
                     "⚠️ Multiple positions found; execution will fail safe."
                 )
 
             else:
                 position = positions[0]
 
-                position_lines.extend(
-                    [
-                        (
-                            "Current position: "
-                            f"<b>"
-                            f"{html.escape(position.side.value)} "
-                            f"{ApprovalBot._fmt_decimal(position.size)}"
-                            f"</b>"
-                        ),
-                        (
-                            "Entry: "
-                            f"<b>"
-                            f"{ApprovalBot._fmt_decimal(position.avg_price)}"
-                            f"</b>"
-                            " → Mark: "
-                            f"<b>"
-                            f"{ApprovalBot._fmt_decimal(position.mark_price)}"
-                            f"</b>"
-                        ),
-                        (
-                            "Unrealized P&amp;L: "
-                            f"<b>"
-                            f"{ApprovalBot._fmt_signed(position.unrealised_pnl)} "
-                            "USDT</b>"
-                        ),
-                    ]
+                context_lines.append(
+                    "Current: "
+                    f"<b>{position.side.value} "
+                    f"{ApprovalBot._fmt_decimal(position.size)}"
+                    " @ "
+                    f"{ApprovalBot._fmt_decimal(position.avg_price)}"
+                    "</b>"
+                    " · Mark "
+                    f"{ApprovalBot._fmt_decimal(position.mark_price)}"
                 )
-
-        pending_line = f"Pending CCB entry orders to cancel: <b>{pending_entries}</b>"
 
         expected = (
             action.expected_side.value
@@ -698,22 +682,17 @@ class ApprovalBot:
         )
 
         return (
-            "⚠️ <b>POSITION ACTION — ACCOUNT WIDE</b>\n\n"
+            "⚠️ <b>ACCOUNT-WIDE POSITION ACTION</b>\n\n"
             f"<b>{html.escape(action.action.value)} "
-            f"{html.escape(action.symbol)}</b>\n"
-            f"{html.escape(instruction)}\n\n"
-            + "\n".join(position_lines)
+            f"{html.escape(action.symbol)}</b>"
+            f" — {html.escape(instruction)}\n\n"
+            + "\n".join(context_lines)
             + "\n"
-            + pending_line
-            + "\n"
-            + "Expected side from signal: "
-            f"<b>{html.escape(expected)}</b>\n\n" + "This targets the current Bybit "
-            "position for this symbol regardless "
-            "of which channel or signal opened it.\n\n" + "Confidence: "
-            f"<b>{action.confidence:.0%}</b>\n" + "Reason: "
-            f"{html.escape(action.summary)}\n\n" + "Trader: "
-            f"{html.escape(action.source.channel_title)}\n" + "Published: "
-            f"{html.escape(action.source.published_at.isoformat())}\n" + source_line
+            + "Expected side: "
+            f"<b>{html.escape(expected)}</b>\n" + "CCB entries cancelled on Execute: "
+            f"<b>{pending_entries}</b>\n" + "Position is re-read from live Bybit "
+            "state when Execute is pressed.\n\n" + "Trader: "
+            f"<b>{html.escape(action.source.channel_title)}</b>\n" + source_line
         )
 
     @staticmethod
@@ -761,15 +740,10 @@ class ApprovalBot:
                     f"<b>"
                     f"{ApprovalBot._fmt_decimal(target.price)}"
                     f"</b> — "
-                    f"{ApprovalBot._fmt_decimal(target.close_pct)}% "
-                    f"(~"
-                    f"{target.r_multiple:.2f}R"
-                    f")"
+                    f"{ApprovalBot._fmt_decimal(target.close_pct)}%"
                 )
 
-            tp_block = f"<b>Take-profit ladder ({source_label})</b>\n" + "\n".join(
-                tp_lines
-            )
+            tp_block = f"<b>TPs ({source_label})</b>\n" + "\n".join(tp_lines)
         else:
             tp_block = (
                 f"Take profit: <b>{ApprovalBot._fmt_decimal(plan.take_profit)}</b>"
@@ -829,7 +803,6 @@ class ApprovalBot:
 
                 reward += target_reward * target.close_pct / Decimal("100")
 
-            reward_label = "Blended reward if all TPs hit"
             rr_label = "Blended R:R"
 
         else:
@@ -846,18 +819,13 @@ class ApprovalBot:
                     * Decimal("100")
                 )
 
-            reward_label = "Reward to TP"
             rr_label = "R:R"
 
         rr = reward / risk if risk > 0 else Decimal("0")
 
         orders_text = "\n".join(order_lines)
 
-        capital = ApprovalBot._fmt_decimal(plan.policy.trading_capital_usdt)
-
         risk_pct = ApprovalBot._fmt_decimal(plan.policy.risk_per_trade_pct)
-
-        risk_budget = ApprovalBot._fmt_decimal(plan.policy.risk_budget_usdt)
 
         planned_loss = ApprovalBot._fmt_decimal(plan.planned_max_loss_usdt)
 
@@ -867,43 +835,23 @@ class ApprovalBot:
             exposure_error=(exposure_error),
         )
 
+        total_qty_text = ApprovalBot._fmt_decimal(total_qty)
+
         return (
-            f"<b>"
-            f"{html.escape(intent.side.value)} "
-            f"{html.escape(intent.symbol)}"
-            f"</b>\n\n"
+            f"<b>{html.escape(intent.side.value)} "
+            f"{html.escape(intent.symbol)}</b>\n\n"
             f"{exposure_block}"
-            f"Signal entry: "
-            f"<b>{html.escape(signal_entry)}</b>\n"
-            f"Stop loss: "
-            f"<b>"
-            f"{ApprovalBot._fmt_decimal(plan.stop_loss)}"
-            f"</b>\n"
+            f"Entry: <b>{html.escape(signal_entry)}</b>\n"
+            f"SL: <b>{ApprovalBot._fmt_decimal(plan.stop_loss)}</b>\n"
             f"{tp_block}\n\n"
-            f"<b>Execution plan — "
-            f"{len(plan.orders)} order(s)</b>\n"
+            f"<b>Orders: {len(plan.orders)} · "
+            f"total {total_qty_text}</b>\n"
             f"{orders_text}\n\n"
-            f"Capital: "
-            f"<b>{capital} USDT</b>\n"
-            f"Risk policy: "
-            f"<b>{risk_pct}% = "
-            f"{risk_budget} USDT</b>\n"
-            f"Planned price loss at SL: "
-            f"<b>≤ {planned_loss} USDT</b>\n"
-            f"Risk to SL: "
-            f"<b>{float(risk):.2f}%</b>\n"
-            f"{reward_label}: "
-            f"<b>{float(reward):.2f}%</b>\n"
-            f"{rr_label}: "
-            f"<b>{float(rr):.2f}</b>\n\n"
-            f"Confidence: "
-            f"<b>{intent.confidence:.0%}</b>\n"
-            f"Thesis: "
-            f"{html.escape(intent.summary)}\n\n"
-            f"Trader: "
-            f"{html.escape(intent.source.channel_title)}\n"
-            f"Published: "
-            f"{html.escape(intent.source.published_at.isoformat())}\n"
+            f"Risk: <b>≤ {planned_loss} USDT</b> "
+            f"({risk_pct}% policy)\n"
+            f"{rr_label}: <b>{float(rr):.2f}</b>\n\n"
+            f"Trader: <b>"
+            f"{html.escape(intent.source.channel_title)}</b>\n"
             f"{source_line}"
         )
 
@@ -912,155 +860,244 @@ class ApprovalBot:
         state: AccountStateSummary | None,
         *,
         error: str | None = None,
+        pnl: AccountPnlSummary | None = None,
+        pnl_error: str | None = None,
     ) -> str:
         if state is None:
             return (
-                "📊 <b>BYBIT DEMO — "
-                "ACCOUNT SNAPSHOT</b>\n\n"
+                "📊 <b>BYBIT DEMO — CURRENT EXPOSURE</b>\n\n"
                 "⚠️ Account state unavailable.\n"
                 "The approval card follows normally."
             )
 
-        realized = ApprovalBot._fmt_signed(state.realized_pnl_today)
+        total_notional = sum(
+            (position.size * position.mark_price for position in state.positions),
+            Decimal("0"),
+        )
 
-        unrealized = ApprovalBot._fmt_signed(state.unrealised_pnl)
+        position_word = "position" if len(state.positions) == 1 else "positions"
 
         lines = [
-            "📊 <b>BYBIT DEMO — ACCOUNT SNAPSHOT</b>",
+            "📊 <b>BYBIT DEMO — ACCOUNT</b>",
             "",
-            "<b>Today (UTC)</b>",
-            (f"Realized P&amp;L: <b>{realized} USDT</b>"),
-            (f"Unrealized P&amp;L: <b>{unrealized} USDT</b>"),
-            "",
-            (f"<b>Open positions: {len(state.positions)}</b>"),
         ]
 
+        lines.append("<b>Account P&amp;L</b>")
+
+        if pnl is not None:
+            combined = pnl.realized_pnl + state.unrealised_pnl
+
+            lines.extend(
+                [
+                    (
+                        "Realized (tracked): "
+                        f"<b>{ApprovalBot._fmt_signed(pnl.realized_pnl)} "
+                        "USDT</b>"
+                    ),
+                    (
+                        "Live uPnL (Bybit): "
+                        f"<b>{ApprovalBot._fmt_signed(state.unrealised_pnl)} "
+                        "USDT</b>"
+                    ),
+                    (f"Combined: <b>{ApprovalBot._fmt_signed(combined)} USDT</b>"),
+                    (
+                        "History: since "
+                        f"<b>{pnl.history_start_at.date().isoformat()}</b>"
+                        " · "
+                        f"{pnl.record_count} realized record(s)"
+                        " · "
+                        f"{pnl.positive_count} positive"
+                        " / "
+                        f"{pnl.negative_count} negative"
+                    ),
+                    "",
+                ]
+            )
+
+        elif pnl_error is not None:
+            lines.extend(
+                [
+                    "Realized (tracked): <b>unavailable</b>",
+                    (
+                        "Live uPnL (Bybit): "
+                        f"<b>{ApprovalBot._fmt_signed(state.unrealised_pnl)} "
+                        "USDT</b>"
+                    ),
+                    "",
+                ]
+            )
+
+        else:
+            lines.extend(
+                [
+                    "Realized (tracked): <b>not synced</b>",
+                    (
+                        "Live uPnL (Bybit): "
+                        f"<b>{ApprovalBot._fmt_signed(state.unrealised_pnl)} "
+                        "USDT</b>"
+                    ),
+                    "",
+                ]
+            )
+
+        lines.extend(
+            [
+                (
+                    f"<b>{len(state.positions)} "
+                    f"{position_word}</b>"
+                    " · Notional ≈ "
+                    f"<b>{total_notional:.2f} USDT</b>"
+                ),
+            ]
+        )
+
         if state.positions:
-            for position in state.positions[:8]:
-                position_line = (
-                    "• "
-                    f"{html.escape(position.symbol)} "
-                    f"{html.escape(position.side.value)} "
-                    f"{ApprovalBot._fmt_decimal(position.size)}"
-                    "\n  Entry "
-                    f"{ApprovalBot._fmt_decimal(position.avg_price)}"
-                    " → Mark "
-                    f"{ApprovalBot._fmt_decimal(position.mark_price)}"
-                    " · uPnL "
-                    f"{ApprovalBot._fmt_signed(position.unrealised_pnl)}"
-                    " USDT"
-                    " · "
-                    f"{html.escape(position.status)}"
+            for position in state.positions[:6]:
+                notional = position.size * position.mark_price
+
+                lines.extend(
+                    [
+                        "",
+                        (
+                            f"<b>{html.escape(position.symbol)} "
+                            f"{html.escape(position.side.value)}</b>"
+                            " · "
+                            f"{ApprovalBot._fmt_decimal(position.size)}"
+                            " · ≈ "
+                            f"{notional:.2f} USDT"
+                        ),
+                        (
+                            "Entry "
+                            f"{ApprovalBot._fmt_decimal(position.avg_price)}"
+                            " → Mark "
+                            f"{ApprovalBot._fmt_decimal(position.mark_price)}"
+                            " · uPnL "
+                            f"{ApprovalBot._fmt_signed(position.unrealised_pnl)} "
+                            "USDT"
+                        ),
+                        ApprovalBot._render_position_protection(
+                            position,
+                            state.open_orders,
+                        ),
+                    ]
                 )
 
-                protection = []
+            if len(state.positions) > 6:
+                lines.extend(
+                    [
+                        "",
+                        (f"… +{len(state.positions) - 6} more positions"),
+                    ]
+                )
 
-                if position.stop_loss is not None:
-                    protection.append(
-                        "SL " + ApprovalBot._fmt_decimal(position.stop_loss)
-                    )
-
-                if position.take_profit is not None:
-                    protection.append(
-                        "TP " + ApprovalBot._fmt_decimal(position.take_profit)
-                    )
-
-                if protection:
-                    position_line += "\n  " + " · ".join(protection)
-
-                lines.append(position_line)
-
-            if len(state.positions) > 8:
-                lines.append(f"• … +{len(state.positions) - 8} more")
         else:
-            lines.append("• None")
+            lines.extend(
+                [
+                    "",
+                    "No open positions.",
+                ]
+            )
+
+        entry_count = sum(
+            1
+            for order in state.open_orders
+            if order.kind
+            in {
+                "ENTRY",
+                "CONDITIONAL",
+            }
+        )
+
+        protective_count = sum(1 for order in state.open_orders if order.is_protective)
+
+        reduce_count = sum(1 for order in state.open_orders if order.kind == "REDUCE")
 
         lines.extend(
             [
                 "",
-                (f"<b>Open orders: {len(state.open_orders)}</b>"),
+                (
+                    "Pending orders: "
+                    f"<b>{entry_count}</b> entry"
+                    " · "
+                    f"<b>{protective_count}</b> protective"
+                    " · "
+                    f"<b>{reduce_count}</b> reduce/close"
+                ),
             ]
         )
-
-        if state.open_orders:
-            entry_count = sum(
-                1
-                for order in state.open_orders
-                if order.kind
-                in {
-                    "ENTRY",
-                    "CONDITIONAL",
-                }
-            )
-
-            protective_count = sum(
-                1 for order in state.open_orders if order.is_protective
-            )
-
-            reduce_count = sum(
-                1 for order in state.open_orders if order.kind == "REDUCE"
-            )
-
-            lines.append(
-                "Entry: "
-                f"{entry_count}"
-                " · Protective: "
-                f"{protective_count}"
-                " · Reduce/close: "
-                f"{reduce_count}"
-            )
-
-            for order in state.open_orders[:6]:
-                lines.append(ApprovalBot._render_account_order(order))
-
-            if len(state.open_orders) > 6:
-                lines.append(f"• … +{len(state.open_orders) - 6} more")
-        else:
-            lines.append("• None")
-
-        terminal = state.terminal_orders_24h
-
-        filled_count = sum(1 for order in terminal if order.status == "Filled")
-
-        cancelled_count = sum(1 for order in terminal if "Cancel" in order.status)
-
-        other_count = len(terminal) - filled_count - cancelled_count
-
-        deactivated_count = sum(
-            1 for order in terminal if order.status == "Deactivated"
-        )
-
-        other_count = len(terminal) - filled_count - cancelled_count - deactivated_count
-
-        breakdown = (
-            f"Filled {filled_count}"
-            " · "
-            f"Cancelled {cancelled_count}"
-            " · "
-            f"Deactivated {deactivated_count}"
-        )
-
-        if other_count:
-            breakdown += f" · Other {other_count}"
-
-        lines.extend(
-            [
-                "",
-                (f"<b>Recent terminal orders — last 24h: {len(terminal)}</b>"),
-                breakdown,
-            ]
-        )
-
-        if terminal:
-            for order in terminal[:6]:
-                lines.append(ApprovalBot._render_account_order(order))
-
-            if len(terminal) > 6:
-                lines.append(f"• … +{len(terminal) - 6} more")
-        else:
-            lines.append("• None")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _render_position_protection(
+        position: AccountPosition,
+        open_orders: tuple[
+            AccountOrder,
+            ...,
+        ],
+    ) -> str:
+        stop_prices: set[Decimal] = set()
+        take_profit_prices: set[Decimal] = set()
+        trailing_stop = False
+
+        if position.stop_loss is not None:
+            stop_prices.add(position.stop_loss)
+
+        if position.take_profit is not None:
+            take_profit_prices.add(position.take_profit)
+
+        for order in open_orders:
+            if order.symbol != position.symbol:
+                continue
+
+            if not order.is_protective:
+                continue
+
+            if order.kind == "TRAILING":
+                trailing_stop = True
+                continue
+
+            if order.trigger_price is None:
+                continue
+
+            if order.kind == "SL":
+                stop_prices.add(order.trigger_price)
+
+            elif order.kind == "TP":
+                take_profit_prices.add(order.trigger_price)
+
+        if not stop_prices and not take_profit_prices and not trailing_stop:
+            return "⚠️ No SL/TP protection detected"
+
+        def render_prices(
+            prices: set[Decimal],
+        ) -> str:
+            ordered = sorted(prices)
+            shown = ordered[:4]
+
+            rendered = " / ".join(ApprovalBot._fmt_decimal(price) for price in shown)
+
+            if len(ordered) > 4:
+                rendered += f" / +{len(ordered) - 4}"
+
+            return rendered
+
+        parts = []
+
+        if stop_prices:
+            parts.append("SL " + render_prices(stop_prices))
+        else:
+            parts.append("SL —")
+
+        if take_profit_prices:
+            parts.append("TP " + render_prices(take_profit_prices))
+        else:
+            parts.append("TP —")
+
+        if trailing_stop:
+            parts.append("Trailing stop active")
+
+        return "Protection: " + " · ".join(parts)
 
     @staticmethod
     def _render_account_order(

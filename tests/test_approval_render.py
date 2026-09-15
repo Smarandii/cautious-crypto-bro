@@ -101,8 +101,10 @@ def test_render_contains_execution_policy() -> None:
     )
 
     assert "LONG ETHUSDT" in rendered
-    assert "Execution plan — 3 order(s)" in rendered
-    assert "Risk policy: <b>1% = 68 USDT</b>" in rendered
+    assert "Orders: 3 · total 0.6" in rendered
+    assert "Risk: <b>≤ 66 USDT</b> (1% policy)" in rendered
     assert "R:R:" in rendered
     assert "Open source message" in rendered
     assert "Trader &amp; Co" in rendered
+    assert "Confidence:" not in rendered
+    assert "Published:" not in rendered

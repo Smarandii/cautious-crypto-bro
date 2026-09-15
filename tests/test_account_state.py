@@ -152,15 +152,11 @@ def test_account_state_reads_bybit_snapshot() -> None:
         ):
             state = executor._account_state_sync()
 
-        assert state.realized_pnl_today == Decimal("10.3")
-
         assert state.unrealised_pnl == Decimal("4.9152")
 
         assert len(state.positions) == 1
 
         assert len(state.open_orders) == 1
-
-        assert len(state.terminal_orders_24h) == 1
 
         exposure = state.exposure_for("BTCUSDT")
 
@@ -180,69 +176,103 @@ def test_account_state_render_is_compact() -> None:
         tzinfo=UTC,
     )
 
+    position = AccountPosition(
+        symbol="NEARUSDT",
+        side=Side.LONG,
+        size=Decimal("819.2"),
+        avg_price=Decimal("2.304"),
+        mark_price=Decimal("2.31"),
+        unrealised_pnl=Decimal("4.9152"),
+        status="Normal",
+        take_profit=None,
+        stop_loss=None,
+    )
+
+    entry = AccountOrder(
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        order_type="Limit",
+        status="New",
+        quantity=Decimal("0.01"),
+        remaining_quantity=Decimal("0.01"),
+        price=Decimal("112000"),
+        avg_price=None,
+        order_id="entry",
+        order_link_id="ccb-entry",
+        reduce_only=False,
+        updated_at=now,
+    )
+
+    stop = AccountOrder(
+        symbol="NEARUSDT",
+        side=Side.SHORT,
+        order_type="Market",
+        status="Untriggered",
+        quantity=Decimal("819.2"),
+        remaining_quantity=Decimal("819.2"),
+        price=None,
+        avg_price=None,
+        order_id="sl",
+        order_link_id="",
+        reduce_only=False,
+        updated_at=now,
+        stop_order_type="StopLoss",
+        trigger_price=Decimal("2.221"),
+    )
+
+    take_profit = AccountOrder(
+        symbol="NEARUSDT",
+        side=Side.SHORT,
+        order_type="Market",
+        status="Untriggered",
+        quantity=Decimal("819.2"),
+        remaining_quantity=Decimal("819.2"),
+        price=None,
+        avg_price=None,
+        order_id="tp",
+        order_link_id="",
+        reduce_only=False,
+        updated_at=now,
+        stop_order_type="TakeProfit",
+        trigger_price=Decimal("2.47"),
+    )
+
     state = AccountStateSummary(
         as_of=now,
-        realized_pnl_today=(Decimal("12.4")),
-        positions=(
-            AccountPosition(
-                symbol="NEARUSDT",
-                side=Side.LONG,
-                size=Decimal("819.2"),
-                avg_price=Decimal("2.304"),
-                mark_price=Decimal("2.31"),
-                unrealised_pnl=(Decimal("4.9152")),
-                status="Normal",
-                take_profit=None,
-                stop_loss=Decimal("2.221"),
-            ),
-        ),
+        positions=(position,),
         open_orders=(
-            AccountOrder(
-                symbol="BTCUSDT",
-                side=Side.LONG,
-                order_type="Limit",
-                status="New",
-                quantity=Decimal("0.01"),
-                remaining_quantity=(Decimal("0.01")),
-                price=Decimal("112000"),
-                avg_price=None,
-                order_id="1",
-                order_link_id="ccb-1",
-                reduce_only=False,
-                updated_at=now,
-            ),
-        ),
-        terminal_orders_24h=(
-            AccountOrder(
-                symbol="ETHUSDT",
-                side=Side.SHORT,
-                order_type="Limit",
-                status="Cancelled",
-                quantity=Decimal("0.2"),
-                remaining_quantity=(Decimal("0.2")),
-                price=Decimal("4700"),
-                avg_price=None,
-                order_id="2",
-                order_link_id="ccb-2",
-                reduce_only=False,
-                updated_at=now,
-            ),
+            entry,
+            stop,
+            take_profit,
         ),
     )
 
     rendered = ApprovalBot._render_account_state(state)
 
-    assert "Realized P&amp;L: <b>+12.40 USDT</b>" in rendered
+    assert "1 position" in rendered
 
-    assert "Unrealized P&amp;L: <b>+4.92 USDT</b>" in rendered
+    assert "Notional ≈ <b>1892.35 USDT</b>" in rendered
 
-    assert "Open positions: 1" in rendered
+    assert "Live uPnL (Bybit): <b>+4.92 USDT</b>" in rendered
 
-    assert "NEARUSDT LONG 819.2" in rendered
+    assert "NEARUSDT LONG</b> · 819.2" in rendered
 
-    assert "Open orders: 1" in rendered
+    assert "Entry 2.304 → Mark 2.31 · uPnL +4.92 USDT" in rendered
 
-    assert "Recent terminal orders — last 24h: 1" in rendered
+    assert "Protection: SL 2.221 · TP 2.47" in rendered
+
+    assert (
+        "Pending orders: "
+        "<b>1</b> entry · "
+        "<b>2</b> protective · "
+        "<b>0</b> reduce/close" in rendered
+    )
+
+    assert "Realized (tracked): <b>not synced</b>" in rendered
+
+    assert "Combined:" not in rendered
+
+    assert "Recent terminal orders" not in rendered
 
 
 def test_protective_order_is_classified_and_rendered() -> None:
@@ -272,43 +302,3 @@ def test_protective_order_is_classified_and_rendered() -> None:
     rendered = ApprovalBot._render_account_order(order)
 
     assert "NEARUSDT TP 327.7 @ trigger 2.47" in rendered
-
-
-def test_terminal_breakdown_separates_deactivated() -> None:
-    now = datetime.now(UTC)
-
-    terminal = tuple(
-        AccountOrder(
-            symbol="NEARUSDT",
-            side=Side.SHORT,
-            order_type="Market",
-            status=status,
-            quantity=Decimal("1"),
-            remaining_quantity=(Decimal("0")),
-            price=None,
-            avg_price=None,
-            order_id=str(index),
-            order_link_id="",
-            reduce_only=False,
-            updated_at=now,
-        )
-        for index, status in enumerate(
-            (
-                "Filled",
-                "Cancelled",
-                "Deactivated",
-            )
-        )
-    )
-
-    state = AccountStateSummary(
-        as_of=now,
-        realized_pnl_today=(Decimal("0")),
-        positions=(),
-        open_orders=(),
-        terminal_orders_24h=(terminal),
-    )
-
-    rendered = ApprovalBot._render_account_state(state)
-
-    assert "Filled 1 · Cancelled 1 · Deactivated 1" in rendered

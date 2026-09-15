@@ -1209,9 +1209,10 @@ def test_explicit_sub_one_percent_is_preserved() -> None:
     assert signals.position_actions[0].close_pct == 0.5
 
 
-def test_vague_reduce_cannot_use_model_percentage() -> None:
+def test_vague_reduce_defaults_to_50_percent() -> None:
     from cautious_crypto_bro.domain import (
         IntentExtraction,
+        PositionActionType,
     )
     from cautious_crypto_bro.openrouter import (
         _signals_from_extraction,
@@ -1220,15 +1221,15 @@ def test_vague_reduce_cannot_use_model_percentage() -> None:
     extraction = IntentExtraction.model_validate(
         {
             "actionable": True,
-            "reason": "Vague reduction",
+            "reason": "Explicit partial close",
             "intents": [],
             "position_actions": [
                 {
-                    "symbol": "NEARUSDT",
+                    "symbol": "OPUSDT",
                     "action": "REDUCE",
-                    "close_pct": 50,
+                    "close_pct": None,
                     "expected_side": "LONG",
-                    "evidence_text": ("Фиксируем часть"),
+                    "evidence_text": ("Фиксируем часть позиции"),
                     "summary": "Reduce position",
                     "confidence": 1,
                 }
@@ -1237,9 +1238,50 @@ def test_vague_reduce_cannot_use_model_percentage() -> None:
     )
 
     signals = _signals_from_extraction(
-        source().model_copy(update={"text": "Фиксируем часть"}),
+        source().model_copy(update={"text": ("Фиксируем часть позиции")}),
         extraction,
     )
 
-    assert not signals.actionable
-    assert signals.position_actions == ()
+    assert len(signals.position_actions) == 1
+
+    action = signals.position_actions[0]
+
+    assert action.action is PositionActionType.REDUCE
+    assert action.close_pct == 50
+
+
+def test_entry_type_alias_is_accepted() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+        Side,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Provider alias",
+            "intents": [
+                {
+                    "symbol": "TIAUSDT",
+                    "side": "LONG",
+                    "entry_type": "MARKET",
+                    "stop_loss": 0.3188,
+                    "take_profit": None,
+                    "summary": "TIA long",
+                    "confidence": 1,
+                }
+            ],
+            "position_actions": [],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source(),
+        extraction,
+    )
+
+    assert len(signals.open_intents) == 1
+    assert signals.open_intents[0].side is Side.LONG
