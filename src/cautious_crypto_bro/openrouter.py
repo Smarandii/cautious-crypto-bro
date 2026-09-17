@@ -101,6 +101,13 @@ OPEN trade rules:
   is already open
 - for an already-open position screenshot, MARKET takes precedence over
   historical/average entry prices shown in the screenshot
+- if one current exchange screenshot shows multiple distinct live positions,
+  extract EACH valid position as its own independent OPEN candidate when its
+  symbol, side, and stop loss are available
+- do not emit a fake REDUCE/CLOSE placeholder merely because another live
+  position is visible in the screenshot
+- when no explicit lifecycle instruction exists for a visible position,
+  position_actions must contain no action for that position
 - LIMIT requires one explicit intended entry price
 - RANGE requires two explicit numeric boundaries
 - for RANGE set range_low to the lower boundary and range_high to the higher
@@ -119,6 +126,12 @@ Existing-position action rules:
   half = 50%, quarter = 25%
 - when the current text clearly instructs a partial close but gives no
   percentage/fraction, use close_pct=50
+- a take-profit ordinal such as "фиксируем 3 тейк" identifies a take-profit
+  milestone; the number 3 is NOT a position fraction or percentage
+- percentages describing profit, PnL, price movement, or market movement are
+  NOT close_pct; for example "4.5% чистого движения" must not become 4.5%
+- if the author gives optional follower advice to reduce but explicitly says
+  they personally continue holding, do not emit REDUCE for the trader
 - examples such as "take some profit", "fix a part", "trim the position",
   "фиксируем часть" and equivalent wording are REDUCE actions
 - CLOSE means fully close the existing position
@@ -134,6 +147,8 @@ Existing-position action rules:
   post text/caption itself
 - for every REDUCE/CLOSE, evidence_text must be an exact verbatim excerpt
   from the CURRENT post text/caption that explicitly instructs the action
+- evidence_text must never be null for REDUCE/CLOSE
+- if no exact current-caption instruction can be quoted, omit the action
 - images may identify which symbol/side the text instruction refers to, but
   image text alone must NEVER authorize REDUCE/CLOSE
 - NEVER create REDUCE/CLOSE from exchange UI controls such as a Close button
@@ -236,7 +251,7 @@ def _evaluation_fingerprint(
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 6,
+        "cache_version": 8,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
@@ -375,21 +390,386 @@ def _normalize_evidence_text(
     return " ".join(normalized.casefold().split())
 
 
-def _has_current_post_action_evidence(
-    source: SourceMessage,
-    evidence_text: str | None,
+_LIFECYCLE_NEGATION_PATTERNS: tuple[
+    re.Pattern[str],
+    ...,
+] = (
+    re.compile(
+        r"\bне\s+"
+        r"(?:(?:надо|нужно|стоит|будем)\s+)?"
+        r"(?:сейчас\s+)?"
+        r"(?:"
+        r"закрыва\w*|закрыть|"
+        r"фиксир\w*|"
+        r"тейк\w*|"
+        r"выхож\w*|выход\w*"
+        r")\b"
+    ),
+    re.compile(
+        r"\b(?:do\s+not|don['’]?t)\s+"
+        r"(?:close|exit|reduce|trim|take)\b"
+    ),
+    re.compile(
+        r"\bnot\s+"
+        r"(?:closing|exiting|reducing|trimming|taking)\b"
+    ),
+)
+
+
+_REDUCE_INSTRUCTION_PATTERNS: tuple[
+    re.Pattern[str],
+    ...,
+] = (
+    # Russian take-profit milestone, unspecified size.
+    # Example: "Фиксируем 3 тейк".
+    # The ordinal identifies the TP milestone, not position size.
+    re.compile(
+        r"\b(?:"
+        r"фиксируем|фиксирую|"
+        r"зафиксируем|зафиксирую"
+        r")\b"
+        r".{0,20}"
+        r"\b(?:\d+\s*)?тейк\w*\b"
+    ),
+    # Russian reversed partial-close wording.
+    # Examples: "часть закройте", "половину закрой".
+    re.compile(
+        r"\b(?:"
+        r"часть|половин\w*|четверт\w*"
+        r")\b"
+        r".{0,20}"
+        r"\b(?:"
+        r"закройте|закрой|закрывай|закрываем|"
+        r"фиксируйте|фиксируй|фиксируем"
+        r")\b"
+    ),
+    # Russian explicit partial-close wording:
+    # "закрываем часть", "фиксируем половину", etc.
+    re.compile(
+        r"\b(?:"
+        r"закрываем|закрываю|закрывай|закрыть|"
+        r"фиксируем|фиксирую|фиксируй|"
+        r"зафиксируем|зафиксирую"
+        r")\b"
+        r".{0,40}"
+        r"\b(?:часть|половин\w*|четверт\w*)\b"
+    ),
+    re.compile(
+        r"\bчастичн\w*\b"
+        r".{0,25}"
+        r"\b(?:закрыва\w*|фиксир\w*)\b"
+    ),
+    # Explicit numeric reduction:
+    # "закрываем 30%", "close 1/3", etc.
+    re.compile(
+        r"\b(?:"
+        r"закрываем|закрываю|закрывай|закрыть|"
+        r"фиксируем|фиксирую|фиксируй|"
+        r"тейкаем|тейкать|"
+        r"close|reduce|trim"
+        r")\b"
+        r".{0,40}"
+        r"(?:"
+        r"\d+(?:[.,]\d+)?\s*"
+        r"(?:"
+        r"%|"
+        r"percent(?:s)?\b|"
+        r"процент(?:а|ов)?\b"
+        r")"
+        r"|"
+        r"\d+\s*/\s*\d+"
+        r")"
+    ),
+    # English partial-close wording.
+    re.compile(
+        r"\b(?:"
+        r"close|closing|reduce|trim|take|taking"
+        r")\b"
+        r".{0,40}"
+        r"\b(?:part|partial|some|half|quarter)\b"
+    ),
+    re.compile(
+        r"\b(?:take|taking)\b"
+        r".{0,20}"
+        r"\b(?:some|partial)\b"
+        r".{0,20}"
+        r"\bprofit\b"
+    ),
+    # Observed MENSA wording:
+    # "оставлю небольшую часть ... остальное ... тейкать"
+    re.compile(
+        r"\bостав\w*\b"
+        r".{0,60}"
+        r"\bчаст\w*\b"
+        r".{0,100}"
+        r"\b(?:тейк\w*|фиксир\w*|закрыва\w*)\b"
+    ),
+)
+
+
+_CLOSE_INSTRUCTION_PATTERNS: tuple[
+    re.Pattern[str],
+    ...,
+] = (
+    re.compile(
+        r"\b(?:"
+        r"закрываем|закрываю|закрывай|закрыть"
+        r")\b"
+    ),
+    re.compile(
+        r"\b(?:выхожу|выходим|выйти)\b"
+        r".{0,25}"
+        r"\b(?:из\s+)?позици\w*\b"
+    ),
+    re.compile(
+        r"\bclose\b"
+        r"(?:"
+        r"\s+(?:the\s+)?"
+        r"(?:position|trade|long|short)\b"
+        r"|"
+        r"\s+(?:it|this|now)\b"
+        r"|"
+        r"(?=\s*(?:[.!?…]|$))"
+        r")"
+    ),
+    re.compile(
+        r"\bexit\b"
+        r"(?:"
+        r"\s+(?:the\s+)?"
+        r"(?:position|trade|long|short)\b"
+        r"|"
+        r"\s+(?:it|this|now)\b"
+        r"|"
+        r"(?=\s*(?:[.!?…]|$))"
+        r")"
+    ),
+)
+
+
+def _first_action_match(
+    patterns: tuple[
+        re.Pattern[str],
+        ...,
+    ],
+    text: str,
+) -> re.Match[str] | None:
+    for pattern in patterns:
+        match = pattern.search(text)
+
+        if match is not None:
+            return match
+
+    return None
+
+
+def _all_action_matches(
+    patterns: tuple[
+        re.Pattern[str],
+        ...,
+    ],
+    text: str,
+) -> tuple[re.Match[str], ...]:
+    return tuple(match for pattern in patterns for match in pattern.finditer(text))
+
+
+def _matches_overlap(
+    first: re.Match[str],
+    second: re.Match[str],
 ) -> bool:
-    if evidence_text is None:
-        return False
+    return first.start() < second.end() and second.start() < first.end()
 
-    evidence = _normalize_evidence_text(evidence_text)
 
+def _symbol_close_variants(
+    symbol: str,
+) -> tuple[str, ...]:
+    compact = re.sub(
+        r"[^a-z0-9]",
+        "",
+        symbol.casefold(),
+    )
+
+    if not compact:
+        return ()
+
+    variants = {compact}
+
+    for quote in (
+        "usdt",
+        "usdc",
+        "usd",
+    ):
+        if compact.endswith(quote) and len(compact) > len(quote):
+            variants.add(compact[: -len(quote)])
+
+    return tuple(
+        sorted(
+            variants,
+            key=len,
+            reverse=True,
+        )
+    )
+
+
+def _symbol_specific_close_match(
+    text: str,
+    symbol: str,
+) -> re.Match[str] | None:
+    variants = _symbol_close_variants(symbol)
+
+    if not variants:
+        return None
+
+    symbol_pattern = "|".join(re.escape(value) for value in variants)
+
+    return re.search(
+        (
+            r"\b(?:close|exit)\b"
+            r"\s+(?:the\s+)?"
+            rf"(?:{symbol_pattern})\b"
+            r"(?:\s+"
+            r"(?:completely|fully|now)"
+            r")?"
+        ),
+        text,
+    )
+
+
+def _optional_reduce_overridden_by_self_hold(
+    text: str,
+) -> bool:
+    normalized = _normalize_evidence_text(text)
+
+    optional_reduce = re.search(
+        r"\bесли\b"
+        r".{0,80}"
+        r"\b(?:можете|можешь)\b"
+        r".{0,40}"
+        r"\b(?:закрыть|зафиксировать)\b"
+        r".{0,20}"
+        r"\b(?:часть|половин\w*)\b",
+        normalized,
+    )
+
+    self_hold = re.search(
+        r"\bя\b"
+        r".{0,30}"
+        r"\b(?:"
+        r"подержу|держу|"
+        r"пока\s+подержу|"
+        r"пока\s+держу"
+        r")\b",
+        normalized,
+    )
+
+    return optional_reduce is not None and self_hold is not None
+
+
+def _deterministic_action_evidence(
+    text: str,
+    action_type: PositionActionType,
+    symbol: str,
+) -> str | None:
+    normalized = _normalize_evidence_text(text)
+
+    if not normalized:
+        return None
+
+    if (
+        _first_action_match(
+            _LIFECYCLE_NEGATION_PATTERNS,
+            normalized,
+        )
+        is not None
+    ):
+        return None
+
+    reduce_matches = _all_action_matches(
+        _REDUCE_INSTRUCTION_PATTERNS,
+        normalized,
+    )
+
+    if action_type is PositionActionType.REDUCE:
+        if not reduce_matches:
+            return None
+
+        return reduce_matches[0].group(0)
+
+    # First try an explicit CLOSE naming the same symbol
+    # Gemma identified, e.g. "Close POL" for POLUSDT.
+    symbol_close = _symbol_specific_close_match(
+        normalized,
+        symbol,
+    )
+
+    if symbol_close is not None:
+        if not any(
+            _matches_overlap(
+                symbol_close,
+                reduce_match,
+            )
+            for reduce_match in reduce_matches
+        ):
+            return symbol_close.group(0)
+
+    # Generic CLOSE remains valid, but only when that
+    # particular close phrase is not part of a REDUCE
+    # instruction such as "close half".
+    for close_match in _all_action_matches(
+        _CLOSE_INSTRUCTION_PATTERNS,
+        normalized,
+    ):
+        if any(
+            _matches_overlap(
+                close_match,
+                reduce_match,
+            )
+            for reduce_match in reduce_matches
+        ):
+            continue
+
+        return close_match.group(0)
+
+    return None
+
+
+def _current_post_action_evidence(
+    source: SourceMessage,
+    action_type: PositionActionType,
+    symbol: str,
+    model_evidence_text: str | None,
+) -> str | None:
     post_text = _normalize_evidence_text(source.text)
 
-    if not evidence or not post_text:
-        return False
+    if not post_text:
+        return None
 
-    return evidence in post_text
+    if (
+        action_type is PositionActionType.REDUCE
+        and _optional_reduce_overridden_by_self_hold(post_text)
+    ):
+        return None
+
+    scopes: list[str] = []
+
+    if model_evidence_text:
+        evidence = _normalize_evidence_text(model_evidence_text)
+
+        if evidence and evidence in post_text:
+            scopes.append(evidence)
+
+    scopes.append(post_text)
+
+    for scope in scopes:
+        evidence = _deterministic_action_evidence(
+            scope,
+            action_type,
+            symbol,
+        )
+
+        if evidence is not None:
+            return evidence
+
+    return None
 
 
 def _reduction_pct_from_evidence(
@@ -527,19 +907,24 @@ def _signals_from_extraction(
             )
             continue
 
-        if not _has_current_post_action_evidence(
+        action_evidence = _current_post_action_evidence(
             source,
+            action_type,
+            raw.symbol,
             raw.evidence_text,
-        ):
+        )
+
+        if action_evidence is None:
             logger.warning(
                 "Dropping %s position action "
-                "for %s from %s/%s: no exact "
-                "destructive-action evidence in "
-                "current post text/caption",
+                "for %s from %s/%s: no "
+                "deterministic %s instruction "
+                "in current post text/caption",
                 action_type.value,
                 raw.symbol,
                 source.channel_id,
                 source.message_id,
+                action_type.value,
             )
             continue
 
@@ -550,7 +935,7 @@ def _signals_from_extraction(
         if action_type is PositionActionType.CLOSE:
             close_pct = None
         else:
-            close_pct = _reduction_pct_from_evidence(raw.evidence_text)
+            close_pct = _reduction_pct_from_evidence(action_evidence)
 
             if close_pct is None:
                 logger.warning(
@@ -826,6 +1211,7 @@ class OpenRouterIntentExtractor:
         global_guidance: str | None = None,
         channel_guidance: str | None = None,
         debug_dir: Path | None = None,
+        bypass_evaluation_cache: bool = False,
     ) -> SignalExtraction:
         source = post.source
 
@@ -836,7 +1222,7 @@ class OpenRouterIntentExtractor:
             channel_guidance=(channel_guidance),
         )
 
-        if debug_dir is None:
+        if debug_dir is None and not bypass_evaluation_cache:
             cached_extraction = await self._read_cached_evaluation(
                 evaluation_fingerprint
             )
