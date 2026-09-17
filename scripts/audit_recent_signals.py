@@ -338,6 +338,7 @@ async def read_evaluation(
     runtime_store: RedisRuntimeStore,
     extractor: OpenRouterIntentExtractor,
     cache_only: bool,
+    fresh: bool,
 ) -> tuple[
     IntentExtraction | None,
     str,
@@ -346,32 +347,33 @@ async def read_evaluation(
     fingerprint = _evaluation_fingerprint(
         post,
         model=model,
-        global_guidance=(global_guidance),
-        channel_guidance=(channel_guidance),
+        global_guidance=global_guidance,
+        channel_guidance=channel_guidance,
     )
 
-    try:
-        payload = await runtime_store.get_openrouter_evaluation(fingerprint)
-    except Exception as exc:
-        return (
-            None,
-            "cache-read-error",
-            (f"{type(exc).__name__}: {exc}"),
-        )
-
-    if payload is not None:
+    if not fresh:
         try:
-            return (
-                IntentExtraction.model_validate_json(payload),
-                "cache",
-                None,
-            )
+            payload = await runtime_store.get_openrouter_evaluation(fingerprint)
         except Exception as exc:
             return (
                 None,
-                "invalid-cache",
+                "cache-read-error",
                 (f"{type(exc).__name__}: {exc}"),
             )
+
+        if payload is not None:
+            try:
+                return (
+                    IntentExtraction.model_validate_json(payload),
+                    "cache",
+                    None,
+                )
+            except Exception as exc:
+                return (
+                    None,
+                    "invalid-cache",
+                    (f"{type(exc).__name__}: {exc}"),
+                )
 
     if cache_only:
         return (
@@ -383,8 +385,9 @@ async def read_evaluation(
     try:
         await extractor.extract(
             post,
-            global_guidance=(global_guidance),
-            channel_guidance=(channel_guidance),
+            global_guidance=global_guidance,
+            channel_guidance=channel_guidance,
+            bypass_evaluation_cache=fresh,
         )
     except Exception as exc:
         return (
@@ -666,10 +669,23 @@ async def main() -> int:
         help=("Do not call OpenRouter for cache misses."),
     )
 
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help=(
+            "Ignore matching OpenRouter "
+            "evaluation-cache reads and "
+            "re-evaluate every supported post."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.hours <= 0:
         parser.error("--hours must be positive")
+
+    if args.cache_only and args.fresh:
+        parser.error("--cache-only and --fresh cannot be used together")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -907,6 +923,7 @@ async def main() -> int:
                             runtime_store=(runtime_store),
                             extractor=(extractor),
                             cache_only=(args.cache_only),
+                            fresh=args.fresh,
                         )
 
                         record["decision_source"] = decision_source
@@ -972,6 +989,7 @@ async def main() -> int:
         "generated_at": (generated_at.isoformat()),
         "cutoff": (cutoff.isoformat()),
         "hours": args.hours,
+        "fresh": args.fresh,
         "model": (settings.openrouter_model),
         "system_prompt": (SYSTEM_PROMPT),
         "global_guidance": (global_guidance_report),

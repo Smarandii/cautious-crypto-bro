@@ -134,6 +134,8 @@ Existing-position action rules:
   post text/caption itself
 - for every REDUCE/CLOSE, evidence_text must be an exact verbatim excerpt
   from the CURRENT post text/caption that explicitly instructs the action
+- evidence_text must never be null for REDUCE/CLOSE
+- if no exact current-caption instruction can be quoted, omit the action
 - images may identify which symbol/side the text instruction refers to, but
   image text alone must NEVER authorize REDUCE/CLOSE
 - NEVER create REDUCE/CLOSE from exchange UI controls such as a Close button
@@ -236,7 +238,7 @@ def _evaluation_fingerprint(
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 6,
+        "cache_version": 7,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
@@ -375,21 +377,327 @@ def _normalize_evidence_text(
     return " ".join(normalized.casefold().split())
 
 
-def _has_current_post_action_evidence(
-    source: SourceMessage,
-    evidence_text: str | None,
+_LIFECYCLE_NEGATION_PATTERNS: tuple[
+    re.Pattern[str],
+    ...,
+] = (
+    re.compile(
+        r"\bне\s+"
+        r"(?:(?:надо|нужно|стоит|будем)\s+)?"
+        r"(?:сейчас\s+)?"
+        r"(?:"
+        r"закрыва\w*|закрыть|"
+        r"фиксир\w*|"
+        r"тейк\w*|"
+        r"выхож\w*|выход\w*"
+        r")\b"
+    ),
+    re.compile(
+        r"\b(?:do\s+not|don['’]?t)\s+"
+        r"(?:close|exit|reduce|trim|take)\b"
+    ),
+    re.compile(
+        r"\bnot\s+"
+        r"(?:closing|exiting|reducing|trimming|taking)\b"
+    ),
+)
+
+
+_REDUCE_INSTRUCTION_PATTERNS: tuple[
+    re.Pattern[str],
+    ...,
+] = (
+    # Russian explicit partial-close wording:
+    # "закрываем часть", "фиксируем половину", etc.
+    re.compile(
+        r"\b(?:"
+        r"закрываем|закрываю|закрывай|закрыть|"
+        r"фиксируем|фиксирую|фиксируй|"
+        r"зафиксируем|зафиксирую"
+        r")\b"
+        r".{0,40}"
+        r"\b(?:часть|половин\w*|четверт\w*)\b"
+    ),
+    re.compile(
+        r"\bчастичн\w*\b"
+        r".{0,25}"
+        r"\b(?:закрыва\w*|фиксир\w*)\b"
+    ),
+    # Explicit numeric reduction:
+    # "закрываем 30%", "close 1/3", etc.
+    re.compile(
+        r"\b(?:"
+        r"закрываем|закрываю|закрывай|закрыть|"
+        r"фиксируем|фиксирую|фиксируй|"
+        r"тейкаем|тейкать|"
+        r"close|reduce|trim"
+        r")\b"
+        r".{0,40}"
+        r"(?:"
+        r"\d+(?:[.,]\d+)?\s*"
+        r"(?:"
+        r"%|"
+        r"percent(?:s)?\b|"
+        r"процент(?:а|ов)?\b"
+        r")"
+        r"|"
+        r"\d+\s*/\s*\d+"
+        r")"
+    ),
+    # English partial-close wording.
+    re.compile(
+        r"\b(?:"
+        r"close|closing|reduce|trim|take|taking"
+        r")\b"
+        r".{0,40}"
+        r"\b(?:part|partial|some|half|quarter)\b"
+    ),
+    re.compile(
+        r"\b(?:take|taking)\b"
+        r".{0,20}"
+        r"\b(?:some|partial)\b"
+        r".{0,20}"
+        r"\bprofit\b"
+    ),
+    # Observed MENSA wording:
+    # "оставлю небольшую часть ... остальное ... тейкать"
+    re.compile(
+        r"\bостав\w*\b"
+        r".{0,60}"
+        r"\bчаст\w*\b"
+        r".{0,100}"
+        r"\b(?:тейк\w*|фиксир\w*|закрыва\w*)\b"
+    ),
+)
+
+
+_CLOSE_INSTRUCTION_PATTERNS: tuple[
+    re.Pattern[str],
+    ...,
+] = (
+    re.compile(
+        r"\b(?:"
+        r"закрываем|закрываю|закрывай|закрыть"
+        r")\b"
+    ),
+    re.compile(
+        r"\b(?:выхожу|выходим|выйти)\b"
+        r".{0,25}"
+        r"\b(?:из\s+)?позици\w*\b"
+    ),
+    re.compile(
+        r"\bclose\b"
+        r"(?:"
+        r"\s+(?:the\s+)?"
+        r"(?:position|trade|long|short)\b"
+        r"|"
+        r"\s+(?:it|this|now)\b"
+        r"|"
+        r"(?=\s*(?:[.!?…]|$))"
+        r")"
+    ),
+    re.compile(
+        r"\bexit\b"
+        r"(?:"
+        r"\s+(?:the\s+)?"
+        r"(?:position|trade|long|short)\b"
+        r"|"
+        r"\s+(?:it|this|now)\b"
+        r"|"
+        r"(?=\s*(?:[.!?…]|$))"
+        r")"
+    ),
+)
+
+
+def _first_action_match(
+    patterns: tuple[
+        re.Pattern[str],
+        ...,
+    ],
+    text: str,
+) -> re.Match[str] | None:
+    for pattern in patterns:
+        match = pattern.search(text)
+
+        if match is not None:
+            return match
+
+    return None
+
+
+def _all_action_matches(
+    patterns: tuple[
+        re.Pattern[str],
+        ...,
+    ],
+    text: str,
+) -> tuple[re.Match[str], ...]:
+    return tuple(match for pattern in patterns for match in pattern.finditer(text))
+
+
+def _matches_overlap(
+    first: re.Match[str],
+    second: re.Match[str],
 ) -> bool:
-    if evidence_text is None:
-        return False
+    return first.start() < second.end() and second.start() < first.end()
 
-    evidence = _normalize_evidence_text(evidence_text)
 
+def _symbol_close_variants(
+    symbol: str,
+) -> tuple[str, ...]:
+    compact = re.sub(
+        r"[^a-z0-9]",
+        "",
+        symbol.casefold(),
+    )
+
+    if not compact:
+        return ()
+
+    variants = {compact}
+
+    for quote in (
+        "usdt",
+        "usdc",
+        "usd",
+    ):
+        if compact.endswith(quote) and len(compact) > len(quote):
+            variants.add(compact[: -len(quote)])
+
+    return tuple(
+        sorted(
+            variants,
+            key=len,
+            reverse=True,
+        )
+    )
+
+
+def _symbol_specific_close_match(
+    text: str,
+    symbol: str,
+) -> re.Match[str] | None:
+    variants = _symbol_close_variants(symbol)
+
+    if not variants:
+        return None
+
+    symbol_pattern = "|".join(re.escape(value) for value in variants)
+
+    return re.search(
+        (
+            r"\b(?:close|exit)\b"
+            r"\s+(?:the\s+)?"
+            rf"(?:{symbol_pattern})\b"
+            r"(?:\s+"
+            r"(?:completely|fully|now)"
+            r")?"
+        ),
+        text,
+    )
+
+
+def _deterministic_action_evidence(
+    text: str,
+    action_type: PositionActionType,
+    symbol: str,
+) -> str | None:
+    normalized = _normalize_evidence_text(text)
+
+    if not normalized:
+        return None
+
+    if (
+        _first_action_match(
+            _LIFECYCLE_NEGATION_PATTERNS,
+            normalized,
+        )
+        is not None
+    ):
+        return None
+
+    reduce_matches = _all_action_matches(
+        _REDUCE_INSTRUCTION_PATTERNS,
+        normalized,
+    )
+
+    if action_type is PositionActionType.REDUCE:
+        if not reduce_matches:
+            return None
+
+        return reduce_matches[0].group(0)
+
+    # First try an explicit CLOSE naming the same symbol
+    # Gemma identified, e.g. "Close POL" for POLUSDT.
+    symbol_close = _symbol_specific_close_match(
+        normalized,
+        symbol,
+    )
+
+    if symbol_close is not None:
+        if not any(
+            _matches_overlap(
+                symbol_close,
+                reduce_match,
+            )
+            for reduce_match in reduce_matches
+        ):
+            return symbol_close.group(0)
+
+    # Generic CLOSE remains valid, but only when that
+    # particular close phrase is not part of a REDUCE
+    # instruction such as "close half".
+    for close_match in _all_action_matches(
+        _CLOSE_INSTRUCTION_PATTERNS,
+        normalized,
+    ):
+        if any(
+            _matches_overlap(
+                close_match,
+                reduce_match,
+            )
+            for reduce_match in reduce_matches
+        ):
+            continue
+
+        return close_match.group(0)
+
+    return None
+
+
+def _current_post_action_evidence(
+    source: SourceMessage,
+    action_type: PositionActionType,
+    symbol: str,
+    model_evidence_text: str | None,
+) -> str | None:
     post_text = _normalize_evidence_text(source.text)
 
-    if not evidence or not post_text:
-        return False
+    if not post_text:
+        return None
 
-    return evidence in post_text
+    scopes: list[str] = []
+
+    if model_evidence_text:
+        evidence = _normalize_evidence_text(model_evidence_text)
+
+        if evidence and evidence in post_text:
+            scopes.append(evidence)
+
+    scopes.append(post_text)
+
+    for scope in scopes:
+        evidence = _deterministic_action_evidence(
+            scope,
+            action_type,
+            symbol,
+        )
+
+        if evidence is not None:
+            return evidence
+
+    return None
 
 
 def _reduction_pct_from_evidence(
@@ -527,19 +835,24 @@ def _signals_from_extraction(
             )
             continue
 
-        if not _has_current_post_action_evidence(
+        action_evidence = _current_post_action_evidence(
             source,
+            action_type,
+            raw.symbol,
             raw.evidence_text,
-        ):
+        )
+
+        if action_evidence is None:
             logger.warning(
                 "Dropping %s position action "
-                "for %s from %s/%s: no exact "
-                "destructive-action evidence in "
-                "current post text/caption",
+                "for %s from %s/%s: no "
+                "deterministic %s instruction "
+                "in current post text/caption",
                 action_type.value,
                 raw.symbol,
                 source.channel_id,
                 source.message_id,
+                action_type.value,
             )
             continue
 
@@ -550,7 +863,7 @@ def _signals_from_extraction(
         if action_type is PositionActionType.CLOSE:
             close_pct = None
         else:
-            close_pct = _reduction_pct_from_evidence(raw.evidence_text)
+            close_pct = _reduction_pct_from_evidence(action_evidence)
 
             if close_pct is None:
                 logger.warning(
@@ -826,6 +1139,7 @@ class OpenRouterIntentExtractor:
         global_guidance: str | None = None,
         channel_guidance: str | None = None,
         debug_dir: Path | None = None,
+        bypass_evaluation_cache: bool = False,
     ) -> SignalExtraction:
         source = post.source
 
@@ -836,7 +1150,7 @@ class OpenRouterIntentExtractor:
             channel_guidance=(channel_guidance),
         )
 
-        if debug_dir is None:
+        if debug_dir is None and not bypass_evaluation_cache:
             cached_extraction = await self._read_cached_evaluation(
                 evaluation_fingerprint
             )
