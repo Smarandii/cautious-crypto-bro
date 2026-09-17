@@ -101,6 +101,13 @@ OPEN trade rules:
   is already open
 - for an already-open position screenshot, MARKET takes precedence over
   historical/average entry prices shown in the screenshot
+- if one current exchange screenshot shows multiple distinct live positions,
+  extract EACH valid position as its own independent OPEN candidate when its
+  symbol, side, and stop loss are available
+- do not emit a fake REDUCE/CLOSE placeholder merely because another live
+  position is visible in the screenshot
+- when no explicit lifecycle instruction exists for a visible position,
+  position_actions must contain no action for that position
 - LIMIT requires one explicit intended entry price
 - RANGE requires two explicit numeric boundaries
 - for RANGE set range_low to the lower boundary and range_high to the higher
@@ -119,6 +126,12 @@ Existing-position action rules:
   half = 50%, quarter = 25%
 - when the current text clearly instructs a partial close but gives no
   percentage/fraction, use close_pct=50
+- a take-profit ordinal such as "фиксируем 3 тейк" identifies a take-profit
+  milestone; the number 3 is NOT a position fraction or percentage
+- percentages describing profit, PnL, price movement, or market movement are
+  NOT close_pct; for example "4.5% чистого движения" must not become 4.5%
+- if the author gives optional follower advice to reduce but explicitly says
+  they personally continue holding, do not emit REDUCE for the trader
 - examples such as "take some profit", "fix a part", "trim the position",
   "фиксируем часть" and equivalent wording are REDUCE actions
 - CLOSE means fully close the existing position
@@ -238,7 +251,7 @@ def _evaluation_fingerprint(
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 7,
+        "cache_version": 8,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
@@ -407,6 +420,29 @@ _REDUCE_INSTRUCTION_PATTERNS: tuple[
     re.Pattern[str],
     ...,
 ] = (
+    # Russian take-profit milestone, unspecified size.
+    # Example: "Фиксируем 3 тейк".
+    # The ordinal identifies the TP milestone, not position size.
+    re.compile(
+        r"\b(?:"
+        r"фиксируем|фиксирую|"
+        r"зафиксируем|зафиксирую"
+        r")\b"
+        r".{0,20}"
+        r"\b(?:\d+\s*)?тейк\w*\b"
+    ),
+    # Russian reversed partial-close wording.
+    # Examples: "часть закройте", "половину закрой".
+    re.compile(
+        r"\b(?:"
+        r"часть|половин\w*|четверт\w*"
+        r")\b"
+        r".{0,20}"
+        r"\b(?:"
+        r"закройте|закрой|закрывай|закрываем|"
+        r"фиксируйте|фиксируй|фиксируем"
+        r")\b"
+    ),
     # Russian explicit partial-close wording:
     # "закрываем часть", "фиксируем половину", etc.
     re.compile(
@@ -598,6 +634,36 @@ def _symbol_specific_close_match(
     )
 
 
+def _optional_reduce_overridden_by_self_hold(
+    text: str,
+) -> bool:
+    normalized = _normalize_evidence_text(text)
+
+    optional_reduce = re.search(
+        r"\bесли\b"
+        r".{0,80}"
+        r"\b(?:можете|можешь)\b"
+        r".{0,40}"
+        r"\b(?:закрыть|зафиксировать)\b"
+        r".{0,20}"
+        r"\b(?:часть|половин\w*)\b",
+        normalized,
+    )
+
+    self_hold = re.search(
+        r"\bя\b"
+        r".{0,30}"
+        r"\b(?:"
+        r"подержу|держу|"
+        r"пока\s+подержу|"
+        r"пока\s+держу"
+        r")\b",
+        normalized,
+    )
+
+    return optional_reduce is not None and self_hold is not None
+
+
 def _deterministic_action_evidence(
     text: str,
     action_type: PositionActionType,
@@ -675,6 +741,12 @@ def _current_post_action_evidence(
     post_text = _normalize_evidence_text(source.text)
 
     if not post_text:
+        return None
+
+    if (
+        action_type is PositionActionType.REDUCE
+        and _optional_reduce_overridden_by_self_hold(post_text)
+    ):
         return None
 
     scopes: list[str] = []
