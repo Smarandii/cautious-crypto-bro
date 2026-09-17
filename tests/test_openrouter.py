@@ -1285,3 +1285,593 @@ def test_entry_type_alias_is_accepted() -> None:
 
     assert len(signals.open_intents) == 1
     assert signals.open_intents[0].side is Side.LONG
+
+
+def _audit_position_action_extraction(
+    *,
+    symbol: str,
+    action: str,
+    evidence_text: str | None,
+    expected_side: str = "LONG",
+):
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+    )
+
+    return IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Audit regression case",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": symbol,
+                    "action": action,
+                    "close_pct": None,
+                    "expected_side": expected_side,
+                    "evidence_text": evidence_text,
+                    "summary": "Audit action",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+
+def test_current_caption_authorizes_reduce_when_model_omits_evidence() -> None:
+    from cautious_crypto_bro.domain import (
+        PositionActionType,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = _audit_position_action_extraction(
+        symbol="PUMPFUNUSDT",
+        action="REDUCE",
+        evidence_text=None,
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": "Закрываем часть 🙂‍↕️"}),
+        extraction,
+    )
+
+    assert len(signals.position_actions) == 1
+
+    action = signals.position_actions[0]
+
+    assert action.action is PositionActionType.REDUCE
+    assert action.close_pct == 50
+
+
+def test_current_caption_authorizes_close_when_model_omits_evidence() -> None:
+    from cautious_crypto_bro.domain import (
+        PositionActionType,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = _audit_position_action_extraction(
+        symbol="LSKUSDT",
+        action="CLOSE",
+        evidence_text=None,
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": ("Моментально, закрываем 🙂‍↕️")}),
+        extraction,
+    )
+
+    assert len(signals.position_actions) == 1
+
+    assert signals.position_actions[0].action is PositionActionType.CLOSE
+
+
+def test_fully_close_caption_authorizes_close_without_model_evidence() -> None:
+    from cautious_crypto_bro.domain import (
+        PositionActionType,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = _audit_position_action_extraction(
+        symbol="SOLUSDT",
+        action="CLOSE",
+        evidence_text=None,
+        expected_side="SHORT",
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(
+            update={
+                "text": ("Вот и SOL тоже пошёл в нашу сторону. Закрываем полностью.😲")
+            }
+        ),
+        extraction,
+    )
+
+    assert len(signals.position_actions) == 1
+
+    assert signals.position_actions[0].action is PositionActionType.CLOSE
+
+
+def test_partial_caption_cannot_authorize_model_close() -> None:
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = _audit_position_action_extraction(
+        symbol="ZECUSDT",
+        action="CLOSE",
+        evidence_text=None,
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": "Закрываем часть 🕺"}),
+        extraction,
+    )
+
+    assert not signals.actionable
+    assert signals.position_actions == ()
+
+
+def test_negated_close_is_not_authorized() -> None:
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = _audit_position_action_extraction(
+        symbol="ARKUSDT",
+        action="CLOSE",
+        evidence_text=None,
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": ("Пока не закрываем позицию")}),
+        extraction,
+    )
+
+    assert not signals.actionable
+    assert signals.position_actions == ()
+
+
+def test_mensa_take_rest_caption_authorizes_reduce() -> None:
+    from cautious_crypto_bro.domain import (
+        PositionActionType,
+        Side,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    evidence = (
+        "до 74к оставлю небольшую часть шорта, остальное можно сейчас уже тейкать"
+    )
+
+    extraction = _audit_position_action_extraction(
+        symbol="BTCUSDT",
+        action="REDUCE",
+        evidence_text=evidence,
+        expected_side="SHORT",
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(
+            update={
+                "text": (
+                    "$BTC\n\n"
+                    "небольшой стоп по лонгу "
+                    "и хороший профит по шорту\n\n"
+                    f"{evidence}"
+                )
+            }
+        ),
+        extraction,
+    )
+
+    assert len(signals.position_actions) == 1
+
+    action = signals.position_actions[0]
+
+    assert action.action is PositionActionType.REDUCE
+    assert action.close_pct == 50
+    assert action.expected_side is Side.SHORT
+
+
+def test_evaluation_cache_can_be_bypassed() -> None:
+    import asyncio
+    import json
+
+    import httpx
+
+    from cautious_crypto_bro.openrouter import (
+        OpenRouterIntentExtractor,
+    )
+
+    async def run() -> None:
+        calls = 0
+        cache = FakeEvaluationCache()
+
+        def handler(
+            request: httpx.Request,
+        ) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+
+            return httpx.Response(
+                200,
+                json={
+                    "provider": "Healthy",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": (
+                                    json.dumps(
+                                        {
+                                            "actionable": False,
+                                            "reason": ("commentary"),
+                                            "intents": [],
+                                            "position_actions": [],
+                                        }
+                                    )
+                                ),
+                            },
+                        }
+                    ],
+                },
+            )
+
+        extractor = OpenRouterIntentExtractor(
+            api_key="test",
+            model="test/model",
+            base_url=("https://openrouter.test"),
+            inference_timeout_seconds=5,
+            max_attempts=1,
+            evaluation_cache=cache,
+        )
+
+        await extractor._client.aclose()
+
+        extractor._client = httpx.AsyncClient(
+            base_url=("https://openrouter.test"),
+            transport=(httpx.MockTransport(handler)),
+        )
+
+        try:
+            item = IncomingPost(source=source())
+
+            await extractor.extract(item)
+
+            await extractor.extract(
+                item,
+                bypass_evaluation_cache=True,
+            )
+        finally:
+            await extractor.close()
+
+        assert calls == 2
+
+    asyncio.run(run())
+
+
+def test_close_to_resistance_does_not_authorize_close() -> None:
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = _audit_position_action_extraction(
+        symbol="BTCUSDT",
+        action="CLOSE",
+        evidence_text=None,
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(
+            update={"text": ("BTC is close to resistance, waiting for reaction")}
+        ),
+        extraction,
+    )
+
+    assert not signals.actionable
+    assert signals.position_actions == ()
+
+
+def test_exit_liquidity_does_not_authorize_close() -> None:
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = _audit_position_action_extraction(
+        symbol="ETHUSDT",
+        action="CLOSE",
+        evidence_text=None,
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(
+            update={"text": ("Looks like exit liquidity above the highs")}
+        ),
+        extraction,
+    )
+
+    assert not signals.actionable
+    assert signals.position_actions == ()
+
+
+def test_explicit_english_close_still_authorizes_close() -> None:
+    from cautious_crypto_bro.domain import (
+        PositionActionType,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = _audit_position_action_extraction(
+        symbol="BTCUSDT",
+        action="CLOSE",
+        evidence_text=None,
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": "Close the position."}),
+        extraction,
+    )
+
+    assert len(signals.position_actions) == 1
+    assert signals.position_actions[0].action is PositionActionType.CLOSE
+
+
+def test_bare_english_close_command_still_authorizes_close() -> None:
+    from cautious_crypto_bro.domain import (
+        PositionActionType,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = _audit_position_action_extraction(
+        symbol="BTCUSDT",
+        action="CLOSE",
+        evidence_text=None,
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": "Close!"}),
+        extraction,
+    )
+
+    assert len(signals.position_actions) == 1
+    assert signals.position_actions[0].action is PositionActionType.CLOSE
+
+
+def test_mixed_reduce_and_close_work_without_model_evidence() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+        PositionActionType,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Two lifecycle actions",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "NEARUSDT",
+                    "action": "REDUCE",
+                    "close_pct": None,
+                    "expected_side": "LONG",
+                    "evidence_text": None,
+                    "summary": "Reduce NEAR",
+                    "confidence": 1,
+                },
+                {
+                    "symbol": "TAOUSDT",
+                    "action": "CLOSE",
+                    "close_pct": None,
+                    "expected_side": "LONG",
+                    "evidence_text": None,
+                    "summary": "Close TAO",
+                    "confidence": 1,
+                },
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(
+            update={"text": ("Close half of NEAR. Close TAO completely.")}
+        ),
+        extraction,
+    )
+
+    assert len(signals.position_actions) == 2
+
+    reduce, close = signals.position_actions
+
+    assert reduce.action is PositionActionType.REDUCE
+    assert reduce.close_pct == 50
+    assert close.action is PositionActionType.CLOSE
+
+
+def test_take_profit_ordinal_ignores_movement_percentage() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+        PositionActionType,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Third take profit",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "AKEUSDT",
+                    "action": "REDUCE",
+                    "close_pct": 33.33,
+                    "expected_side": "LONG",
+                    "evidence_text": "Фиксируем 3 тейк",
+                    "summary": "Third take profit",
+                    "confidence": 0.8,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(
+            update={
+                "text": ("$AKE\n\nФиксируем 3 тейк\n\n4.5% чистого движения 🔥🔥🔥")
+            }
+        ),
+        extraction,
+    )
+
+    assert len(signals.position_actions) == 1
+
+    action = signals.position_actions[0]
+
+    assert action.action is PositionActionType.REDUCE
+    assert action.close_pct == 50
+
+
+def test_reverse_russian_partial_close_is_authorized() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+        PositionActionType,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Partial close",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "PUMPFUNUSDT",
+                    "action": "REDUCE",
+                    "close_pct": 50,
+                    "expected_side": "LONG",
+                    "evidence_text": "часть закройте",
+                    "summary": "Partial close",
+                    "confidence": 0.9,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(
+            update={"text": ("Понемногу растём. Если боитесь, часть закройте.🫶")}
+        ),
+        extraction,
+    )
+
+    assert len(signals.position_actions) == 1
+
+    action = signals.position_actions[0]
+
+    assert action.action is PositionActionType.REDUCE
+    assert action.close_pct == 50
+
+
+def test_optional_reduce_is_rejected_when_trader_holds() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Optional partial close",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "HUSDT",
+                    "action": "REDUCE",
+                    "close_pct": 50,
+                    "expected_side": "LONG",
+                    "evidence_text": ("Если боитесь, можете закрыть часть."),
+                    "summary": "Partial close",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(
+            update={
+                "text": (
+                    "HUSDT неплохо растёт. "
+                    "Если боитесь, можете "
+                    "закрыть часть.✍️\n\n"
+                    "Я пока подержу, "
+                    "жду дальнейшего пробоя."
+                )
+            }
+        ),
+        extraction,
+    )
+
+    assert signals.position_actions == ()
+
+
+def test_old_screenshot_close_text_cannot_authorize_close() -> None:
+    from cautious_crypto_bro.domain import (
+        IntentExtraction,
+    )
+    from cautious_crypto_bro.openrouter import (
+        _signals_from_extraction,
+    )
+
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "Old screenshot command",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "WLDUSDT",
+                    "action": "CLOSE",
+                    "close_pct": None,
+                    "expected_side": "SHORT",
+                    "evidence_text": ("Можешь её уже закрывать"),
+                    "summary": "Close WLD",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    signals = _signals_from_extraction(
+        source().model_copy(
+            update={
+                "text": (
+                    "Пока ищу новые сетапы, "
+                    "делюсь с вами результатами "
+                    "с личной торговли 😌"
+                )
+            }
+        ),
+        extraction,
+    )
+
+    assert signals.position_actions == ()
