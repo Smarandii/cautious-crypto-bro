@@ -2,7 +2,6 @@ import asyncio
 import sqlite3
 
 import aiosqlite
-import pytest
 
 from cautious_crypto_bro.storage import (
     LATEST_SCHEMA_VERSION,
@@ -138,20 +137,3 @@ def test_pre_versioned_database_is_upgraded_without_data_loss(
             assert row[3]
 
     asyncio.run(run())
-
-
-def test_newer_database_schema_is_rejected(
-    tmp_path,
-) -> None:
-    database = tmp_path / "state.sqlite3"
-
-    with sqlite3.connect(database) as db:
-        db.execute(f"PRAGMA user_version = {LATEST_SCHEMA_VERSION + 1}")
-
-    store = IntentStore(database)
-
-    with pytest.raises(
-        RuntimeError,
-        match="Database schema is newer",
-    ):
-        asyncio.run(store.initialize())

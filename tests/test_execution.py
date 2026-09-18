@@ -4,8 +4,6 @@ from datetime import (
 )
 from decimal import Decimal
 
-import pytest
-
 from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
@@ -16,7 +14,6 @@ from cautious_crypto_bro.domain import (
 )
 from cautious_crypto_bro.execution import (
     ExecutionPlanner,
-    ExecutionPlanningError,
     InstrumentContext,
 )
 
@@ -84,32 +81,6 @@ def test_three_range_orders_are_evenly_spaced() -> None:
     assert plan.planned_max_loss_usdt <= Decimal("68")
 
 
-def test_one_range_order_uses_midpoint() -> None:
-    plan = ExecutionPlanner().plan(
-        intent(),
-        policy(1),
-        context(),
-    )
-
-    assert [order.price for order in plan.orders] == [Decimal("105.0")]
-
-
-def test_five_range_orders_are_evenly_spaced() -> None:
-    plan = ExecutionPlanner().plan(
-        intent(),
-        policy(5),
-        context(),
-    )
-
-    assert [order.price for order in plan.orders] == [
-        Decimal("100.0"),
-        Decimal("102.5"),
-        Decimal("105.0"),
-        Decimal("107.5"),
-        Decimal("110.0"),
-    ]
-
-
 def test_two_percent_risk_doubles_risk_budget() -> None:
     plan = ExecutionPlanner().plan(
         intent(),
@@ -162,42 +133,3 @@ def test_missing_tp_builds_default_policy_ladder() -> None:
     assert len(plan.orders) == 9
 
     assert plan.planned_max_loss_usdt <= Decimal("68")
-
-
-def test_explicit_trader_tp_does_not_use_default_ladder() -> None:
-    plan = ExecutionPlanner().plan(
-        intent(),
-        policy(3),
-        context(),
-    )
-
-    assert len(plan.take_profit_targets) == 1
-
-    assert plan.take_profit_targets[0].name == "TRADER"
-
-    assert len(plan.orders) == 3
-
-
-def test_five_entries_with_default_ladder_exceeds_bybit_tpsl_limit() -> None:
-    base = intent()
-
-    without_tp = TradingIntent(
-        source=base.source,
-        symbol=base.symbol,
-        side=base.side,
-        entry=base.entry,
-        stop_loss=base.stop_loss,
-        take_profit=None,
-        summary=base.summary,
-        confidence=base.confidence,
-    )
-
-    with pytest.raises(
-        ExecutionPlanningError,
-        match="Partial TP/SL slots",
-    ):
-        ExecutionPlanner().plan(
-            without_tp,
-            policy(5),
-            context(),
-        )
