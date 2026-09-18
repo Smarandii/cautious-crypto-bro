@@ -96,9 +96,13 @@ async def async_main() -> None:
         planner=planner,
         executor=executor,
         approval_bot=bot,
+        coordinator=coordinator,
         context_provider=context_provider,
+        auto_approval_mode=(settings.auto_approval_mode),
         source_processing_lease_seconds=(settings.source_processing_lease_seconds),
     )
+
+    await service.recover_auto_execution()
 
     source = TelegramSource(
         api_id=settings.telegram_api_id,

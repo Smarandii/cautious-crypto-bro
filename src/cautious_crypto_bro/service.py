@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from datetime import (
     UTC,
     datetime,
@@ -8,13 +9,24 @@ from datetime import (
 )
 
 from .approval_bot import ApprovalBot
-from .bybit import BybitDemoExecutor
+from .bybit import (
+    AccountStateSummary,
+    BybitDemoExecutor,
+)
 from .domain import (
+    ApprovalMode,
+    AutoApprovalMode,
     ExecutionPlan,
     IncomingPost,
+    OpenRelation,
+    PositionActionIntent,
+    SignalPositionContext,
     TradingIntent,
 )
 from .execution import ExecutionPlanner
+from .execution_coordinator import (
+    ExecutionCoordinator,
+)
 from .openrouter import (
     OpenRouterIntentExtractor,
 )
@@ -35,18 +47,25 @@ class SignalService:
         planner: ExecutionPlanner,
         executor: BybitDemoExecutor,
         approval_bot: ApprovalBot,
+        coordinator: (ExecutionCoordinator | None) = None,
         context_provider: (SignalContextProvider | None) = None,
+        auto_approval_mode: AutoApprovalMode = (AutoApprovalMode.DISABLED),
         source_processing_lease_seconds: int = 300,
     ) -> None:
         if source_processing_lease_seconds <= 0:
             raise ValueError("Source processing lease must be positive")
+
+        if auto_approval_mode is not AutoApprovalMode.DISABLED and coordinator is None:
+            raise ValueError("Auto approval requires ExecutionCoordinator")
 
         self._store = store
         self._extractor = extractor
         self._planner = planner
         self._executor = executor
         self._approval_bot = approval_bot
+        self._coordinator = coordinator
         self._context_provider = context_provider
+        self._auto_approval_mode = auto_approval_mode
         self._source_processing_lease_seconds = source_processing_lease_seconds
 
     async def _sync_account_pnl(
@@ -63,9 +82,6 @@ class SignalService:
         else:
             history_start = sync_state.history_start_at
 
-            # Re-read one overlapping day because
-            # a Bybit closed-PnL row may be updated
-            # after the first fill/partial close.
             sync_start = min(
                 sync_state.last_synced_at,
                 now,
@@ -84,6 +100,224 @@ class SignalService:
         )
 
         return await self._store.get_account_pnl_summary()
+
+    def _open_approval_mode(
+        self,
+        intent: TradingIntent,
+        *,
+        position_context: (SignalPositionContext | None),
+        account_state: (AccountStateSummary | None),
+        duplicate_in_batch: bool,
+    ) -> ApprovalMode:
+        if self._auto_approval_mode is AutoApprovalMode.DISABLED:
+            return ApprovalMode.MANUAL
+
+        if intent.relation not in {
+            OpenRelation.NEW,
+            OpenRelation.ADD_OR_REENTRY,
+        }:
+            logger.warning(
+                "OPEN %s from %s/%s remains MANUAL because relation is %s",
+                intent.symbol,
+                intent.source.channel_id,
+                intent.source.message_id,
+                intent.relation.value,
+            )
+            return ApprovalMode.MANUAL
+
+        if duplicate_in_batch:
+            logger.warning(
+                "OPEN %s from %s/%s remains "
+                "MANUAL because the same symbol/"
+                "side appears multiple times in "
+                "the current post",
+                intent.symbol,
+                intent.source.channel_id,
+                intent.source.message_id,
+            )
+            return ApprovalMode.MANUAL
+
+        if (
+            position_context is None
+            or account_state is None
+            or not (position_context.account_state_available)
+        ):
+            logger.warning(
+                "OPEN %s from %s/%s remains "
+                "MANUAL because trusted live "
+                "account state is unavailable",
+                intent.symbol,
+                intent.source.channel_id,
+                intent.source.message_id,
+            )
+            return ApprovalMode.MANUAL
+
+        if intent.relation is OpenRelation.NEW and position_context.has_existing_copy(
+            intent.symbol,
+            intent.side,
+        ):
+            logger.warning(
+                "OPEN %s from %s/%s remains "
+                "MANUAL: model classified NEW "
+                "but trusted source history "
+                "already has a copied/in-flight "
+                "position",
+                intent.symbol,
+                intent.source.channel_id,
+                intent.source.message_id,
+            )
+            return ApprovalMode.MANUAL
+
+        assert self._coordinator is not None
+
+        safety_reason = self._coordinator.auto_open_safety_reason(
+            intent,
+            account_state,
+        )
+
+        if safety_reason is not None:
+            logger.warning(
+                "OPEN %s from %s/%s remains MANUAL: %s",
+                intent.symbol,
+                intent.source.channel_id,
+                intent.source.message_id,
+                safety_reason,
+            )
+            return ApprovalMode.MANUAL
+
+        return ApprovalMode.AUTO
+
+    def _position_action_approval_mode(
+        self,
+        action: PositionActionIntent,
+        *,
+        account_state: (AccountStateSummary | None),
+    ) -> ApprovalMode:
+        if self._auto_approval_mode is not AutoApprovalMode.ALL:
+            return ApprovalMode.MANUAL
+
+        if account_state is None:
+            logger.warning(
+                "Position action %s %s remains "
+                "MANUAL because live account "
+                "state is unavailable",
+                action.action.value,
+                action.symbol,
+            )
+            return ApprovalMode.MANUAL
+
+        positions = tuple(
+            position
+            for position in account_state.positions
+            if position.symbol == action.symbol
+        )
+
+        if len(positions) != 1:
+            logger.warning(
+                "Position action %s %s remains "
+                "MANUAL because live position "
+                "count is %d",
+                action.action.value,
+                action.symbol,
+                len(positions),
+            )
+            return ApprovalMode.MANUAL
+
+        position = positions[0]
+
+        if (
+            action.expected_side is not None
+            and action.expected_side is not position.side
+        ):
+            logger.warning(
+                "Position action %s %s remains "
+                "MANUAL because expected side "
+                "does not match live position",
+                action.action.value,
+                action.symbol,
+            )
+            return ApprovalMode.MANUAL
+
+        return ApprovalMode.AUTO
+
+    async def recover_auto_execution(
+        self,
+    ) -> None:
+        if self._coordinator is None:
+            return
+
+        (
+            uncertain_intents,
+            uncertain_actions,
+        ) = await self._store.quarantine_auto_executing()
+
+        try:
+            await self._approval_bot.send_recovery_warning(
+                uncertain_intents=len(uncertain_intents),
+                uncertain_actions=len(uncertain_actions),
+            )
+        except Exception:
+            logger.exception("Failed to send AUTO recovery warning")
+
+        pending_intents = await self._store.get_pending_auto_intent_ids()
+
+        pending_actions = await self._store.get_pending_auto_action_ids()
+
+        if self._auto_approval_mode is AutoApprovalMode.DISABLED:
+            for intent_id in pending_intents:
+                await self._store.mark_failed(
+                    intent_id,
+                    ("AUTO recovery cancelled: auto approval is disabled"),
+                )
+
+            for action_id in pending_actions:
+                await self._store.mark_position_action_failed(
+                    action_id,
+                    ("AUTO recovery cancelled: auto approval is disabled"),
+                )
+
+            return
+
+        for intent_id in pending_intents:
+            outcome = await self._coordinator.execute_intent(
+                intent_id,
+                approval_mode=(ApprovalMode.AUTO),
+            )
+
+            try:
+                await self._approval_bot.send_auto_intent_outcome(outcome)
+            except Exception:
+                logger.exception(
+                    "Failed to send recovered AUTO intent outcome %s",
+                    intent_id,
+                )
+
+        if self._auto_approval_mode is not AutoApprovalMode.ALL:
+            for action_id in pending_actions:
+                await self._store.mark_position_action_failed(
+                    action_id,
+                    (
+                        "AUTO recovery cancelled: "
+                        "current mode does not "
+                        "allow position actions"
+                    ),
+                )
+
+            return
+
+        for action_id in pending_actions:
+            outcome = await self._coordinator.execute_position_action(
+                action_id,
+                approval_mode=(ApprovalMode.AUTO),
+            )
+
+            try:
+                await self._approval_bot.send_auto_action_outcome(outcome)
+            except Exception:
+                logger.exception(
+                    "Failed to send recovered AUTO action outcome %s",
+                    action_id,
+                )
 
     async def on_message(
         self,
@@ -104,13 +338,13 @@ class SignalService:
             )
             return
 
+        context_snapshot = None
+
         try:
             (
                 global_guidance,
                 channel_guidance,
             ) = await self._store.get_guidance(source.channel_id)
-
-            context_snapshot = None
 
             if self._context_provider is not None:
                 context_snapshot = await self._context_provider.snapshot(
@@ -119,8 +353,8 @@ class SignalService:
 
             signals = await self._extractor.extract(
                 post,
-                global_guidance=global_guidance,
-                channel_guidance=channel_guidance,
+                global_guidance=(global_guidance),
+                channel_guidance=(channel_guidance),
                 position_context=(
                     context_snapshot.position_context
                     if context_snapshot is not None
@@ -149,6 +383,41 @@ class SignalService:
             )
             return
 
+        account_state = (
+            context_snapshot.account_state if context_snapshot is not None else None
+        )
+
+        account_state_error = (
+            context_snapshot.account_state_error
+            if context_snapshot is not None
+            else None
+        )
+
+        position_context = (
+            context_snapshot.position_context if context_snapshot is not None else None
+        )
+
+        if context_snapshot is None:
+            try:
+                account_state = await self._executor.account_state()
+
+            except Exception as exc:
+                account_state_error = f"{type(exc).__name__}: {exc}"
+
+                logger.exception(
+                    "Account-state check failed for %s/%s",
+                    source.channel_id,
+                    source.message_id,
+                )
+
+        open_counts = Counter(
+            (
+                intent.symbol,
+                intent.side,
+            )
+            for intent in signals.open_intents
+        )
+
         planned: list[
             tuple[
                 TradingIntent,
@@ -172,14 +441,32 @@ class SignalService:
                 )
 
             else:
-                for intent in signals.open_intents:
+                for extracted_intent in signals.open_intents:
+                    key = (
+                        extracted_intent.symbol,
+                        extracted_intent.side,
+                    )
+
+                    approval_mode = self._open_approval_mode(
+                        extracted_intent,
+                        position_context=(position_context),
+                        account_state=(account_state),
+                        duplicate_in_batch=(open_counts[key] > 1),
+                    )
+
+                    intent = extracted_intent.model_copy(
+                        update={"approval_mode": (approval_mode)}
+                    )
+
                     try:
-                        context = await self._executor.market_context(intent.symbol)
+                        market_context = await self._executor.market_context(
+                            intent.symbol
+                        )
 
                         plan = self._planner.plan(
                             intent,
                             policy,
-                            context,
+                            market_context,
                         )
 
                     except Exception as exc:
@@ -202,7 +489,19 @@ class SignalService:
                         )
                     )
 
-        position_actions = signals.position_actions
+        position_actions = tuple(
+            action.model_copy(
+                update={
+                    "approval_mode": (
+                        self._position_action_approval_mode(
+                            action,
+                            account_state=(account_state),
+                        )
+                    )
+                }
+            )
+            for action in signals.position_actions
+        )
 
         if not planned and not position_actions:
             if planning_errors:
@@ -210,8 +509,8 @@ class SignalService:
                     source,
                     claim_token,
                     (
-                        "No extracted OPEN candidate "
-                        "could be planned: " + " | ".join(planning_errors)
+                        "No extracted OPEN "
+                        "candidate could be planned: " + " | ".join(planning_errors)
                     ),
                 )
             else:
@@ -235,16 +534,6 @@ class SignalService:
                 len(planning_errors),
             )
 
-        account_state = (
-            context_snapshot.account_state if context_snapshot is not None else None
-        )
-
-        account_state_error = (
-            context_snapshot.account_state_error
-            if context_snapshot is not None
-            else None
-        )
-
         account_pnl = None
         account_pnl_error = None
 
@@ -259,19 +548,6 @@ class SignalService:
                 source.channel_id,
                 source.message_id,
             )
-
-        if context_snapshot is None:
-            try:
-                account_state = await self._executor.account_state()
-
-            except Exception as exc:
-                account_state_error = f"{type(exc).__name__}: {exc}"
-
-                logger.exception(
-                    "Account-state check failed for %s/%s",
-                    source.channel_id,
-                    source.message_id,
-                )
 
         try:
             finalized = await self._store.create_signal_batch_and_complete_source(
@@ -302,9 +578,32 @@ class SignalService:
             )
             return
 
-        cards_sent = 0
+        manual_cards_sent = 0
 
         for intent, plan in planned:
+            if intent.approval_mode is ApprovalMode.AUTO:
+                assert self._coordinator is not None
+
+                outcome = await self._coordinator.execute_intent(
+                    intent.intent_id,
+                    approval_mode=(ApprovalMode.AUTO),
+                )
+
+                try:
+                    await self._approval_bot.send_auto_intent_outcome(outcome)
+                except Exception:
+                    logger.exception(
+                        "AUTO outcome delivery failed for intent %s",
+                        intent.intent_id,
+                    )
+
+                logger.info(
+                    "AUTO OPEN %s finished %s",
+                    intent.intent_id,
+                    outcome.status.value,
+                )
+                continue
+
             exposure = None
 
             if account_state is not None:
@@ -320,7 +619,7 @@ class SignalService:
                     account_state_error=(account_state_error),
                     account_pnl=account_pnl,
                     account_pnl_error=(account_pnl_error),
-                    send_account_state=(cards_sent == 0),
+                    send_account_state=(manual_cards_sent == 0),
                 )
 
             except Exception:
@@ -330,15 +629,32 @@ class SignalService:
                 )
                 continue
 
-            cards_sent += 1
-
-            logger.info(
-                "Created OPEN trading intent %s with %d planned order(s)",
-                intent.intent_id,
-                len(plan.orders),
-            )
+            manual_cards_sent += 1
 
         for action in position_actions:
+            if action.approval_mode is ApprovalMode.AUTO:
+                assert self._coordinator is not None
+
+                outcome = await self._coordinator.execute_position_action(
+                    action.action_id,
+                    approval_mode=(ApprovalMode.AUTO),
+                )
+
+                try:
+                    await self._approval_bot.send_auto_action_outcome(outcome)
+                except Exception:
+                    logger.exception(
+                        "AUTO outcome delivery failed for action %s",
+                        action.action_id,
+                    )
+
+                logger.info(
+                    "AUTO position action %s finished %s",
+                    action.action_id,
+                    outcome.status.value,
+                )
+                continue
+
             try:
                 await self._approval_bot.send_position_action(
                     action,
@@ -346,7 +662,7 @@ class SignalService:
                     account_state_error=(account_state_error),
                     account_pnl=account_pnl,
                     account_pnl_error=(account_pnl_error),
-                    send_account_state=(cards_sent == 0),
+                    send_account_state=(manual_cards_sent == 0),
                 )
 
             except Exception:
@@ -356,11 +672,4 @@ class SignalService:
                 )
                 continue
 
-            cards_sent += 1
-
-            logger.info(
-                "Created position action %s: %s %s",
-                action.action_id,
-                action.action.value,
-                action.symbol,
-            )
+            manual_cards_sent += 1
