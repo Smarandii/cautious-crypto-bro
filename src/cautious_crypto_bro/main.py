@@ -7,6 +7,9 @@ from .approval_bot import ApprovalBot
 from .bybit import BybitDemoExecutor
 from .config import get_settings
 from .execution import ExecutionPlanner
+from .execution_coordinator import (
+    ExecutionCoordinator,
+)
 from .openrouter import (
     OpenRouterIntentExtractor,
 )
@@ -66,13 +69,18 @@ async def async_main() -> None:
         api_secret=(settings.bybit_api_secret),
     )
 
+    coordinator = ExecutionCoordinator(
+        store=store,
+        executor=executor,
+        max_age_seconds=(settings.intent_max_age_seconds),
+    )
+
     bot = ApprovalBot(
         token=settings.telegram_bot_token,
         approval_chat_id=(settings.telegram_approval_chat_id),
         approver_user_id=(settings.telegram_approver_user_id),
-        max_age_seconds=(settings.intent_max_age_seconds),
         store=store,
-        executor=executor,
+        coordinator=coordinator,
     )
 
     await bot.start()

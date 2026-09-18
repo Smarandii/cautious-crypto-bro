@@ -1149,6 +1149,109 @@ class IntentStore:
             action for action in actions if action.action is PositionActionType.CLOSE
         )
 
+    async def quarantine_auto_executing(
+        self,
+    ) -> tuple[
+        tuple[UUID, ...],
+        tuple[UUID, ...],
+    ]:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+
+            try:
+                cursor = await db.execute(
+                    """
+                    SELECT intent_id
+                    FROM intents
+                    WHERE
+                        approval_mode = ?
+                        AND status = ?
+                    """,
+                    (
+                        ApprovalMode.AUTO.value,
+                        IntentStatus.EXECUTING.value,
+                    ),
+                )
+
+                intent_ids = tuple(UUID(row[0]) for row in await cursor.fetchall())
+
+                cursor = await db.execute(
+                    """
+                    SELECT action_id
+                    FROM position_actions
+                    WHERE
+                        approval_mode = ?
+                        AND status = ?
+                    """,
+                    (
+                        ApprovalMode.AUTO.value,
+                        IntentStatus.EXECUTING.value,
+                    ),
+                )
+
+                action_ids = tuple(UUID(row[0]) for row in await cursor.fetchall())
+
+                await db.execute(
+                    """
+                    UPDATE intents
+                    SET
+                        status = ?,
+                        error = ?,
+                        updated_at =
+                            CURRENT_TIMESTAMP
+                    WHERE
+                        approval_mode = ?
+                        AND status = ?
+                    """,
+                    (
+                        IntentStatus.UNCERTAIN.value,
+                        (
+                            "Process restarted while "
+                            "AUTO execution was in "
+                            "progress; not retried "
+                            "automatically"
+                        ),
+                        ApprovalMode.AUTO.value,
+                        IntentStatus.EXECUTING.value,
+                    ),
+                )
+
+                await db.execute(
+                    """
+                    UPDATE position_actions
+                    SET
+                        status = ?,
+                        error = ?,
+                        updated_at =
+                            CURRENT_TIMESTAMP
+                    WHERE
+                        approval_mode = ?
+                        AND status = ?
+                    """,
+                    (
+                        IntentStatus.UNCERTAIN.value,
+                        (
+                            "Process restarted while "
+                            "AUTO execution was in "
+                            "progress; not retried "
+                            "automatically"
+                        ),
+                        ApprovalMode.AUTO.value,
+                        IntentStatus.EXECUTING.value,
+                    ),
+                )
+
+                await db.commit()
+
+            except Exception:
+                await db.rollback()
+                raise
+
+        return (
+            intent_ids,
+            action_ids,
+        )
+
     async def get_pending_auto_intent_ids(
         self,
         *,

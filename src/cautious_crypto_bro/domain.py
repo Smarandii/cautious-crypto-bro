@@ -75,6 +75,7 @@ class IntentStatus(StrEnum):
     EXECUTED = "EXECUTED"
     SKIPPED = "SKIPPED"
     FAILED = "FAILED"
+    UNCERTAIN = "UNCERTAIN"
 
 
 def _normalize_usdt_symbol(
