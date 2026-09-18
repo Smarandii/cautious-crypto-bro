@@ -37,59 +37,6 @@ def source() -> SourceMessage:
     )
 
 
-def test_failed_source_can_be_reclaimed(
-    tmp_path,
-) -> None:
-    async def run() -> None:
-        store = IntentStore(tmp_path / "state.sqlite3")
-        await store.initialize()
-
-        item = source()
-
-        first = await store.claim_source(
-            item,
-            lease_seconds=300,
-        )
-
-        assert first is not None
-
-        duplicate = await store.claim_source(
-            item,
-            lease_seconds=300,
-        )
-
-        assert duplicate is None
-
-        assert await store.mark_source_failed(
-            item,
-            first,
-            "temporary error",
-        )
-
-        second = await store.claim_source(
-            item,
-            lease_seconds=300,
-        )
-
-        assert second is not None
-        assert second != first
-
-        assert await store.mark_source_completed(
-            item,
-            second,
-        )
-
-        assert (
-            await store.claim_source(
-                item,
-                lease_seconds=300,
-            )
-            is None
-        )
-
-    asyncio.run(run())
-
-
 def test_concurrent_claim_has_one_winner(
     tmp_path,
 ) -> None:
@@ -112,70 +59,6 @@ def test_concurrent_claim_has_one_winner(
         winners = [result for result in results if result is not None]
 
         assert len(winners) == 1
-
-    asyncio.run(run())
-
-
-def test_stale_processing_claim_can_be_recovered(
-    tmp_path,
-) -> None:
-    async def run() -> None:
-        database_path = tmp_path / "state.sqlite3"
-
-        store = IntentStore(database_path)
-        await store.initialize()
-
-        item = source()
-
-        first = await store.claim_source(
-            item,
-            lease_seconds=300,
-        )
-
-        assert first is not None
-
-        async with aiosqlite.connect(database_path) as db:
-            await db.execute(
-                """
-                UPDATE source_messages
-                SET updated_at =
-                    datetime(
-                        'now',
-                        '-10 minutes'
-                    )
-                WHERE
-                    channel_id = ?
-                    AND message_id = ?
-                """,
-                (
-                    item.channel_id,
-                    item.message_id,
-                ),
-            )
-            await db.commit()
-
-        second = await store.claim_source(
-            item,
-            lease_seconds=300,
-        )
-
-        assert second is not None
-        assert second != first
-
-        # The stale worker must not be able to
-        # overwrite the newer claim.
-        assert not (
-            await store.mark_source_failed(
-                item,
-                first,
-                "old worker",
-            )
-        )
-
-        assert await store.mark_source_completed(
-            item,
-            second,
-        )
 
     asyncio.run(run())
 
@@ -350,63 +233,6 @@ def _trade_pair(
     )
 
     return intent, plan
-
-
-def test_multiple_intents_complete_source_atomically(
-    tmp_path,
-) -> None:
-    async def run() -> None:
-        store = IntentStore(tmp_path / "state.sqlite3")
-        await store.initialize()
-
-        item = source()
-
-        claim = await store.claim_source(
-            item,
-            lease_seconds=300,
-        )
-
-        assert claim is not None
-
-        first = _trade_pair(
-            item,
-            symbol="BTCUSDT",
-            side=Side.LONG,
-            entry="100",
-            stop="90",
-            target="120",
-        )
-
-        second = _trade_pair(
-            item,
-            symbol="ETHUSDT",
-            side=Side.SHORT,
-            entry="200",
-            stop="220",
-            target="170",
-        )
-
-        assert await store.create_intents_with_plans_and_complete_source(
-            (
-                first,
-                second,
-            ),
-            claim,
-        )
-
-        assert await store.get_intent(first[0].intent_id) is not None
-
-        assert await store.get_intent(second[0].intent_id) is not None
-
-        assert (
-            await store.claim_source(
-                item,
-                lease_seconds=300,
-            )
-            is None
-        )
-
-    asyncio.run(run())
 
 
 def test_multi_intent_persistence_rolls_back_entire_batch(

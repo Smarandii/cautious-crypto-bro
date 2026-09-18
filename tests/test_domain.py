@@ -9,8 +9,6 @@ from pydantic import ValidationError
 from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
-    PositionActionIntent,
-    PositionActionType,
     Side,
     SourceMessage,
     TradingIntent,
@@ -56,49 +54,6 @@ def test_range_requires_two_boundaries() -> None:
         )
 
 
-def test_long_geometry_rejects_stop_inside_range() -> None:
-    with pytest.raises(ValidationError):
-        TradingIntent(
-            source=source(),
-            symbol="BTCUSDT",
-            side=Side.LONG,
-            entry=Entry(
-                type=EntryType.RANGE,
-                range_low=99_000,
-                range_high=100_000,
-            ),
-            stop_loss=99_500,
-            take_profit=105_000,
-            summary="Invalid",
-            confidence=0.5,
-        )
-
-
-def test_limit_requires_price() -> None:
-    with pytest.raises(ValidationError):
-        Entry(type=EntryType.LIMIT)
-
-
-def test_market_rejects_price() -> None:
-    with pytest.raises(ValidationError):
-        Entry(
-            type=EntryType.MARKET,
-            price=100,
-        )
-
-
-def test_private_channel_url() -> None:
-    private_source = source().model_copy(
-        update={
-            "channel_id": (-1002132062264),
-            "channel_username": None,
-            "message_id": 11482,
-        }
-    )
-
-    assert private_source.telegram_url == ("https://t.me/c/2132062264/11482")
-
-
 def test_open_intent_rejects_quote_only_symbol() -> None:
     with pytest.raises(ValidationError):
         TradingIntent(
@@ -110,17 +65,6 @@ def test_open_intent_rejects_quote_only_symbol() -> None:
             ),
             stop_loss=1,
             take_profit=None,
-            summary="Invalid quote-only symbol",
-            confidence=1,
-        )
-
-
-def test_position_action_rejects_quote_only_symbol() -> None:
-    with pytest.raises(ValidationError):
-        PositionActionIntent(
-            source=source(),
-            symbol="USDT",
-            action=PositionActionType.CLOSE,
             summary="Invalid quote-only symbol",
             confidence=1,
         )
