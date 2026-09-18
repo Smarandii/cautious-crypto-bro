@@ -17,6 +17,7 @@ from .domain import (
     ExitPolicy,
     IntentStatus,
     PositionActionIntent,
+    PositionActionType,
     SourceMessage,
     TradingIntent,
 )
@@ -948,6 +949,87 @@ class IntentStore:
 
             await db.commit()
             return cursor.rowcount == 1
+
+    async def get_recent_source_intents(
+        self,
+        channel_id: int,
+        *,
+        limit: int = 50,
+    ) -> tuple[TradingIntent, ...]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+
+        async with aiosqlite.connect(self._database_path) as db:
+            db.row_factory = aiosqlite.Row
+
+            cursor = await db.execute(
+                """
+                SELECT payload_json, status
+                FROM intents
+                WHERE
+                    channel_id = ?
+                    AND status IN (?, ?, ?)
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (
+                    channel_id,
+                    IntentStatus.PENDING.value,
+                    IntentStatus.EXECUTING.value,
+                    IntentStatus.EXECUTED.value,
+                    limit,
+                ),
+            )
+
+            rows = await cursor.fetchall()
+
+        return tuple(
+            TradingIntent.model_validate_json(row["payload_json"]).model_copy(
+                update={"status": IntentStatus(row["status"])}
+            )
+            for row in rows
+        )
+
+    async def get_recent_executed_closes(
+        self,
+        *,
+        limit: int = 100,
+    ) -> tuple[
+        PositionActionIntent,
+        ...,
+    ]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+
+        async with aiosqlite.connect(self._database_path) as db:
+            db.row_factory = aiosqlite.Row
+
+            cursor = await db.execute(
+                """
+                SELECT payload_json, status
+                FROM position_actions
+                WHERE status = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (
+                    IntentStatus.EXECUTED.value,
+                    limit,
+                ),
+            )
+
+            rows = await cursor.fetchall()
+
+        actions = tuple(
+            PositionActionIntent.model_validate_json(row["payload_json"]).model_copy(
+                update={"status": IntentStatus(row["status"])}
+            )
+            for row in rows
+        )
+
+        return tuple(
+            action for action in actions if action.action is PositionActionType.CLOSE
+        )
 
     async def get_guidance(
         self,

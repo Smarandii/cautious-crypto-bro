@@ -14,6 +14,9 @@ from .runtime_store import (
     RedisRuntimeStore,
 )
 from .service import SignalService
+from .signal_context import (
+    SignalContextProvider,
+)
 from .storage import IntentStore
 from .telegram_source import (
     TelegramSource,
@@ -74,12 +77,18 @@ async def async_main() -> None:
 
     await bot.start()
 
+    context_provider = SignalContextProvider(
+        store=store,
+        executor=executor,
+    )
+
     service = SignalService(
         store=store,
         extractor=extractor,
         planner=planner,
         executor=executor,
         approval_bot=bot,
+        context_provider=context_provider,
         source_processing_lease_seconds=(settings.source_processing_lease_seconds),
     )
 

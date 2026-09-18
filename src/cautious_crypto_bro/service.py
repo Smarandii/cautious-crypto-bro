@@ -18,6 +18,9 @@ from .execution import ExecutionPlanner
 from .openrouter import (
     OpenRouterIntentExtractor,
 )
+from .signal_context import (
+    SignalContextProvider,
+)
 from .storage import IntentStore
 
 logger = logging.getLogger(__name__)
@@ -32,6 +35,7 @@ class SignalService:
         planner: ExecutionPlanner,
         executor: BybitDemoExecutor,
         approval_bot: ApprovalBot,
+        context_provider: (SignalContextProvider | None) = None,
         source_processing_lease_seconds: int = 300,
     ) -> None:
         if source_processing_lease_seconds <= 0:
@@ -42,6 +46,7 @@ class SignalService:
         self._planner = planner
         self._executor = executor
         self._approval_bot = approval_bot
+        self._context_provider = context_provider
         self._source_processing_lease_seconds = source_processing_lease_seconds
 
     async def _sync_account_pnl(
@@ -105,10 +110,22 @@ class SignalService:
                 channel_guidance,
             ) = await self._store.get_guidance(source.channel_id)
 
+            context_snapshot = None
+
+            if self._context_provider is not None:
+                context_snapshot = await self._context_provider.snapshot(
+                    source.channel_id
+                )
+
             signals = await self._extractor.extract(
                 post,
                 global_guidance=global_guidance,
                 channel_guidance=channel_guidance,
+                position_context=(
+                    context_snapshot.position_context
+                    if context_snapshot is not None
+                    else None
+                ),
             )
 
         except Exception as exc:
@@ -218,8 +235,16 @@ class SignalService:
                 len(planning_errors),
             )
 
-        account_state = None
-        account_state_error = None
+        account_state = (
+            context_snapshot.account_state if context_snapshot is not None else None
+        )
+
+        account_state_error = (
+            context_snapshot.account_state_error
+            if context_snapshot is not None
+            else None
+        )
+
         account_pnl = None
         account_pnl_error = None
 
@@ -235,17 +260,18 @@ class SignalService:
                 source.message_id,
             )
 
-        try:
-            account_state = await self._executor.account_state()
+        if context_snapshot is None:
+            try:
+                account_state = await self._executor.account_state()
 
-        except Exception as exc:
-            account_state_error = f"{type(exc).__name__}: {exc}"
+            except Exception as exc:
+                account_state_error = f"{type(exc).__name__}: {exc}"
 
-            logger.exception(
-                "Account-state check failed for %s/%s",
-                source.channel_id,
-                source.message_id,
-            )
+                logger.exception(
+                    "Account-state check failed for %s/%s",
+                    source.channel_id,
+                    source.message_id,
+                )
 
         try:
             finalized = await self._store.create_signal_batch_and_complete_source(
