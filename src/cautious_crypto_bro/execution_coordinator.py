@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
 from .bybit import (
+    AccountStateSummary,
     BybitDemoExecutor,
     PositionActionExecutionResult,
 )
@@ -13,12 +15,17 @@ from .domain import (
     ApprovalMode,
     ExecutionPlan,
     IntentStatus,
+    OpenRelation,
     PositionActionIntent,
     TradingIntent,
 )
 from .storage import IntentStore
 
 logger = logging.getLogger(__name__)
+
+
+class AutoExecutionSafetyError(RuntimeError):
+    pass
 
 
 @dataclass(
@@ -58,6 +65,76 @@ class ExecutionCoordinator:
         self._store = store
         self._executor = executor
         self._max_age_seconds = max_age_seconds
+
+        # Serialize account mutations. This closes the
+        # race where two concurrent NEW signals could
+        # both inspect an empty account and then execute.
+        self._execution_lock = asyncio.Lock()
+
+    @staticmethod
+    def auto_open_safety_reason(
+        intent: TradingIntent,
+        account_state: AccountStateSummary,
+    ) -> str | None:
+        if intent.relation not in {
+            OpenRelation.NEW,
+            OpenRelation.ADD_OR_REENTRY,
+        }:
+            return (
+                "OPEN relation is not eligible "
+                "for automatic execution: "
+                f"{intent.relation.value}"
+            )
+
+        positions = tuple(
+            position
+            for position in account_state.positions
+            if position.symbol == intent.symbol
+        )
+
+        entry_orders = tuple(
+            order
+            for order in account_state.open_orders
+            if (
+                order.symbol == intent.symbol
+                and order.remaining_quantity > 0
+                and not order.reduce_only
+                and not order.close_on_trigger
+                and not order.is_protective
+            )
+        )
+
+        if len(positions) > 1:
+            return f"Multiple live positions exist for {intent.symbol}"
+
+        existing_sides = {
+            item.side
+            for item in (
+                *positions,
+                *entry_orders,
+            )
+        }
+
+        if intent.relation is OpenRelation.NEW:
+            if positions or entry_orders:
+                return (
+                    "NEW signal conflicts with "
+                    "existing account exposure "
+                    f"for {intent.symbol}"
+                )
+
+            return None
+
+        # ADD_OR_REENTRY is the only relation that
+        # authorizes adding to existing exposure.
+        if any(side is not intent.side for side in existing_sides):
+            return (
+                "ADD_OR_REENTRY conflicts with "
+                "opposite-side account exposure "
+                f"for {intent.symbol}"
+            )
+
+        return None
 
     async def execute_intent(
         self,
@@ -126,13 +203,26 @@ class ExecutionCoordinator:
 
             return IntentExecutionOutcome(
                 status=(current.status if current is not None else IntentStatus.FAILED),
-                message=("Intent was already handled"),
+                message=("Intent was already handled or approval mode changed"),
                 intent=current or intent,
                 plan=plan,
             )
 
         try:
-            order_ids = await self._executor.execute(plan)
+            async with self._execution_lock:
+                if approval_mode is ApprovalMode.AUTO:
+                    live_state = await self._executor.account_state()
+
+                    safety_reason = self.auto_open_safety_reason(
+                        intent,
+                        live_state,
+                    )
+
+                    if safety_reason is not None:
+                        raise (AutoExecutionSafetyError(safety_reason))
+
+                order_ids = await self._executor.execute(plan)
+
         except Exception as exc:
             logger.exception(
                 "Execution failed for %s",
@@ -222,12 +312,16 @@ class ExecutionCoordinator:
 
             return PositionActionExecutionOutcome(
                 status=(current.status if current is not None else IntentStatus.FAILED),
-                message=("Position action was already handled"),
+                message=(
+                    "Position action was already handled or approval mode changed"
+                ),
                 action=current or action,
             )
 
         try:
-            result = await self._executor.execute_position_action(action)
+            async with self._execution_lock:
+                result = await self._executor.execute_position_action(action)
+
         except Exception as exc:
             logger.exception(
                 "Position action execution failed for %s",
