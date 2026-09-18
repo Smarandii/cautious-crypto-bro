@@ -6,6 +6,8 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .domain import AutoApprovalMode
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -74,6 +76,9 @@ class Settings(BaseSettings):
         le=3600,
     )
     intent_max_age_seconds: int = Field(default=900, gt=0)
+
+    auto_approval_mode: AutoApprovalMode = AutoApprovalMode.DISABLED
+
     log_level: str = "INFO"
 
 

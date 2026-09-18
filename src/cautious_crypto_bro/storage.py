@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import aiosqlite
 
 from .domain import (
+    ApprovalMode,
     ClosedPnlRecord,
     ExecutionPlan,
     ExecutionPolicy,
@@ -22,7 +23,7 @@ from .domain import (
     TradingIntent,
 )
 
-LATEST_SCHEMA_VERSION = 3
+LATEST_SCHEMA_VERSION = 4
 
 
 async def _source_message_columns(
@@ -305,10 +306,53 @@ async def _migrate_to_v3(
     )
 
 
+async def _migrate_to_v4(
+    db: aiosqlite.Connection,
+) -> None:
+    await db.execute(
+        """
+        ALTER TABLE intents
+        ADD COLUMN approval_mode TEXT NOT NULL
+        DEFAULT 'MANUAL'
+        """
+    )
+
+    await db.execute(
+        """
+        ALTER TABLE position_actions
+        ADD COLUMN approval_mode TEXT NOT NULL
+        DEFAULT 'MANUAL'
+        """
+    )
+
+    await db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS
+            ix_intents_approval_status
+        ON intents(
+            approval_mode,
+            status
+        )
+        """
+    )
+
+    await db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS
+            ix_position_actions_approval_status
+        ON position_actions(
+            approval_mode,
+            status
+        )
+        """
+    )
+
+
 MIGRATIONS = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
     3: _migrate_to_v3,
+    4: _migrate_to_v4,
 }
 
 
@@ -541,10 +585,11 @@ class IntentStore:
                 message_id,
                 payload_json,
                 status,
+                approval_mode,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(intent.intent_id),
@@ -552,6 +597,7 @@ class IntentStore:
                 intent.source.message_id,
                 intent.model_dump_json(),
                 intent.status.value,
+                intent.approval_mode.value,
                 now,
                 now,
             ),
@@ -588,10 +634,11 @@ class IntentStore:
                 message_id,
                 payload_json,
                 status,
+                approval_mode,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(action.action_id),
@@ -599,6 +646,7 @@ class IntentStore:
                 action.source.message_id,
                 action.model_dump_json(),
                 action.status.value,
+                action.approval_mode.value,
                 now,
                 now,
             ),
@@ -776,7 +824,10 @@ class IntentStore:
 
             cursor = await db.execute(
                 """
-                SELECT payload_json, status
+                SELECT
+                    payload_json,
+                    status,
+                    approval_mode
                 FROM intents
                 WHERE intent_id = ?
                 """,
@@ -790,7 +841,12 @@ class IntentStore:
 
         intent = TradingIntent.model_validate_json(row["payload_json"])
 
-        return intent.model_copy(update={"status": IntentStatus(row["status"])})
+        return intent.model_copy(
+            update={
+                "status": IntentStatus(row["status"]),
+                "approval_mode": ApprovalMode(row["approval_mode"]),
+            }
+        )
 
     async def get_execution_plan(
         self,
@@ -816,29 +872,56 @@ class IntentStore:
     async def claim_for_execution(
         self,
         intent_id: UUID,
-        user_id: int,
+        user_id: int | None,
+        *,
+        expected_approval_mode: (ApprovalMode | None) = None,
     ) -> bool:
         async with aiosqlite.connect(self._database_path) as db:
-            cursor = await db.execute(
-                """
-                UPDATE intents
-                SET
-                    status = ?,
-                    decision_user_id = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE
-                    intent_id = ?
-                    AND status = ?
-                """,
-                (
-                    IntentStatus.EXECUTING.value,
-                    user_id,
-                    str(intent_id),
-                    IntentStatus.PENDING.value,
-                ),
-            )
+            if expected_approval_mode is None:
+                cursor = await db.execute(
+                    """
+                    UPDATE intents
+                    SET
+                        status = ?,
+                        decision_user_id = ?,
+                        updated_at =
+                            CURRENT_TIMESTAMP
+                    WHERE
+                        intent_id = ?
+                        AND status = ?
+                    """,
+                    (
+                        IntentStatus.EXECUTING.value,
+                        user_id,
+                        str(intent_id),
+                        IntentStatus.PENDING.value,
+                    ),
+                )
+            else:
+                cursor = await db.execute(
+                    """
+                    UPDATE intents
+                    SET
+                        status = ?,
+                        decision_user_id = ?,
+                        updated_at =
+                            CURRENT_TIMESTAMP
+                    WHERE
+                        intent_id = ?
+                        AND status = ?
+                        AND approval_mode = ?
+                    """,
+                    (
+                        IntentStatus.EXECUTING.value,
+                        user_id,
+                        str(intent_id),
+                        IntentStatus.PENDING.value,
+                        expected_approval_mode.value,
+                    ),
+                )
 
             await db.commit()
+
             return cursor.rowcount == 1
 
     async def mark_skipped(
@@ -878,7 +961,10 @@ class IntentStore:
 
             cursor = await db.execute(
                 """
-                SELECT payload_json, status
+                SELECT
+                    payload_json,
+                    status,
+                    approval_mode
                 FROM position_actions
                 WHERE action_id = ?
                 """,
@@ -892,34 +978,66 @@ class IntentStore:
 
         action = PositionActionIntent.model_validate_json(row["payload_json"])
 
-        return action.model_copy(update={"status": IntentStatus(row["status"])})
+        return action.model_copy(
+            update={
+                "status": IntentStatus(row["status"]),
+                "approval_mode": ApprovalMode(row["approval_mode"]),
+            }
+        )
 
     async def claim_position_action_for_execution(
         self,
         action_id: UUID,
-        user_id: int,
+        user_id: int | None,
+        *,
+        expected_approval_mode: (ApprovalMode | None) = None,
     ) -> bool:
         async with aiosqlite.connect(self._database_path) as db:
-            cursor = await db.execute(
-                """
-                UPDATE position_actions
-                SET
-                    status = ?,
-                    decision_user_id = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE
-                    action_id = ?
-                    AND status = ?
-                """,
-                (
-                    IntentStatus.EXECUTING.value,
-                    user_id,
-                    str(action_id),
-                    IntentStatus.PENDING.value,
-                ),
-            )
+            if expected_approval_mode is None:
+                cursor = await db.execute(
+                    """
+                    UPDATE position_actions
+                    SET
+                        status = ?,
+                        decision_user_id = ?,
+                        updated_at =
+                            CURRENT_TIMESTAMP
+                    WHERE
+                        action_id = ?
+                        AND status = ?
+                    """,
+                    (
+                        IntentStatus.EXECUTING.value,
+                        user_id,
+                        str(action_id),
+                        IntentStatus.PENDING.value,
+                    ),
+                )
+            else:
+                cursor = await db.execute(
+                    """
+                    UPDATE position_actions
+                    SET
+                        status = ?,
+                        decision_user_id = ?,
+                        updated_at =
+                            CURRENT_TIMESTAMP
+                    WHERE
+                        action_id = ?
+                        AND status = ?
+                        AND approval_mode = ?
+                    """,
+                    (
+                        IntentStatus.EXECUTING.value,
+                        user_id,
+                        str(action_id),
+                        IntentStatus.PENDING.value,
+                        expected_approval_mode.value,
+                    ),
+                )
 
             await db.commit()
+
             return cursor.rowcount == 1
 
     async def mark_position_action_skipped(
@@ -1030,6 +1148,60 @@ class IntentStore:
         return tuple(
             action for action in actions if action.action is PositionActionType.CLOSE
         )
+
+    async def get_pending_auto_intent_ids(
+        self,
+        *,
+        limit: int = 100,
+    ) -> tuple[UUID, ...]:
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT intent_id
+                FROM intents
+                WHERE
+                    approval_mode = ?
+                    AND status = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (
+                    ApprovalMode.AUTO.value,
+                    IntentStatus.PENDING.value,
+                    limit,
+                ),
+            )
+
+            rows = await cursor.fetchall()
+
+        return tuple(UUID(row[0]) for row in rows)
+
+    async def get_pending_auto_action_ids(
+        self,
+        *,
+        limit: int = 100,
+    ) -> tuple[UUID, ...]:
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT action_id
+                FROM position_actions
+                WHERE
+                    approval_mode = ?
+                    AND status = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (
+                    ApprovalMode.AUTO.value,
+                    IntentStatus.PENDING.value,
+                    limit,
+                ),
+            )
+
+            rows = await cursor.fetchall()
+
+        return tuple(UUID(row[0]) for row in rows)
 
     async def get_guidance(
         self,
