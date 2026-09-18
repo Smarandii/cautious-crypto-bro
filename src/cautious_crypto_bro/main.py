@@ -7,6 +7,9 @@ from .approval_bot import ApprovalBot
 from .bybit import BybitDemoExecutor
 from .config import get_settings
 from .execution import ExecutionPlanner
+from .execution_coordinator import (
+    ExecutionCoordinator,
+)
 from .openrouter import (
     OpenRouterIntentExtractor,
 )
@@ -14,6 +17,9 @@ from .runtime_store import (
     RedisRuntimeStore,
 )
 from .service import SignalService
+from .signal_context import (
+    SignalContextProvider,
+)
 from .storage import IntentStore
 from .telegram_source import (
     TelegramSource,
@@ -63,16 +69,26 @@ async def async_main() -> None:
         api_secret=(settings.bybit_api_secret),
     )
 
+    coordinator = ExecutionCoordinator(
+        store=store,
+        executor=executor,
+        max_age_seconds=(settings.intent_max_age_seconds),
+    )
+
     bot = ApprovalBot(
         token=settings.telegram_bot_token,
         approval_chat_id=(settings.telegram_approval_chat_id),
         approver_user_id=(settings.telegram_approver_user_id),
-        max_age_seconds=(settings.intent_max_age_seconds),
         store=store,
-        executor=executor,
+        coordinator=coordinator,
     )
 
     await bot.start()
+
+    context_provider = SignalContextProvider(
+        store=store,
+        executor=executor,
+    )
 
     service = SignalService(
         store=store,
@@ -80,8 +96,13 @@ async def async_main() -> None:
         planner=planner,
         executor=executor,
         approval_bot=bot,
+        coordinator=coordinator,
+        context_provider=context_provider,
+        auto_approval_mode=(settings.auto_approval_mode),
         source_processing_lease_seconds=(settings.source_processing_lease_seconds),
     )
+
+    await service.recover_auto_execution()
 
     source = TelegramSource(
         api_id=settings.telegram_api_id,

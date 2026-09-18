@@ -41,6 +41,24 @@ class PositionActionType(StrEnum):
     CLOSE = "CLOSE"
 
 
+class OpenRelation(StrEnum):
+    NEW = "NEW"
+    ADD_OR_REENTRY = "ADD_OR_REENTRY"
+    UPDATE_EXISTING = "UPDATE_EXISTING"
+    UNCLASSIFIED = "UNCLASSIFIED"
+
+
+class ApprovalMode(StrEnum):
+    MANUAL = "MANUAL"
+    AUTO = "AUTO"
+
+
+class AutoApprovalMode(StrEnum):
+    DISABLED = "disabled"
+    OPEN_ONLY = "open_only"
+    ALL = "all"
+
+
 class ExecutionOrderType(StrEnum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
@@ -57,6 +75,7 @@ class IntentStatus(StrEnum):
     EXECUTED = "EXECUTED"
     SKIPPED = "SKIPPED"
     FAILED = "FAILED"
+    UNCERTAIN = "UNCERTAIN"
 
 
 def _normalize_usdt_symbol(
@@ -73,6 +92,70 @@ def _normalize_usdt_symbol(
         raise ValueError("USDT symbol requires a non-empty alphanumeric base asset")
 
     return normalized
+
+
+class SourceOpenContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    side: Side
+    status: IntentStatus
+    message_id: int
+    created_at: datetime
+
+    # True means a successful CCB copy from this
+    # source still corresponds to current live
+    # account exposure. None means live account
+    # state was unavailable.
+    active_copy: bool | None = None
+
+
+class AccountPositionContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    side: Side
+    size: Decimal
+    avg_price: Decimal
+
+
+class SignalPositionContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_channel_id: int
+    account_state_available: bool
+
+    source_open_history: tuple[
+        SourceOpenContext,
+        ...,
+    ] = ()
+
+    account_positions: tuple[
+        AccountPositionContext,
+        ...,
+    ] = ()
+
+    def has_existing_copy(
+        self,
+        symbol: str,
+        side: Side,
+    ) -> bool:
+        symbol = symbol.upper()
+
+        for item in self.source_open_history:
+            if item.symbol != symbol or item.side is not side:
+                continue
+
+            if item.status in {
+                IntentStatus.PENDING,
+                IntentStatus.EXECUTING,
+            }:
+                return True
+
+            if item.status is IntentStatus.EXECUTED and item.active_copy is True:
+                return True
+
+        return False
 
 
 class SourceMessage(BaseModel):
@@ -183,6 +266,15 @@ class ExtractedIntent(BaseModel):
     # normalizes this into the strict Side enum.
     direction: str | None = None
 
+    # Relationship to trusted CCB copy state.
+    # None is tolerated at the transport boundary but
+    # is never eligible for automatic execution.
+    relation: OpenRelation | None = None
+    relation_evidence: str | None = Field(
+        default=None,
+        max_length=300,
+    )
+
     # Providers/models have emitted both:
     #   "entry": "MARKET"
     # and:
@@ -286,6 +378,18 @@ class TradingIntent(BaseModel):
     take_profit: float | None = Field(default=None, gt=0)
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
+
+    relation: OpenRelation = OpenRelation.UNCLASSIFIED
+    relation_evidence: str | None = Field(
+        default=None,
+        max_length=300,
+    )
+
+    approval_mode: ApprovalMode = Field(
+        default=ApprovalMode.MANUAL,
+        exclude=True,
+    )
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     status: IntentStatus = Field(
         default=IntentStatus.PENDING,
@@ -353,6 +457,12 @@ class PositionActionIntent(BaseModel):
     expected_side: Side | None = None
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
+
+    approval_mode: ApprovalMode = Field(
+        default=ApprovalMode.MANUAL,
+        exclude=True,
+    )
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     status: IntentStatus = Field(
         default=IntentStatus.PENDING,

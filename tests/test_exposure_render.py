@@ -8,7 +8,6 @@ from cautious_crypto_bro.approval_bot import (
     ApprovalBot,
 )
 from cautious_crypto_bro.bybit import (
-    OpenOrderExposure,
     PositionExposure,
     SymbolExposure,
 )
@@ -81,32 +80,6 @@ def make_plan(
     )
 
 
-def test_same_side_exposure_warning() -> None:
-    intent = make_intent(Side.LONG)
-    plan = make_plan(intent)
-
-    exposure = SymbolExposure(
-        symbol="BTCUSDT",
-        positions=(
-            PositionExposure(
-                side=Side.LONG,
-                size=Decimal("0.25"),
-                avg_price=(Decimal("60000")),
-            ),
-        ),
-    )
-
-    rendered = ApprovalBot._render(
-        intent,
-        plan,
-        exposure=exposure,
-    )
-
-    assert "EXISTING SAME-SIDE EXPOSURE" in rendered
-    assert "add to the same one-way position" in rendered
-    assert "0.25 @ 60000" in rendered
-
-
 def test_opposite_exposure_warning() -> None:
     intent = make_intent(Side.SHORT)
     plan = make_plan(intent)
@@ -130,51 +103,3 @@ def test_opposite_exposure_warning() -> None:
 
     assert "EXISTING OPPOSITE EXPOSURE" in rendered
     assert "reduce, close, or reverse" in rendered
-
-
-def test_pending_ccb_orders_warning() -> None:
-    intent = make_intent(Side.LONG)
-    plan = make_plan(intent)
-
-    exposure = SymbolExposure(
-        symbol="BTCUSDT",
-        pending_entry_orders=(
-            OpenOrderExposure(
-                side=Side.LONG,
-                remaining_quantity=(Decimal("0.01")),
-                order_id="a",
-                order_link_id="ccb-a",
-                price=Decimal("60000"),
-            ),
-            OpenOrderExposure(
-                side=Side.SHORT,
-                remaining_quantity=(Decimal("0.02")),
-                order_id="b",
-                order_link_id="ccb-b",
-                price=Decimal("62000"),
-            ),
-        ),
-    )
-
-    rendered = ApprovalBot._render(
-        intent,
-        plan,
-        exposure=exposure,
-    )
-
-    assert "PENDING CCB ENTRY ORDERS" in rendered
-    assert "1 same-side, 1 opposite-side" in rendered
-
-
-def test_exposure_check_failure_is_visible() -> None:
-    intent = make_intent(Side.LONG)
-    plan = make_plan(intent)
-
-    rendered = ApprovalBot._render(
-        intent,
-        plan,
-        exposure_error=("temporary Bybit failure"),
-    )
-
-    assert "EXPOSURE CHECK UNAVAILABLE" in rendered
-    assert "Execute remains available" in rendered

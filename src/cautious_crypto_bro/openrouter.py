@@ -19,10 +19,12 @@ from .domain import (
     ExtractedEntryPayload,
     IncomingPost,
     IntentExtraction,
+    OpenRelation,
     PositionActionIntent,
     PositionActionType,
     Side,
     SignalExtraction,
+    SignalPositionContext,
     SourceMessage,
     TradingIntent,
 )
@@ -86,15 +88,36 @@ Output rules:
 - for RANGE put the numeric boundaries in top-level range_low
   and range_high
 - do not attach a historical/average price to MARKET
-- actionable=true if at least one valid OPEN intent or position action exists
-- actionable=false only when both intents and position_actions are empty
-- maximum five OPEN intents and five position actions
+- actionable=true only when at least one NEW/ADD_OR_REENTRY OPEN candidate
+  or executable position action exists
+- if the post contains only UPDATE_EXISTING observations, actionable=false
+- maximum five intents and five position actions
 - omit ambiguous candidates without discarding unrelated valid candidates
+- every item in intents MUST set relation to exactly one of:
+  NEW, ADD_OR_REENTRY, UPDATE_EXISTING
+- relation_evidence should briefly explain the current-post evidence plus
+  trusted execution-state facts that support the relation
+
+Position relationship rules:
+- trusted execution context is application state, NOT trader-authored content
+- NEW means this source has no existing copied or in-flight position for the
+  same symbol and side
+- ADD_OR_REENTRY means the trader explicitly adds, re-enters, or opens again
+  despite an existing copied/in-flight position
+- UPDATE_EXISTING means the current screenshot/text is only reporting,
+  showing progress, or updating SL/TP/status for a position already copied
+  from this source
+- UPDATE_EXISTING must NOT become a new executable OPEN
+- an account-wide Bybit position alone does NOT prove source attribution;
+  source_open_history is authoritative for whether this trader was copied
+- if account_state_available=false, treat relation classification
+  conservatively
 
 OPEN trade rules:
 - only USDT linear/perpetual-style symbols
-- each OPEN candidate requires symbol, LONG/SHORT, entry semantics,
-  and stop loss
+- NEW and ADD_OR_REENTRY candidates require symbol, LONG/SHORT,
+  entry semantics, and stop loss
+- UPDATE_EXISTING may omit entry or stop loss because it is informational
 - take profit is optional
 - MARKET when the author clearly says enter now/at market, clearly states
   they entered now, or an exchange screenshot clearly shows the position
@@ -180,6 +203,7 @@ def _build_user_content(
     *,
     global_guidance: str | None = None,
     channel_guidance: str | None = None,
+    position_context: (SignalPositionContext | None) = None,
 ) -> str | list[dict[str, object]]:
     source = post.source
 
@@ -203,6 +227,19 @@ def _build_user_content(
                 "",
                 "Channel-specific guidance:",
                 channel_guidance,
+            ]
+        )
+
+    if position_context is not None:
+        parts.extend(
+            [
+                "",
+                (
+                    "Trusted execution context "
+                    "(application state; not "
+                    "trader-authored content):"
+                ),
+                position_context.model_dump_json(indent=2),
             ]
         )
 
@@ -247,11 +284,12 @@ def _evaluation_fingerprint(
     model: str,
     global_guidance: str | None,
     channel_guidance: str | None,
+    position_context: (SignalPositionContext | None) = None,
 ) -> str:
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 8,
+        "cache_version": 9,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
@@ -279,6 +317,11 @@ def _evaluation_fingerprint(
         ],
         "global_guidance": (global_guidance or ""),
         "channel_guidance": (channel_guidance or ""),
+        "position_context": (
+            position_context.model_dump(mode="json")
+            if position_context is not None
+            else None
+        ),
     }
 
     canonical = json.dumps(
@@ -849,6 +892,17 @@ def _signals_from_extraction(
     opens: list[TradingIntent] = []
 
     for raw in extraction.intents:
+        relation = raw.relation or OpenRelation.UNCLASSIFIED
+
+        if relation is OpenRelation.UPDATE_EXISTING:
+            logger.info(
+                "Ignoring UPDATE_EXISTING candidate from %s/%s for %s",
+                source.channel_id,
+                source.message_id,
+                raw.symbol,
+            )
+            continue
+
         side = _side_from_transport(raw.side) or _side_from_transport(raw.direction)
 
         entry = _entry_from_transport(raw)
@@ -872,6 +926,8 @@ def _signals_from_extraction(
                 take_profit=raw.take_profit,
                 summary=raw.summary,
                 confidence=raw.confidence,
+                relation=relation,
+                relation_evidence=(raw.relation_evidence),
             )
 
         except ValidationError as exc:
@@ -1210,6 +1266,7 @@ class OpenRouterIntentExtractor:
         *,
         global_guidance: str | None = None,
         channel_guidance: str | None = None,
+        position_context: (SignalPositionContext | None) = None,
         debug_dir: Path | None = None,
         bypass_evaluation_cache: bool = False,
     ) -> SignalExtraction:
@@ -1220,6 +1277,7 @@ class OpenRouterIntentExtractor:
             model=self._model,
             global_guidance=(global_guidance),
             channel_guidance=(channel_guidance),
+            position_context=position_context,
         )
 
         if debug_dir is None and not bypass_evaluation_cache:
@@ -1262,6 +1320,7 @@ class OpenRouterIntentExtractor:
                         post,
                         global_guidance=global_guidance,
                         channel_guidance=channel_guidance,
+                        position_context=(position_context),
                     ),
                 },
             ],
