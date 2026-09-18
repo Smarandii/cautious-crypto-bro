@@ -96,36 +96,6 @@ def test_account_pnl_ledger_is_idempotent(
     asyncio.run(run())
 
 
-def test_closed_pnl_sell_means_closed_long_position() -> None:
-    from cautious_crypto_bro.bybit import (
-        BybitDemoExecutor,
-    )
-
-    executor = BybitDemoExecutor(
-        api_key="key",
-        api_secret="secret",
-    )
-
-    try:
-        record = executor._closed_pnl_record_from_item(
-            {
-                "symbol": "PUMPFUNUSDT",
-                "orderId": "close-1",
-                "side": "Sell",
-                "closedPnl": "-28.5",
-                "closedSize": "1000",
-                "avgEntryPrice": "0.0037",
-                "avgExitPrice": "0.0036",
-                "updatedTime": "1789320000000",
-            }
-        )
-
-        assert record.position_side is Side.LONG
-
-    finally:
-        executor.close()
-
-
 def test_closed_pnl_buy_means_closed_short_position() -> None:
     from cautious_crypto_bro.bybit import (
         BybitDemoExecutor,

@@ -2,10 +2,6 @@ from __future__ import annotations
 
 import html
 import logging
-from datetime import (
-    UTC,
-    datetime,
-)
 from decimal import Decimal
 from uuid import UUID
 
@@ -32,10 +28,10 @@ from .bybit import (
     AccountOrder,
     AccountPosition,
     AccountStateSummary,
-    BybitDemoExecutor,
     SymbolExposure,
 )
 from .domain import (
+    ApprovalMode,
     EntryType,
     ExecutionOrderType,
     ExecutionPlan,
@@ -45,6 +41,11 @@ from .domain import (
     Side,
     TakeProfitSource,
     TradingIntent,
+)
+from .execution_coordinator import (
+    ExecutionCoordinator,
+    IntentExecutionOutcome,
+    PositionActionExecutionOutcome,
 )
 from .storage import (
     AccountPnlSummary,
@@ -84,9 +85,8 @@ class ApprovalBot:
         token: str,
         approval_chat_id: int,
         approver_user_id: int,
-        max_age_seconds: int,
         store: IntentStore,
-        executor: BybitDemoExecutor,
+        coordinator: ExecutionCoordinator,
     ) -> None:
         self._bot = Bot(token=token)
         self._dispatcher = Dispatcher()
@@ -96,9 +96,8 @@ class ApprovalBot:
 
         self._approval_chat_id = approval_chat_id
         self._approver_user_id = approver_user_id
-        self._max_age_seconds = max_age_seconds
         self._store = store
-        self._executor = executor
+        self._coordinator = coordinator
 
         self._router.callback_query(IntentAction.filter(F.action == "execute"))(
             self._execute
@@ -282,89 +281,42 @@ class ApprovalBot:
 
         intent_id = UUID(callback_data.intent_id)
 
-        intent = await self._store.get_intent(intent_id)
-
-        if intent is None:
-            await callback.answer(
-                "Intent no longer exists",
-                show_alert=True,
-            )
-            return
-
-        plan = await self._store.get_execution_plan(intent_id)
-
-        if plan is None:
-            await callback.answer(
-                "Execution plan no longer exists",
-                show_alert=True,
-            )
-            return
-
-        if intent.status is not IntentStatus.PENDING:
-            await callback.answer(
-                f"Already {intent.status.value.lower()}",
-                show_alert=True,
-            )
-            return
-
-        age = (datetime.now(UTC) - intent.created_at).total_seconds()
-
-        if age > self._max_age_seconds:
-            await callback.answer(
-                f"Intent is stale ({int(age)}s). Not executed.",
-                show_alert=True,
-            )
-            return
-
-        if not await self._store.claim_for_execution(
-            intent_id,
-            callback.from_user.id,
-        ):
-            await callback.answer(
-                "Intent was already handled",
-                show_alert=True,
-            )
-            return
-
         await callback.answer("Executing on Bybit Demo…")
 
-        try:
-            order_ids = await self._executor.execute(plan)
+        outcome = await self._coordinator.execute_intent(
+            intent_id,
+            approval_mode=(ApprovalMode.MANUAL),
+            user_id=(callback.from_user.id),
+        )
 
-        except Exception as exc:
-            logger.exception(
-                "Execution failed for %s",
-                intent_id,
+        if outcome.intent is None or outcome.plan is None:
+            await callback.answer(
+                outcome.message,
+                show_alert=True,
             )
-
-            await self._store.mark_failed(
-                intent_id,
-                str(exc),
-            )
-
-            await self._edit_card(
-                callback,
-                intent,
-                plan,
-                (f"\n\n<b>FAILED</b>\n<code>{html.escape(str(exc))}</code>"),
-            )
-
             return
 
-        await self._store.mark_executed(
-            intent_id,
-            order_ids,
-        )
+        if outcome.status is IntentStatus.EXECUTED:
+            ids_text = "\n".join(
+                (f"<code>{html.escape(order_id)}</code>")
+                for order_id in outcome.order_ids
+            )
 
-        ids_text = "\n".join(
-            (f"<code>{html.escape(order_id)}</code>") for order_id in order_ids
-        )
+            suffix = f"\n\n<b>EXECUTED ON BYBIT DEMO</b>\n{ids_text}"
+        else:
+            suffix = (
+                "\n\n"
+                f"<b>{html.escape(outcome.status.value)}</b>"
+                "\n<code>"
+                f"{html.escape(outcome.message)}"
+                "</code>"
+            )
 
         await self._edit_card(
             callback,
-            intent,
-            plan,
-            (f"\n\n<b>EXECUTED ON BYBIT DEMO</b>\n{ids_text}"),
+            outcome.intent,
+            outcome.plan,
+            suffix,
         )
 
     async def _execute_position_action(
@@ -381,99 +333,26 @@ class ApprovalBot:
 
         action_id = UUID(callback_data.action_id)
 
-        action = await self._store.get_position_action(action_id)
-
-        if action is None:
-            await callback.answer(
-                "Position action no longer exists",
-                show_alert=True,
-            )
-            return
-
-        if action.status is not IntentStatus.PENDING:
-            await callback.answer(
-                f"Already {action.status.value.lower()}",
-                show_alert=True,
-            )
-            return
-
-        age = (datetime.now(UTC) - action.created_at).total_seconds()
-
-        if age > self._max_age_seconds:
-            await callback.answer(
-                f"Position action is stale ({int(age)}s). Not executed.",
-                show_alert=True,
-            )
-            return
-
-        claimed = await self._store.claim_position_action_for_execution(
-            action_id,
-            callback.from_user.id,
-        )
-
-        if not claimed:
-            await callback.answer(
-                "Position action was already handled",
-                show_alert=True,
-            )
-            return
-
         await callback.answer("Executing on Bybit Demo…")
 
-        try:
-            result = await self._executor.execute_position_action(action)
+        outcome = await self._coordinator.execute_position_action(
+            action_id,
+            approval_mode=(ApprovalMode.MANUAL),
+            user_id=(callback.from_user.id),
+        )
 
-        except Exception as exc:
-            logger.exception(
-                "Position action execution failed for %s",
-                action_id,
-            )
-
-            await self._store.mark_position_action_failed(
-                action_id,
-                str(exc),
-            )
-
-            await self._edit_position_action_card(
-                callback,
-                action,
-                (f"\n\n<b>FAILED</b>\n<code>{html.escape(str(exc))}</code>"),
+        if outcome.action is None:
+            await callback.answer(
+                outcome.message,
+                show_alert=True,
             )
             return
 
-        await self._store.mark_position_action_executed(
-            action_id,
-            result.order_id,
-        )
-
-        suffix = (
-            "\n\n"
-            "<b>EXECUTED ON BYBIT DEMO</b>\n"
-            "Order: "
-            f"<code>{html.escape(result.order_id)}</code>\n"
-            "Position before: "
-            f"<b>{result.position_side.value} "
-            f"{self._fmt_decimal(result.position_size_before)}</b>"
-        )
-
-        if result.submitted_quantity is None:
-            suffix += "\nSubmitted: <b>full reduce-only close</b>"
-        else:
-            suffix += (
-                "\nSubmitted reduction: "
-                f"<b>"
-                f"{self._fmt_decimal(result.submitted_quantity)}"
-                f"</b>"
-            )
-
-        if result.cancelled_entry_orders:
-            suffix += (
-                f"\nCancelled CCB entry orders: <b>{result.cancelled_entry_orders}</b>"
-            )
+        suffix = self._render_action_outcome(outcome)
 
         await self._edit_position_action_card(
             callback,
-            action,
+            outcome.action,
             suffix,
         )
 
@@ -570,6 +449,157 @@ class ApprovalBot:
             plan,
             "\n\n<b>SKIPPED</b>",
         )
+
+    async def send_auto_intent_outcome(
+        self,
+        outcome: IntentExecutionOutcome,
+    ) -> None:
+        if outcome.intent is None or outcome.plan is None:
+            await self._bot.send_message(
+                chat_id=self._approval_chat_id,
+                text=(
+                    "<b>AUTO EXECUTION ERROR</b>\n"
+                    f"<code>"
+                    f"{html.escape(outcome.message)}"
+                    f"</code>"
+                ),
+                parse_mode="HTML",
+            )
+            return
+
+        if outcome.status is IntentStatus.EXECUTED:
+            ids_text = "\n".join(
+                (f"<code>{html.escape(order_id)}</code>")
+                for order_id in outcome.order_ids
+            )
+
+            suffix = f"\n\n<b>AUTO-EXECUTED ON BYBIT DEMO</b>\n{ids_text}"
+        else:
+            suffix = (
+                "\n\n"
+                "<b>AUTO EXECUTION "
+                f"{html.escape(outcome.status.value)}"
+                "</b>\n<code>"
+                f"{html.escape(outcome.message)}"
+                "</code>"
+            )
+
+        await self._bot.send_message(
+            chat_id=self._approval_chat_id,
+            text=(
+                self._render(
+                    outcome.intent,
+                    outcome.plan,
+                )
+                + suffix
+            ),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def send_auto_action_outcome(
+        self,
+        outcome: PositionActionExecutionOutcome,
+    ) -> None:
+        if outcome.action is None:
+            await self._bot.send_message(
+                chat_id=self._approval_chat_id,
+                text=(
+                    "<b>AUTO EXECUTION ERROR</b>\n"
+                    f"<code>"
+                    f"{html.escape(outcome.message)}"
+                    f"</code>"
+                ),
+                parse_mode="HTML",
+            )
+            return
+
+        await self._bot.send_message(
+            chat_id=self._approval_chat_id,
+            text=(
+                self._render_position_action(outcome.action)
+                + self._render_action_outcome(
+                    outcome,
+                    auto=True,
+                )
+            ),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def send_recovery_warning(
+        self,
+        *,
+        uncertain_intents: int,
+        uncertain_actions: int,
+    ) -> None:
+        if uncertain_intents == 0 and uncertain_actions == 0:
+            return
+
+        await self._bot.send_message(
+            chat_id=self._approval_chat_id,
+            text=(
+                "⚠️ <b>AUTO EXECUTION "
+                "RECOVERY WARNING</b>\n\n"
+                "Previous process stopped while "
+                "execution was in progress. "
+                "These records were quarantined "
+                "instead of retried automatically."
+                "\nOPEN intents: "
+                f"<b>{uncertain_intents}</b>"
+                "\nPosition actions: "
+                f"<b>{uncertain_actions}</b>"
+            ),
+            parse_mode="HTML",
+        )
+
+    @staticmethod
+    def _render_action_outcome(
+        outcome: PositionActionExecutionOutcome,
+        *,
+        auto: bool = False,
+    ) -> str:
+        prefix = "AUTO-" if auto else ""
+
+        if outcome.status is not IntentStatus.EXECUTED or outcome.result is None:
+            return (
+                "\n\n"
+                f"<b>{prefix}"
+                f"{html.escape(outcome.status.value)}"
+                "</b>\n<code>"
+                f"{html.escape(outcome.message)}"
+                "</code>"
+            )
+
+        result = outcome.result
+
+        suffix = (
+            "\n\n"
+            f"<b>{prefix}EXECUTED ON BYBIT DEMO</b>"
+            "\nOrder: "
+            f"<code>"
+            f"{html.escape(result.order_id)}"
+            "</code>\nPosition before: "
+            f"<b>{result.position_side.value} "
+            f"{ApprovalBot._fmt_decimal(result.position_size_before)}"
+            "</b>"
+        )
+
+        if result.submitted_quantity is None:
+            suffix += "\nSubmitted: <b>full reduce-only close</b>"
+        else:
+            suffix += (
+                "\nSubmitted reduction: <b>"
+                f"{ApprovalBot._fmt_decimal(result.submitted_quantity)}"
+                "</b>"
+            )
+
+        if result.cancelled_entry_orders:
+            suffix += (
+                f"\nCancelled CCB entry orders: <b>{result.cancelled_entry_orders}</b>"
+            )
+
+        return suffix
 
     async def _edit_card(
         self,
