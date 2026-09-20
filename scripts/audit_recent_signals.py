@@ -30,7 +30,6 @@ from cautious_crypto_bro.openrouter import (
     _signals_from_extraction,
 )
 from cautious_crypto_bro.runtime_store import (
-    ReadOnlyProviderCooldownStore,
     RedisRuntimeStore,
 )
 from cautious_crypto_bro.storage import (
@@ -516,7 +515,8 @@ async def main() -> int:
         base_url=(settings.openrouter_base_url),
         inference_timeout_seconds=(settings.openrouter_inference_timeout_seconds),
         max_attempts=(settings.openrouter_inference_max_attempts),
-        provider_cooldown_store=(ReadOnlyProviderCooldownStore(runtime_store)),
+        provider_cooldown_store=runtime_store,
+        persist_provider_cooldowns=False,
         provider_cooldown_seconds=(settings.openrouter_provider_cooldown_hours * 3600),
         evaluation_cache=(runtime_store),
         evaluation_cache_seconds=(settings.openrouter_evaluation_cache_hours * 3600),
