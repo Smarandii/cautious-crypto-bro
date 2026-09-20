@@ -27,38 +27,27 @@ def _strict_response_schema(
 ) -> dict[str, object]:
     """Normalize Pydantic JSON Schema for strict Responses output."""
 
-    def normalize(
-        value: object,
-    ) -> object:
+    def normalize(value: object) -> object:
         if isinstance(value, list):
             return [normalize(item) for item in value]
 
         if not isinstance(value, dict):
             return value
 
-        result: dict[str, object] = {}
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError("JSON Schema keys must be strings")
 
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError("JSON Schema keys must be strings")
-
-            if key == "default":
-                continue
-
-            result[key] = normalize(item)
+        result: dict[str, object] = {
+            str(key): normalize(item) for key, item in value.items() if key != "default"
+        }
 
         properties = result.get("properties")
 
         if isinstance(properties, dict):
-            required: list[str] = []
+            if any(not isinstance(key, str) for key in properties):
+                raise TypeError("JSON Schema property names must be strings")
 
-            for key in properties:
-                if not isinstance(key, str):
-                    raise TypeError("JSON Schema property names must be strings")
-
-                required.append(key)
-
-            result["required"] = required
+            result["required"] = [str(key) for key in properties]
             result["additionalProperties"] = False
 
         return result
@@ -68,15 +57,7 @@ def _strict_response_schema(
     if not isinstance(normalized, dict):
         raise TypeError("Response schema must normalize to an object")
 
-    result: dict[str, object] = {}
-
-    for key, value in normalized.items():
-        if not isinstance(key, str):
-            raise TypeError("JSON Schema keys must be strings")
-
-        result[key] = value
-
-    return result
+    return {str(key): value for key, value in normalized.items()}
 
 
 def _response_text(

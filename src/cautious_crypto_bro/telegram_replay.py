@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import tempfile
-from contextlib import (
-    contextmanager,
-)
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -16,19 +14,14 @@ from telethon.tl.custom.message import (
 )
 
 from .domain import IncomingPost
-from .telegram_source import (
-    telegram_messages_to_post,
-)
+from .telegram_source import telegram_messages_to_post
 
 
 class TelegramReplayError(RuntimeError):
     pass
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class TelegramPostReference:
     entity: str | int
     message_id: int
@@ -249,18 +242,13 @@ def cloned_telegram_session(
 
     with tempfile.TemporaryDirectory(prefix="ccb-telegram-replay-") as directory:
         target_base = Path(directory) / "telegram_replay"
-
         target_database = Path(f"{target_base}.session")
 
-        source = sqlite3.connect(source_path)
-
-        target = sqlite3.connect(target_database)
-
-        try:
+        with (
+            closing(sqlite3.connect(source_path)) as source,
+            closing(sqlite3.connect(target_database)) as target,
+        ):
             source.backup(target)
-        finally:
-            target.close()
-            source.close()
 
         yield str(target_base)
 
@@ -270,7 +258,4 @@ def _session_database_path(
 ) -> Path:
     path = Path(session_name)
 
-    if path.name.endswith(".session"):
-        return path
-
-    return Path(f"{session_name}.session")
+    return path if path.name.endswith(".session") else Path(f"{session_name}.session")

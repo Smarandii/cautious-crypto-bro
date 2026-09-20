@@ -14,10 +14,7 @@ class Side(StrEnum):
     SHORT = "SHORT"
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class ClosedPnlRecord:
     record_id: str
     order_id: str

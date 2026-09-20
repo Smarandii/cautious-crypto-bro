@@ -7,23 +7,13 @@ from .approval_bot import ApprovalBot
 from .bybit import BybitDemoExecutor
 from .config import get_settings
 from .execution import ExecutionPlanner
-from .execution_coordinator import (
-    ExecutionCoordinator,
-)
-from .llm_factory import (
-    build_intent_extractor,
-)
-from .runtime_store import (
-    RedisRuntimeStore,
-)
+from .execution_coordinator import ExecutionCoordinator
+from .llm_factory import build_intent_extractor
+from .runtime_store import RedisRuntimeStore
 from .service import SignalService
-from .signal_context import (
-    SignalContextProvider,
-)
+from .signal_context import SignalContextProvider
 from .storage import IntentStore
-from .telegram_source import (
-    TelegramSource,
-)
+from .telegram_source import TelegramSource
 
 
 async def async_main() -> None:

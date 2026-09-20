@@ -132,6 +132,20 @@ class ApprovalBot:
         await callback.answer("Not authorized", show_alert=True)
         return False
 
+    async def _send_html(
+        self,
+        text: str,
+        *,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> None:
+        await self._bot.send_message(
+            chat_id=self._approval_chat_id,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=reply_markup,
+        )
+
     async def _send_account_snapshot(
         self,
         state: AccountStateSummary | None,
@@ -141,16 +155,13 @@ class ApprovalBot:
         pnl_error: str | None,
     ) -> None:
         try:
-            await self._bot.send_message(
-                chat_id=self._approval_chat_id,
-                text=self._render_account_state(
+            await self._send_html(
+                self._render_account_state(
                     state,
                     error=state_error,
                     pnl=pnl,
                     pnl_error=pnl_error,
-                ),
-                parse_mode="HTML",
-                disable_web_page_preview=True,
+                )
             )
         except Exception:
             # Informational only; the actionable card must still be delivered.
@@ -204,16 +215,13 @@ class ApprovalBot:
             ]
         )
 
-        await self._bot.send_message(
-            chat_id=self._approval_chat_id,
-            text=self._render(
+        await self._send_html(
+            self._render(
                 intent,
                 plan,
                 exposure=exposure,
                 exposure_error=exposure_error,
             ),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
             reply_markup=keyboard,
         )
 
@@ -267,15 +275,12 @@ class ApprovalBot:
             ]
         )
 
-        await self._bot.send_message(
-            chat_id=self._approval_chat_id,
-            text=self._render_position_action(
+        await self._send_html(
+            self._render_position_action(
                 action,
                 account_state=account_state,
                 account_state_error=(account_state_error),
             ),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
             reply_markup=keyboard,
         )
 
@@ -474,17 +479,12 @@ class ApprovalBot:
                 "</code>"
             )
 
-        await self._bot.send_message(
-            chat_id=self._approval_chat_id,
-            text=(
-                self._render(
-                    outcome.intent,
-                    outcome.plan,
-                )
-                + suffix
-            ),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
+        await self._send_html(
+            self._render(
+                outcome.intent,
+                outcome.plan,
+            )
+            + suffix
         )
 
     async def send_auto_action_outcome(
@@ -504,17 +504,12 @@ class ApprovalBot:
             )
             return
 
-        await self._bot.send_message(
-            chat_id=self._approval_chat_id,
-            text=(
-                self._render_position_action(outcome.action)
-                + self._render_action_outcome(
-                    outcome,
-                    auto=True,
-                )
-            ),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
+        await self._send_html(
+            self._render_position_action(outcome.action)
+            + self._render_action_outcome(
+                outcome,
+                auto=True,
+            )
         )
 
     async def send_recovery_warning(
@@ -607,19 +602,23 @@ class ApprovalBot:
             )
 
     @staticmethod
+    def _source_line(
+        source_url: str | None,
+    ) -> str:
+        return (
+            f'<a href="{html.escape(source_url)}">Open source message</a>'
+            if source_url
+            else "Source link unavailable"
+        )
+
+    @staticmethod
     def _render_position_action(
         action: PositionActionIntent,
         *,
         account_state: AccountStateSummary | None = None,
         account_state_error: str | None = None,
     ) -> str:
-        source_url = action.source.telegram_url
-
-        source_line = (
-            (f'<a href="{html.escape(source_url)}">Open source message</a>')
-            if source_url
-            else "Source link unavailable"
-        )
+        source_line = ApprovalBot._source_line(action.source.telegram_url)
 
         if action.action is PositionActionType.CLOSE:
             instruction = "Close 100%"
@@ -698,13 +697,7 @@ class ApprovalBot:
         exposure: SymbolExposure | None = None,
         exposure_error: str | None = None,
     ) -> str:
-        source_url = intent.source.telegram_url
-
-        source_line = (
-            (f'<a href="{html.escape(source_url)}">Open source message</a>')
-            if source_url
-            else "Source link unavailable"
-        )
+        source_line = ApprovalBot._source_line(intent.source.telegram_url)
 
         if intent.entry.type is EntryType.MARKET:
             signal_entry = "Market"
@@ -1204,7 +1197,4 @@ class ApprovalBot:
     def _fmt_decimal(
         value: Decimal,
     ) -> str:
-        return format(
-            value.normalize(),
-            "f",
-        )
+        return format(value.normalize(), "f")

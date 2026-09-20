@@ -42,20 +42,14 @@ class TradeExecutionError(RuntimeError):
     pass
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class PositionExposure:
     side: Side
     size: Decimal
     avg_price: Decimal
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class PositionActionExecutionResult:
     order_id: str
     position_side: Side
@@ -64,10 +58,7 @@ class PositionActionExecutionResult:
     cancelled_entry_orders: int
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class OpenOrderExposure:
     side: Side
     remaining_quantity: Decimal
@@ -76,10 +67,7 @@ class OpenOrderExposure:
     price: Decimal | None
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class SymbolExposure:
     symbol: str
     positions: tuple[
@@ -92,10 +80,7 @@ class SymbolExposure:
     ] = ()
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class AccountPosition:
     symbol: str
     side: Side
@@ -108,10 +93,7 @@ class AccountPosition:
     stop_loss: Decimal | None
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class AccountOrder:
     symbol: str
     side: Side
@@ -166,10 +148,7 @@ class AccountOrder:
         }
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class AccountStateSummary:
     as_of: datetime
     positions: tuple[
@@ -823,12 +802,10 @@ class BybitDemoExecutor:
 
         return position
 
-    def _partial_reduce_quantity(
+    def _instrument_info(
         self,
         symbol: str,
-        position_size: Decimal,
-        close_pct: Decimal,
-    ) -> Decimal:
+    ) -> dict:
         response = self._public_get(
             "/v5/market/instruments-info",
             {
@@ -837,12 +814,23 @@ class BybitDemoExecutor:
             },
         )
 
-        items = response.get("result", {}).get("list", [])
+        items = response.get("result", {}).get(
+            "list",
+            [],
+        )
 
         if not items:
             raise TradeExecutionError(f"No Bybit instrument found for {symbol}")
 
-        lot = items[0]["lotSizeFilter"]
+        return items[0]
+
+    def _partial_reduce_quantity(
+        self,
+        symbol: str,
+        position_size: Decimal,
+        close_pct: Decimal,
+    ) -> Decimal:
+        lot = self._instrument_info(symbol)["lotSizeFilter"]
 
         qty_step = Decimal(str(lot["qtyStep"]))
         min_qty = Decimal(str(lot["minOrderQty"]))
@@ -925,21 +913,8 @@ class BybitDemoExecutor:
         symbol: str,
     ) -> InstrumentContext:
         market_price = self._last_price(symbol)
+        instrument = self._instrument_info(symbol)
 
-        response = self._public_get(
-            "/v5/market/instruments-info",
-            {
-                "category": "linear",
-                "symbol": symbol,
-            },
-        )
-
-        items = response.get("result", {}).get("list", [])
-
-        if not items:
-            raise TradeExecutionError(f"No Bybit instrument found for {symbol}")
-
-        instrument = items[0]
         lot = instrument["lotSizeFilter"]
         price_filter = instrument["priceFilter"]
 

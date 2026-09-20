@@ -28,10 +28,7 @@ class AutoExecutionSafetyError(RuntimeError):
     pass
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class IntentExecutionOutcome:
     status: IntentStatus
     message: str
@@ -40,10 +37,7 @@ class IntentExecutionOutcome:
     order_ids: tuple[str, ...] = ()
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class PositionActionExecutionOutcome:
     status: IntentStatus
     message: str

@@ -24,15 +24,9 @@ from .domain import (
     TradingIntent,
 )
 from .execution import ExecutionPlanner
-from .execution_coordinator import (
-    ExecutionCoordinator,
-)
-from .openrouter import (
-    IntentExtractor,
-)
-from .signal_context import (
-    SignalContextProvider,
-)
+from .execution_coordinator import ExecutionCoordinator
+from .openrouter import IntentExtractor
+from .signal_context import SignalContextProvider
 from .storage import IntentStore
 
 logger = logging.getLogger(__name__)
@@ -98,12 +92,20 @@ class SignalService:
 
         return await self._store.get_account_pnl_summary()
 
+    @staticmethod
+    def _manual(
+        message: str,
+        *args: object,
+    ) -> ApprovalMode:
+        logger.warning(message, *args)
+        return ApprovalMode.MANUAL
+
     def _open_approval_mode(
         self,
         intent: TradingIntent,
         *,
         position_context: SignalPositionContext,
-        account_state: (AccountStateSummary | None),
+        account_state: AccountStateSummary | None,
         duplicate_in_batch: bool,
     ) -> ApprovalMode:
         if self._auto_approval_mode is AutoApprovalMode.DISABLED:
@@ -113,17 +115,16 @@ class SignalService:
             OpenRelation.NEW,
             OpenRelation.ADD_OR_REENTRY,
         }:
-            logger.warning(
+            return self._manual(
                 "OPEN %s from %s/%s remains MANUAL because relation is %s",
                 intent.symbol,
                 intent.source.channel_id,
                 intent.source.message_id,
                 intent.relation.value,
             )
-            return ApprovalMode.MANUAL
 
         if duplicate_in_batch:
-            logger.warning(
+            return self._manual(
                 "OPEN %s from %s/%s remains "
                 "MANUAL because the same symbol/"
                 "side appears multiple times in "
@@ -132,10 +133,9 @@ class SignalService:
                 intent.source.channel_id,
                 intent.source.message_id,
             )
-            return ApprovalMode.MANUAL
 
         if account_state is None or not position_context.account_state_available:
-            logger.warning(
+            return self._manual(
                 "OPEN %s from %s/%s remains "
                 "MANUAL because trusted live "
                 "account state is unavailable",
@@ -143,13 +143,12 @@ class SignalService:
                 intent.source.channel_id,
                 intent.source.message_id,
             )
-            return ApprovalMode.MANUAL
 
         if intent.relation is OpenRelation.NEW and position_context.has_existing_copy(
             intent.symbol,
             intent.side,
         ):
-            logger.warning(
+            return self._manual(
                 "OPEN %s from %s/%s remains "
                 "MANUAL: model classified NEW "
                 "but trusted source history "
@@ -159,7 +158,6 @@ class SignalService:
                 intent.source.channel_id,
                 intent.source.message_id,
             )
-            return ApprovalMode.MANUAL
 
         safety_reason = self._coordinator.auto_open_safety_reason(
             intent,
@@ -167,14 +165,13 @@ class SignalService:
         )
 
         if safety_reason is not None:
-            logger.warning(
+            return self._manual(
                 "OPEN %s from %s/%s remains MANUAL: %s",
                 intent.symbol,
                 intent.source.channel_id,
                 intent.source.message_id,
                 safety_reason,
             )
-            return ApprovalMode.MANUAL
 
         return ApprovalMode.AUTO
 
@@ -182,20 +179,19 @@ class SignalService:
         self,
         action: PositionActionIntent,
         *,
-        account_state: (AccountStateSummary | None),
+        account_state: AccountStateSummary | None,
     ) -> ApprovalMode:
         if self._auto_approval_mode is not AutoApprovalMode.ALL:
             return ApprovalMode.MANUAL
 
         if account_state is None:
-            logger.warning(
+            return self._manual(
                 "Position action %s %s remains "
                 "MANUAL because live account "
                 "state is unavailable",
                 action.action.value,
                 action.symbol,
             )
-            return ApprovalMode.MANUAL
 
         positions = tuple(
             position
@@ -204,7 +200,7 @@ class SignalService:
         )
 
         if len(positions) != 1:
-            logger.warning(
+            return self._manual(
                 "Position action %s %s remains "
                 "MANUAL because live position "
                 "count is %d",
@@ -212,7 +208,6 @@ class SignalService:
                 action.symbol,
                 len(positions),
             )
-            return ApprovalMode.MANUAL
 
         position = positions[0]
 
@@ -220,14 +215,13 @@ class SignalService:
             action.expected_side is not None
             and action.expected_side is not position.side
         ):
-            logger.warning(
+            return self._manual(
                 "Position action %s %s remains "
                 "MANUAL because expected side "
                 "does not match live position",
                 action.action.value,
                 action.symbol,
             )
-            return ApprovalMode.MANUAL
 
         return ApprovalMode.AUTO
 

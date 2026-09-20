@@ -84,14 +84,10 @@ class FallbackLLMProvider:
         self,
         request: LLMRequest,
     ) -> LLMResponse:
-        last_failure: LLMProviderFailure | None = None
-
         for index, item in enumerate(self._providers):
             try:
                 return await item.provider.complete(request)
             except LLMProviderFailure as exc:
-                last_failure = exc
-
                 if index + 1 >= len(self._providers):
                     raise
 
@@ -104,9 +100,6 @@ class FallbackLLMProvider:
                     exc,
                     next_provider.name,
                 )
-
-        if last_failure is not None:
-            raise last_failure
 
         raise RuntimeError("LLM provider chain produced no response")
 

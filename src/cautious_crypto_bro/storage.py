@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import aiosqlite
@@ -167,19 +168,13 @@ VALUES (1, '20', '0.5', '25', '1', '35', '2', '40');
 """
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class AccountPnlSyncState:
     history_start_at: datetime
     last_synced_at: datetime
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class AccountPnlSummary:
     realized_pnl: Decimal
     record_count: int
@@ -195,6 +190,22 @@ class IntentStore:
         database_path: Path,
     ) -> None:
         self._database_path = database_path
+
+    async def _fetch(
+        self,
+        query: str,
+        parameters: Sequence[object] = (),
+        *,
+        many: bool = False,
+        row_factory: bool = False,
+    ) -> Any:
+        async with aiosqlite.connect(self._database_path) as db:
+            if row_factory:
+                db.row_factory = aiosqlite.Row
+
+            cursor = await db.execute(query, parameters)
+
+            return await (cursor.fetchall() if many else cursor.fetchone())
 
     async def initialize(self) -> None:
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -319,36 +330,55 @@ class IntentStore:
 
             return claim_token
 
+    @staticmethod
+    async def _finish_source(
+        db: aiosqlite.Connection,
+        source: SourceMessage,
+        claim_token: str,
+        *,
+        status: str,
+        error: str | None,
+    ) -> bool:
+        cursor = await db.execute(
+            """
+            UPDATE source_messages
+            SET
+                status = ?,
+                last_error = ?,
+                claim_token = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE
+                channel_id = ?
+                AND message_id = ?
+                AND status = 'PROCESSING'
+                AND claim_token = ?
+            """,
+            (
+                status,
+                error,
+                source.channel_id,
+                source.message_id,
+                claim_token,
+            ),
+        )
+
+        return cursor.rowcount == 1
+
     async def mark_source_completed(
         self,
         source: SourceMessage,
         claim_token: str,
     ) -> bool:
         async with aiosqlite.connect(self._database_path) as db:
-            cursor = await db.execute(
-                """
-                UPDATE source_messages
-                SET
-                    status = 'COMPLETED',
-                    last_error = NULL,
-                    claim_token = NULL,
-                    updated_at =
-                        CURRENT_TIMESTAMP
-                WHERE
-                    channel_id = ?
-                    AND message_id = ?
-                    AND status = 'PROCESSING'
-                    AND claim_token = ?
-                """,
-                (
-                    source.channel_id,
-                    source.message_id,
-                    claim_token,
-                ),
+            finished = await self._finish_source(
+                db,
+                source,
+                claim_token,
+                status="COMPLETED",
+                error=None,
             )
-
             await db.commit()
-            return cursor.rowcount == 1
+            return finished
 
     async def mark_source_failed(
         self,
@@ -359,31 +389,15 @@ class IntentStore:
         error = (error.strip() or "unknown processing failure")[:2000]
 
         async with aiosqlite.connect(self._database_path) as db:
-            cursor = await db.execute(
-                """
-                UPDATE source_messages
-                SET
-                    status = 'FAILED',
-                    last_error = ?,
-                    claim_token = NULL,
-                    updated_at =
-                        CURRENT_TIMESTAMP
-                WHERE
-                    channel_id = ?
-                    AND message_id = ?
-                    AND status = 'PROCESSING'
-                    AND claim_token = ?
-                """,
-                (
-                    error,
-                    source.channel_id,
-                    source.message_id,
-                    claim_token,
-                ),
+            finished = await self._finish_source(
+                db,
+                source,
+                claim_token,
+                status="FAILED",
+                error=error,
             )
-
             await db.commit()
-            return cursor.rowcount == 1
+            return finished
 
     async def _insert_intent_with_plan(
         self,
@@ -546,28 +560,13 @@ class IntentStore:
                         action,
                     )
 
-                cursor = await db.execute(
-                    """
-                    UPDATE source_messages
-                    SET
-                        status = 'COMPLETED',
-                        last_error = NULL,
-                        claim_token = NULL,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE
-                        channel_id = ?
-                        AND message_id = ?
-                        AND status = 'PROCESSING'
-                        AND claim_token = ?
-                    """,
-                    (
-                        source.channel_id,
-                        source.message_id,
-                        claim_token,
-                    ),
-                )
-
-                if cursor.rowcount != 1:
+                if not await self._finish_source(
+                    db,
+                    source,
+                    claim_token,
+                    status="COMPLETED",
+                    error=None,
+                ):
                     await db.rollback()
                     return False
 
@@ -582,22 +581,15 @@ class IntentStore:
         self,
         intent_id: UUID,
     ) -> TradingIntent | None:
-        async with aiosqlite.connect(self._database_path) as db:
-            db.row_factory = aiosqlite.Row
-
-            cursor = await db.execute(
-                """
-                SELECT
-                    payload_json,
-                    status,
-                    approval_mode
-                FROM intents
-                WHERE intent_id = ?
-                """,
-                (str(intent_id),),
-            )
-
-            row = await cursor.fetchone()
+        row = await self._fetch(
+            """
+            SELECT payload_json, status, approval_mode
+            FROM intents
+            WHERE intent_id = ?
+            """,
+            (str(intent_id),),
+            row_factory=True,
+        )
 
         if row is None:
             return None
@@ -615,17 +607,14 @@ class IntentStore:
         self,
         intent_id: UUID,
     ) -> ExecutionPlan | None:
-        async with aiosqlite.connect(self._database_path) as db:
-            cursor = await db.execute(
-                """
-                SELECT payload_json
-                FROM execution_plans
-                WHERE intent_id = ?
-                """,
-                (str(intent_id),),
-            )
-
-            row = await cursor.fetchone()
+        row = await self._fetch(
+            """
+            SELECT payload_json
+            FROM execution_plans
+            WHERE intent_id = ?
+            """,
+            (str(intent_id),),
+        )
 
         if row is None:
             return None
@@ -705,22 +694,21 @@ class IntentStore:
         self,
         action_id: UUID,
     ) -> PositionActionIntent | None:
-        async with aiosqlite.connect(self._database_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                """
-                SELECT payload_json, status, approval_mode
-                FROM position_actions
-                WHERE action_id = ?
-                """,
-                (str(action_id),),
-            )
-            row = await cursor.fetchone()
+        row = await self._fetch(
+            """
+            SELECT payload_json, status, approval_mode
+            FROM position_actions
+            WHERE action_id = ?
+            """,
+            (str(action_id),),
+            row_factory=True,
+        )
 
         if row is None:
             return None
 
         action = PositionActionIntent.model_validate_json(row["payload_json"])
+
         return action.model_copy(
             update={
                 "status": IntentStatus(row["status"]),
@@ -766,29 +754,26 @@ class IntentStore:
         if limit <= 0:
             raise ValueError("limit must be positive")
 
-        async with aiosqlite.connect(self._database_path) as db:
-            db.row_factory = aiosqlite.Row
-
-            cursor = await db.execute(
-                """
-                SELECT payload_json, status
-                FROM intents
-                WHERE
-                    channel_id = ?
-                    AND status IN (?, ?, ?)
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (
-                    channel_id,
-                    IntentStatus.PENDING.value,
-                    IntentStatus.EXECUTING.value,
-                    IntentStatus.EXECUTED.value,
-                    limit,
-                ),
-            )
-
-            rows = await cursor.fetchall()
+        rows = await self._fetch(
+            """
+            SELECT payload_json, status
+            FROM intents
+            WHERE
+                channel_id = ?
+                AND status IN (?, ?, ?)
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (
+                channel_id,
+                IntentStatus.PENDING.value,
+                IntentStatus.EXECUTING.value,
+                IntentStatus.EXECUTED.value,
+                limit,
+            ),
+            many=True,
+            row_factory=True,
+        )
 
         return tuple(
             TradingIntent.model_validate_json(row["payload_json"]).model_copy(
@@ -801,33 +786,27 @@ class IntentStore:
         self,
         *,
         limit: int = 100,
-    ) -> tuple[
-        PositionActionIntent,
-        ...,
-    ]:
+    ) -> tuple[PositionActionIntent, ...]:
         if limit <= 0:
             raise ValueError("limit must be positive")
 
-        async with aiosqlite.connect(self._database_path) as db:
-            db.row_factory = aiosqlite.Row
+        rows = await self._fetch(
+            """
+            SELECT payload_json, status
+            FROM position_actions
+            WHERE status = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (
+                IntentStatus.EXECUTED.value,
+                limit,
+            ),
+            many=True,
+            row_factory=True,
+        )
 
-            cursor = await db.execute(
-                """
-                SELECT payload_json, status
-                FROM position_actions
-                WHERE status = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (
-                    IntentStatus.EXECUTED.value,
-                    limit,
-                ),
-            )
-
-            rows = await cursor.fetchall()
-
-        actions = tuple(
+        actions = (
             PositionActionIntent.model_validate_json(row["payload_json"]).model_copy(
                 update={"status": IntentStatus(row["status"])}
             )
@@ -915,22 +894,23 @@ class IntentStore:
         id_column: str,
         limit: int,
     ) -> tuple[UUID, ...]:
-        async with aiosqlite.connect(self._database_path) as db:
-            cursor = await db.execute(
-                f"""
-                SELECT {id_column}
-                FROM {table}
-                WHERE approval_mode = ? AND status = ?
-                ORDER BY created_at ASC
-                LIMIT ?
-                """,
-                (
-                    ApprovalMode.AUTO.value,
-                    IntentStatus.PENDING.value,
-                    limit,
-                ),
-            )
-            return tuple(UUID(row[0]) for row in await cursor.fetchall())
+        rows = await self._fetch(
+            f"""
+            SELECT {id_column}
+            FROM {table}
+            WHERE approval_mode = ? AND status = ?
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (
+                ApprovalMode.AUTO.value,
+                IntentStatus.PENDING.value,
+                limit,
+            ),
+            many=True,
+        )
+
+        return tuple(UUID(row[0]) for row in rows)
 
     async def get_pending_auto_intent_ids(
         self,
@@ -957,26 +937,21 @@ class IntentStore:
     async def get_guidance(
         self,
         channel_id: int,
-    ) -> tuple[
-        str | None,
-        str | None,
-    ]:
-        async with aiosqlite.connect(self._database_path) as db:
-            cursor = await db.execute(
-                """
-                SELECT scope, content
-                FROM signal_guidance
-                WHERE
-                    scope = 'global'
-                    OR (
-                        scope = 'channel'
-                        AND channel_id = ?
-                    )
-                """,
-                (channel_id,),
-            )
-
-            rows = await cursor.fetchall()
+    ) -> tuple[str | None, str | None]:
+        rows = await self._fetch(
+            """
+            SELECT scope, content
+            FROM signal_guidance
+            WHERE
+                scope = 'global'
+                OR (
+                    scope = 'channel'
+                    AND channel_id = ?
+                )
+            """,
+            (channel_id,),
+            many=True,
+        )
 
         global_guidance = None
         channel_guidance = None
@@ -987,10 +962,7 @@ class IntentStore:
             else:
                 channel_guidance = content
 
-        return (
-            global_guidance,
-            channel_guidance,
-        )
+        return global_guidance, channel_guidance
 
     async def set_guidance(
         self,
@@ -1124,25 +1096,20 @@ class IntentStore:
     async def get_account_pnl_sync_state(
         self,
     ) -> AccountPnlSyncState | None:
-        async with aiosqlite.connect(self._database_path) as db:
-            cursor = await db.execute(
-                """
-                SELECT
-                    history_start_at,
-                    last_synced_at
-                FROM account_pnl_sync
-                WHERE id = 1
-                """
-            )
-
-            row = await cursor.fetchone()
+        row = await self._fetch(
+            """
+            SELECT history_start_at, last_synced_at
+            FROM account_pnl_sync
+            WHERE id = 1
+            """
+        )
 
         if row is None:
             return None
 
         return AccountPnlSyncState(
-            history_start_at=(datetime.fromisoformat(row[0])),
-            last_synced_at=(datetime.fromisoformat(row[1])),
+            history_start_at=datetime.fromisoformat(row[0]),
+            last_synced_at=datetime.fromisoformat(row[1]),
         )
 
     async def mark_account_pnl_synced(
@@ -1209,31 +1176,24 @@ class IntentStore:
         if sync_state is None:
             return None
 
-        async with aiosqlite.connect(self._database_path) as db:
-            cursor = await db.execute(
-                """
-                SELECT
-                    closed_pnl
-                FROM account_closed_pnl
-                """
-            )
-
-            rows = await cursor.fetchall()
+        rows = await self._fetch(
+            """
+            SELECT closed_pnl
+            FROM account_closed_pnl
+            """,
+            many=True,
+        )
 
         values = [Decimal(row[0]) for row in rows]
-
-        realized = sum(
-            values,
-            Decimal("0"),
-        )
+        realized = sum(values, Decimal("0"))
 
         return AccountPnlSummary(
             realized_pnl=realized,
             record_count=len(values),
-            positive_count=sum(1 for value in values if value > 0),
-            negative_count=sum(1 for value in values if value < 0),
-            history_start_at=(sync_state.history_start_at),
-            last_synced_at=(sync_state.last_synced_at),
+            positive_count=sum(value > 0 for value in values),
+            negative_count=sum(value < 0 for value in values),
+            history_start_at=sync_state.history_start_at,
+            last_synced_at=sync_state.last_synced_at,
         )
 
     async def get_execution_policy(

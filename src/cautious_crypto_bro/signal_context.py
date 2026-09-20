@@ -17,10 +17,7 @@ from .domain import (
 from .storage import IntentStore
 
 
-@dataclass(
-    frozen=True,
-    slots=True,
-)
+@dataclass(frozen=True, slots=True)
 class SignalContextSnapshot:
     position_context: SignalPositionContext
     account_state: AccountStateSummary | None
