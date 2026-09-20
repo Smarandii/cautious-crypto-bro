@@ -30,6 +30,7 @@ from .domain import (
 from .llm_provider import (
     LLMImage,
     LLMProvider,
+    LLMProviderFailure,
     LLMRequest,
     LLMResponse,
     LLMResponseValidationError,
@@ -1421,7 +1422,7 @@ class OpenRouterProvider:
 
                 await asyncio.sleep(0.5 * attempt)
 
-        raise RuntimeError(
+        raise LLMProviderFailure(
             "OpenRouter inference failed after "
             f"{self._max_attempts} attempt(s): "
             f"{last_error}"

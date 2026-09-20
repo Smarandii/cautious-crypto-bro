@@ -31,10 +31,18 @@ class Settings(BaseSettings):
     telegram_approver_user_id: int
     telegram_approval_chat_id: int
 
-    llm_provider: Literal[
-        "openrouter",
-        "opencode_go",
-    ] = "openrouter"
+    llm_providers: list[
+        Literal[
+            "openrouter",
+            "opencode_go",
+        ]
+    ] = Field(
+        default_factory=lambda: [
+            "openrouter",
+        ],
+        min_length=1,
+        max_length=2,
+    )
 
     llm_evaluation_cache_hours: int = Field(
         default=6,

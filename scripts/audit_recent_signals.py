@@ -836,7 +836,7 @@ async def main() -> int:
         "cutoff": (cutoff.isoformat()),
         "hours": args.hours,
         "fresh": args.fresh,
-        "provider": settings.llm_provider,
+        "providers": settings.llm_providers,
         "model": extractor.cache_identity,
         "system_prompt": (SYSTEM_PROMPT),
         "global_guidance": (global_guidance_report),

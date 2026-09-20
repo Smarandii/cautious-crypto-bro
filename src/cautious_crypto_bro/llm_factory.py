@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from .config import Settings
-from .llm_provider import LLMProvider
+from .llm_provider import (
+    FallbackLLMProvider,
+    LLMProvider,
+    NamedLLMProvider,
+)
 from .opencode_go import OpenCodeGoProvider
 from .openrouter import (
     IntentExtractor,
@@ -27,13 +31,14 @@ def _required_api_key(
     return key
 
 
-def build_llm_provider(
+def _build_provider(
+    name: str,
     settings: Settings,
     *,
-    provider_cooldown_store: (ProviderCooldownStore | None) = None,
-    persist_provider_cooldowns: bool = True,
+    provider_cooldown_store: (ProviderCooldownStore | None),
+    persist_provider_cooldowns: bool,
 ) -> tuple[LLMProvider, str]:
-    if settings.llm_provider == "openrouter":
+    if name == "openrouter":
         provider = OpenRouterProvider(
             api_key=_required_api_key(
                 settings.openrouter_api_key,
@@ -50,11 +55,11 @@ def build_llm_provider(
             ),
         )
 
-        # Preserve the existing production cache
-        # fingerprint exactly.
+        # Preserve historical OpenRouter-only cache
+        # identity when it is the sole provider.
         return provider, settings.openrouter_model
 
-    if settings.llm_provider == "opencode_go":
+    if name == "opencode_go":
         provider = OpenCodeGoProvider(
             api_key=_required_api_key(
                 settings.opencode_go_api_key,
@@ -71,7 +76,50 @@ def build_llm_provider(
             f"opencode_go:{settings.opencode_go_model}",
         )
 
-    raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")
+    raise ValueError(f"Unsupported LLM provider: {name}")
+
+
+def build_llm_provider(
+    settings: Settings,
+    *,
+    provider_cooldown_store: (ProviderCooldownStore | None) = None,
+    persist_provider_cooldowns: bool = True,
+) -> tuple[LLMProvider, str]:
+    names = tuple(settings.llm_providers)
+
+    if len(set(names)) != len(names):
+        raise ValueError("LLM_PROVIDERS must not contain duplicates")
+
+    built = [
+        (
+            name,
+            *_build_provider(
+                name,
+                settings,
+                provider_cooldown_store=(provider_cooldown_store),
+                persist_provider_cooldowns=(persist_provider_cooldowns),
+            ),
+        )
+        for name in names
+    ]
+
+    if len(built) == 1:
+        _, provider, identity = built[0]
+        return provider, identity
+
+    provider = FallbackLLMProvider(
+        tuple(
+            NamedLLMProvider(
+                name=name,
+                provider=item,
+            )
+            for name, item, _ in built
+        )
+    )
+
+    cache_identity = "chain:" + "|".join(identity for _, _, identity in built)
+
+    return provider, cache_identity
 
 
 def build_intent_extractor(

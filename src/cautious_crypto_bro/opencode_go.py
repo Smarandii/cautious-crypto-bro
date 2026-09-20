@@ -9,6 +9,7 @@ import time
 import httpx
 
 from .llm_provider import (
+    LLMProviderFailure,
     LLMRequest,
     LLMResponse,
     LLMResponseValidationError,
@@ -368,7 +369,7 @@ class OpenCodeGoProvider:
 
                 await asyncio.sleep(0.5 * attempt)
 
-        raise RuntimeError(
+        raise LLMProviderFailure(
             "OpenCode Go inference failed after "
             f"{self._max_attempts} attempt(s): "
             f"{last_error}"
