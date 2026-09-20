@@ -273,15 +273,6 @@ class BybitDemoExecutor:
             end,
         )
 
-    async def exposure(
-        self,
-        symbol: str,
-    ) -> SymbolExposure:
-        return await asyncio.to_thread(
-            self._exposure_sync,
-            symbol,
-        )
-
     async def execute(
         self,
         plan: ExecutionPlan,
