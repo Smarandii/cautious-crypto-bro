@@ -149,18 +149,18 @@ def test_stale_worker_cannot_persist_intent(
         )
 
         assert not (
-            await store.create_intent_with_plan_and_complete_source(
-                intent,
-                plan,
+            await store.create_signal_batch_and_complete_source(
+                ((intent, plan),),
+                (),
                 first_claim,
             )
         )
 
         assert await store.get_intent(intent.intent_id) is None
 
-        assert await store.create_intent_with_plan_and_complete_source(
-            intent,
-            plan,
+        assert await store.create_signal_batch_and_complete_source(
+            ((intent, plan),),
+            (),
             second_claim,
         )
 
@@ -277,11 +277,12 @@ def test_multi_intent_persistence_rolls_back_entire_batch(
         )
 
         try:
-            await store.create_intents_with_plans_and_complete_source(
+            await store.create_signal_batch_and_complete_source(
                 (
                     first,
                     bad_second,
                 ),
+                (),
                 claim,
             )
         except ValueError:

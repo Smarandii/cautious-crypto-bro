@@ -125,6 +125,37 @@ class ApprovalBot:
     async def close(self) -> None:
         await self._bot.session.close()
 
+    async def _authorized(self, callback: CallbackQuery) -> bool:
+        if callback.from_user.id == self._approver_user_id:
+            return True
+
+        await callback.answer("Not authorized", show_alert=True)
+        return False
+
+    async def _send_account_snapshot(
+        self,
+        state: AccountStateSummary | None,
+        *,
+        state_error: str | None,
+        pnl: AccountPnlSummary | None,
+        pnl_error: str | None,
+    ) -> None:
+        try:
+            await self._bot.send_message(
+                chat_id=self._approval_chat_id,
+                text=self._render_account_state(
+                    state,
+                    error=state_error,
+                    pnl=pnl,
+                    pnl_error=pnl_error,
+                ),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            # Informational only; the actionable card must still be delivered.
+            logger.exception("Failed to send account snapshot")
+
     async def send_intent(
         self,
         intent: TradingIntent,
@@ -139,23 +170,12 @@ class ApprovalBot:
         send_account_state: bool = True,
     ) -> None:
         if send_account_state:
-            try:
-                await self._bot.send_message(
-                    chat_id=self._approval_chat_id,
-                    text=self._render_account_state(
-                        account_state,
-                        error=account_state_error,
-                        pnl=account_pnl,
-                        pnl_error=account_pnl_error,
-                    ),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-            except Exception:
-                # The snapshot is informational and
-                # must never prevent delivery of the
-                # actionable approval card.
-                logger.exception("Failed to send account snapshot")
+            await self._send_account_snapshot(
+                account_state,
+                state_error=account_state_error,
+                pnl=account_pnl,
+                pnl_error=account_pnl_error,
+            )
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -208,20 +228,12 @@ class ApprovalBot:
         send_account_state: bool = True,
     ) -> None:
         if send_account_state:
-            try:
-                await self._bot.send_message(
-                    chat_id=self._approval_chat_id,
-                    text=self._render_account_state(
-                        account_state,
-                        error=account_state_error,
-                        pnl=account_pnl,
-                        pnl_error=account_pnl_error,
-                    ),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-            except Exception:
-                logger.exception("Failed to send account snapshot")
+            await self._send_account_snapshot(
+                account_state,
+                state_error=account_state_error,
+                pnl=account_pnl,
+                pnl_error=account_pnl_error,
+            )
 
         execute_label = (
             "Execute close"
@@ -272,11 +284,7 @@ class ApprovalBot:
         callback: CallbackQuery,
         callback_data: IntentAction,
     ) -> None:
-        if callback.from_user.id != self._approver_user_id:
-            await callback.answer(
-                "Not authorized",
-                show_alert=True,
-            )
+        if not await self._authorized(callback):
             return
 
         intent_id = UUID(callback_data.intent_id)
@@ -324,11 +332,7 @@ class ApprovalBot:
         callback: CallbackQuery,
         callback_data: PositionActionCallback,
     ) -> None:
-        if callback.from_user.id != self._approver_user_id:
-            await callback.answer(
-                "Not authorized",
-                show_alert=True,
-            )
+        if not await self._authorized(callback):
             return
 
         action_id = UUID(callback_data.action_id)
@@ -361,11 +365,7 @@ class ApprovalBot:
         callback: CallbackQuery,
         callback_data: PositionActionCallback,
     ) -> None:
-        if callback.from_user.id != self._approver_user_id:
-            await callback.answer(
-                "Not authorized",
-                show_alert=True,
-            )
+        if not await self._authorized(callback):
             return
 
         action_id = UUID(callback_data.action_id)
@@ -404,11 +404,7 @@ class ApprovalBot:
         callback: CallbackQuery,
         callback_data: IntentAction,
     ) -> None:
-        if callback.from_user.id != self._approver_user_id:
-            await callback.answer(
-                "Not authorized",
-                show_alert=True,
-            )
+        if not await self._authorized(callback):
             return
 
         intent_id = UUID(callback_data.intent_id)

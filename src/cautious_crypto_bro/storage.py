@@ -783,38 +783,6 @@ class IntentStore:
                 await db.rollback()
                 raise
 
-    async def create_intents_with_plans_and_complete_source(
-        self,
-        items: Sequence[
-            tuple[
-                TradingIntent,
-                ExecutionPlan,
-            ]
-        ],
-        claim_token: str,
-    ) -> bool:
-        return await self.create_signal_batch_and_complete_source(
-            items,
-            (),
-            claim_token,
-        )
-
-    async def create_intent_with_plan_and_complete_source(
-        self,
-        intent: TradingIntent,
-        plan: ExecutionPlan,
-        claim_token: str,
-    ) -> bool:
-        return await self.create_intents_with_plans_and_complete_source(
-            (
-                (
-                    intent,
-                    plan,
-                ),
-            ),
-            claim_token,
-        )
-
     async def get_intent(
         self,
         intent_id: UUID,
