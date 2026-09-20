@@ -1130,49 +1130,6 @@ class ApprovalBot:
         return "Protection: " + " · ".join(parts)
 
     @staticmethod
-    def _render_account_order(
-        order: AccountOrder,
-    ) -> str:
-        quantity = ApprovalBot._fmt_decimal(order.quantity)
-
-        kind = order.kind
-
-        if order.is_protective and order.trigger_price is not None:
-            price = "trigger " + ApprovalBot._fmt_decimal(order.trigger_price)
-
-        elif order.avg_price is not None:
-            price = ApprovalBot._fmt_decimal(order.avg_price)
-
-        elif order.price is not None:
-            price = ApprovalBot._fmt_decimal(order.price)
-
-        else:
-            price = "Market"
-
-        if kind == "ENTRY":
-            description = (
-                f"{html.escape(order.side.value)} {html.escape(order.order_type)}"
-            )
-
-        elif kind == "CONDITIONAL":
-            description = f"CONDITIONAL {html.escape(order.side.value)}"
-
-        elif kind == "REDUCE":
-            description = f"REDUCE {html.escape(order.side.value)}"
-
-        else:
-            description = kind
-
-        return (
-            "• "
-            f"{html.escape(order.symbol)} "
-            f"{description} "
-            f"{quantity} @ {price}"
-            " — "
-            f"{html.escape(order.status)}"
-        )
-
-    @staticmethod
     def _fmt_signed(
         value: Decimal,
     ) -> str:
