@@ -27,6 +27,12 @@ from .domain import (
     SourceMessage,
     TradingIntent,
 )
+from .llm_provider import (
+    LLMImage,
+    LLMRequest,
+    LLMResponse,
+    LLMResponseValidationError,
+)
 from .runtime_store import (
     OpenRouterEvaluationCache,
     ProviderCooldownStore,
@@ -187,13 +193,13 @@ General rules:
 """.strip()
 
 
-def _build_user_content(
+def _build_user_text(
     post: IncomingPost,
     *,
     global_guidance: str | None = None,
     channel_guidance: str | None = None,
-    position_context: (SignalPositionContext | None) = None,
-) -> str | list[dict[str, object]]:
+    position_context: SignalPositionContext | None = None,
+) -> str:
     source = post.source
 
     parts = [
@@ -240,31 +246,7 @@ def _build_user_content(
         ]
     )
 
-    text = "\n".join(parts)
-
-    if not post.images:
-        return text
-
-    content: list[dict[str, object]] = [
-        {
-            "type": "text",
-            "text": text,
-        }
-    ]
-
-    for image in post.images:
-        encoded = base64.b64encode(image.data).decode("ascii")
-
-        content.append(
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": (f"data:{image.media_type};base64,{encoded}"),
-                },
-            }
-        )
-
-    return content
+    return "\n".join(parts)
 
 
 def _evaluation_fingerprint(
@@ -1110,7 +1092,7 @@ def _completion_content(
     return content
 
 
-class OpenRouterIntentExtractor:
+class OpenRouterProvider:
     def __init__(
         self,
         *,
@@ -1119,17 +1101,12 @@ class OpenRouterIntentExtractor:
         base_url: str,
         inference_timeout_seconds: float = 45,
         max_attempts: int = 2,
-        provider_cooldown_store: (ProviderCooldownStore | None) = None,
+        provider_cooldown_store: ProviderCooldownStore | None = None,
         persist_provider_cooldowns: bool = True,
         provider_cooldown_seconds: int = (12 * 60 * 60),
-        evaluation_cache: (OpenRouterEvaluationCache | None) = None,
-        evaluation_cache_seconds: int = (6 * 60 * 60),
     ) -> None:
         if provider_cooldown_seconds <= 0:
             raise ValueError("provider_cooldown_seconds must be positive")
-
-        if evaluation_cache_seconds <= 0:
-            raise ValueError("evaluation_cache_seconds must be positive")
 
         self._model = model
         self._inference_timeout_seconds = inference_timeout_seconds
@@ -1137,8 +1114,6 @@ class OpenRouterIntentExtractor:
         self._provider_cooldown_store = provider_cooldown_store
         self._persist_provider_cooldowns = persist_provider_cooldowns
         self._provider_cooldown_seconds = provider_cooldown_seconds
-        self._evaluation_cache = evaluation_cache
-        self._evaluation_cache_seconds = evaluation_cache_seconds
 
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
@@ -1176,8 +1151,6 @@ class OpenRouterIntentExtractor:
         if not provider:
             return
 
-        # Always exclude it for this extraction,
-        # even if Redis temporarily fails.
         ignored_providers.add(provider)
 
         if (
@@ -1206,6 +1179,298 @@ class OpenRouterIntentExtractor:
             (self._provider_cooldown_seconds / 3600),
             failure,
         )
+
+    @staticmethod
+    def _user_content(
+        request: LLMRequest,
+    ) -> str | list[dict[str, object]]:
+        if not request.images:
+            return request.user_text
+
+        content: list[dict[str, object]] = [
+            {
+                "type": "text",
+                "text": request.user_text,
+            }
+        ]
+
+        for image in request.images:
+            encoded = base64.b64encode(image.data).decode("ascii")
+
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": (f"data:{image.media_type};base64,{encoded}"),
+                    },
+                }
+            )
+
+        return content
+
+    async def complete(
+        self,
+        request: LLMRequest,
+    ) -> LLMResponse:
+        payload = {
+            "model": self._model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": request.system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": self._user_content(request),
+                },
+            ],
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+            "reasoning": {
+                "effort": "none",
+            },
+            "provider": {
+                "sort": "latency",
+                "require_parameters": True,
+                "allow_fallbacks": True,
+                "ignore": list(STATIC_IGNORED_PROVIDERS),
+            },
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": request.response_schema_name,
+                    "strict": True,
+                    "schema": request.response_schema,
+                },
+            },
+        }
+
+        last_error: Exception | None = None
+
+        ignored_providers = {
+            provider.casefold() for provider in STATIC_IGNORED_PROVIDERS
+        }
+
+        label = request.request_label or self._model
+
+        for attempt in range(
+            1,
+            self._max_attempts + 1,
+        ):
+            ignored_providers.update(
+                provider.casefold()
+                for provider in (await self._active_provider_cooldowns())
+            )
+
+            provider_options = payload["provider"]
+
+            assert isinstance(provider_options, dict)
+
+            provider_options["ignore"] = sorted(ignored_providers)
+
+            response_provider: str | None = None
+            started = time.monotonic()
+
+            try:
+                async with asyncio.timeout(self._inference_timeout_seconds):
+                    response = await self._client.post(
+                        "/chat/completions",
+                        json=payload,
+                    )
+
+                response.raise_for_status()
+
+                response_data = response.json()
+
+                if not isinstance(response_data, dict):
+                    raise ValueError("OpenRouter response is not a JSON object")
+
+                response_provider = _response_provider(response_data)
+
+                content = _completion_content(response_data)
+
+                if len(content) > 20_000:
+                    message = (
+                        "OpenRouter returned unexpectedly "
+                        "large structured output "
+                        f"({len(content)} characters)"
+                    )
+
+                    if response_provider is not None:
+                        raise OpenRouterProviderFailure(
+                            response_provider,
+                            message,
+                        )
+
+                    raise ValueError(message)
+
+                if request.response_validator is not None:
+                    request.response_validator(content)
+
+            except TimeoutError:
+                elapsed = time.monotonic() - started
+
+                last_error = RuntimeError(
+                    "OpenRouter inference exceeded "
+                    f"{self._inference_timeout_seconds:g}s "
+                    f"({elapsed:.1f}s)"
+                )
+
+            except LLMResponseValidationError as exc:
+                message = "OpenRouter returned invalid structured output"
+
+                if response_provider is not None:
+                    provider = response_provider.strip().casefold()
+
+                    if provider:
+                        ignored_providers.add(provider)
+
+                    last_error = OpenRouterProviderFailure(
+                        response_provider,
+                        message,
+                    )
+                else:
+                    last_error = RuntimeError(message)
+
+                logger.warning(
+                    "Invalid OpenRouter structured output for %s on attempt %d/%d: %s",
+                    label,
+                    attempt,
+                    self._max_attempts,
+                    exc,
+                )
+
+            except OpenRouterProviderFailure as exc:
+                last_error = exc
+
+                await self._cooldown_provider(
+                    exc,
+                    ignored_providers,
+                )
+
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+
+                if status != 429 and status < 500:
+                    raise
+
+                last_error = exc
+
+                if status >= 500:
+                    try:
+                        error_data = exc.response.json()
+                    except ValueError:
+                        error_data = None
+
+                    if isinstance(error_data, dict):
+                        provider = _response_provider(error_data)
+
+                        if provider is not None:
+                            failure = OpenRouterProviderFailure(
+                                provider,
+                                (
+                                    "OpenRouter HTTP "
+                                    f"{status} provider "
+                                    "failure: "
+                                    f"provider={provider}"
+                                ),
+                            )
+
+                            last_error = failure
+
+                            await self._cooldown_provider(
+                                failure,
+                                ignored_providers,
+                            )
+
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                httpx.RequestError,
+            ) as exc:
+                last_error = exc
+
+            else:
+                elapsed = time.monotonic() - started
+
+                logger.info(
+                    "OpenRouter inference for %s "
+                    "(%d image(s)) completed in %.2fs "
+                    "on attempt %d/%d",
+                    label,
+                    len(request.images),
+                    elapsed,
+                    attempt,
+                    self._max_attempts,
+                )
+
+                return LLMResponse(
+                    content=content,
+                )
+
+            if attempt < self._max_attempts:
+                logger.warning(
+                    "OpenRouter attempt %d/%d failed for %s: %s; retrying",
+                    attempt,
+                    self._max_attempts,
+                    label,
+                    last_error,
+                )
+
+                await asyncio.sleep(0.5 * attempt)
+
+        raise RuntimeError(
+            "OpenRouter inference failed after "
+            f"{self._max_attempts} attempt(s): "
+            f"{last_error}"
+        ) from last_error
+
+
+def _validate_intent_extraction_response(
+    content: str,
+) -> None:
+    try:
+        IntentExtraction.model_validate_json(content)
+    except ValidationError as exc:
+        raise LLMResponseValidationError(str(exc)) from exc
+
+
+class OpenRouterIntentExtractor:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        base_url: str,
+        inference_timeout_seconds: float = 45,
+        max_attempts: int = 2,
+        provider_cooldown_store: ProviderCooldownStore | None = None,
+        persist_provider_cooldowns: bool = True,
+        provider_cooldown_seconds: int = (12 * 60 * 60),
+        evaluation_cache: OpenRouterEvaluationCache | None = None,
+        evaluation_cache_seconds: int = (6 * 60 * 60),
+    ) -> None:
+        if evaluation_cache_seconds <= 0:
+            raise ValueError("evaluation_cache_seconds must be positive")
+
+        self._model = model
+        self._evaluation_cache = evaluation_cache
+        self._evaluation_cache_seconds = evaluation_cache_seconds
+
+        self._provider = OpenRouterProvider(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            inference_timeout_seconds=(inference_timeout_seconds),
+            max_attempts=max_attempts,
+            provider_cooldown_store=(provider_cooldown_store),
+            persist_provider_cooldowns=(persist_provider_cooldowns),
+            provider_cooldown_seconds=(provider_cooldown_seconds),
+        )
+
+    async def close(self) -> None:
+        await self._provider.close()
 
     async def _read_cached_evaluation(
         self,
@@ -1294,245 +1559,30 @@ class OpenRouterIntentExtractor:
 
                 return cached_signals
 
-        payload = {
-            "model": self._model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT,
-                },
-                {
-                    "role": "user",
-                    "content": _build_user_content(
-                        post,
-                        global_guidance=global_guidance,
-                        channel_guidance=channel_guidance,
-                        position_context=(position_context),
-                    ),
-                },
-            ],
-            "temperature": 0,
-            "max_tokens": 1536,
-            "reasoning": {
-                "effort": "none",
-            },
-            "provider": {
-                "sort": "latency",
-                "require_parameters": True,
-                "allow_fallbacks": True,
-                "ignore": list(STATIC_IGNORED_PROVIDERS),
-            },
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "trading_intent_extraction",
-                    "strict": True,
-                    "schema": (IntentExtraction.model_json_schema()),
-                },
-            },
-        }
-
-        last_error: Exception | None = None
-
-        ignored_providers = {
-            provider.casefold() for provider in STATIC_IGNORED_PROVIDERS
-        }
-
-        for attempt in range(
-            1,
-            self._max_attempts + 1,
-        ):
-            ignored_providers.update(
-                provider.casefold()
-                for provider in (await self._active_provider_cooldowns())
+        response = await self._provider.complete(
+            LLMRequest(
+                system_prompt=SYSTEM_PROMPT,
+                user_text=_build_user_text(
+                    post,
+                    global_guidance=global_guidance,
+                    channel_guidance=channel_guidance,
+                    position_context=position_context,
+                ),
+                response_schema_name=("trading_intent_extraction"),
+                response_schema=(IntentExtraction.model_json_schema()),
+                images=tuple(
+                    LLMImage(
+                        media_type=image.media_type,
+                        data=image.data,
+                    )
+                    for image in post.images
+                ),
+                response_validator=(_validate_intent_extraction_response),
+                request_label=(f"{source.channel_id}/{source.message_id}"),
             )
+        )
 
-            provider_options = payload["provider"]
-
-            assert isinstance(
-                provider_options,
-                dict,
-            )
-
-            provider_options["ignore"] = sorted(ignored_providers)
-
-            response_provider: str | None = None
-
-            started = time.monotonic()
-
-            try:
-                async with asyncio.timeout(self._inference_timeout_seconds):
-                    response = await self._client.post(
-                        "/chat/completions",
-                        json=payload,
-                    )
-
-                response.raise_for_status()
-
-                response_data = response.json()
-
-                if not isinstance(
-                    response_data,
-                    dict,
-                ):
-                    raise ValueError("OpenRouter response is not a JSON object")
-
-                response_provider = _response_provider(response_data)
-
-                content = _completion_content(response_data)
-
-                # This schema normally produces only a
-                # small JSON object. A very large result
-                # indicates a broken structured-output
-                # response rather than a useful intent.
-                if len(content) > 20_000:
-                    message = (
-                        "OpenRouter returned unexpectedly "
-                        "large structured output "
-                        f"({len(content)} characters)"
-                    )
-
-                    if response_provider is not None:
-                        raise (
-                            OpenRouterProviderFailure(
-                                response_provider,
-                                message,
-                            )
-                        )
-
-                    raise ValueError(message)
-
-                extraction = IntentExtraction.model_validate_json(content)
-
-            except TimeoutError:
-                elapsed = time.monotonic() - started
-
-                last_error = RuntimeError(
-                    "OpenRouter inference exceeded "
-                    f"{self._inference_timeout_seconds:g}s "
-                    f"({elapsed:.1f}s)"
-                )
-
-            except ValidationError as exc:
-                message = "OpenRouter returned invalid structured output"
-
-                if response_provider is not None:
-                    provider = response_provider.strip().casefold()
-
-                    if provider:
-                        # Schema non-conformance may be
-                        # model/provider-specific for this
-                        # particular request. Exclude it
-                        # from this extraction retry only;
-                        # do not poison the global pool.
-                        ignored_providers.add(provider)
-
-                    last_error = OpenRouterProviderFailure(
-                        response_provider,
-                        message,
-                    )
-                else:
-                    last_error = RuntimeError(message)
-
-                logger.warning(
-                    "Invalid OpenRouter structured output "
-                    "for %s/%s on attempt %d/%d: %s",
-                    source.channel_id,
-                    source.message_id,
-                    attempt,
-                    self._max_attempts,
-                    exc,
-                )
-
-            except OpenRouterProviderFailure as exc:
-                last_error = exc
-
-                await self._cooldown_provider(
-                    exc,
-                    ignored_providers,
-                )
-
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code
-
-                if status != 429 and status < 500:
-                    raise
-
-                last_error = exc
-
-                if status >= 500:
-                    try:
-                        error_data = exc.response.json()
-                    except ValueError:
-                        error_data = None
-
-                    if isinstance(
-                        error_data,
-                        dict,
-                    ):
-                        provider = _response_provider(error_data)
-
-                        if provider is not None:
-                            failure = OpenRouterProviderFailure(
-                                provider,
-                                (
-                                    "OpenRouter HTTP "
-                                    f"{status} provider "
-                                    "failure: "
-                                    f"provider={provider}"
-                                ),
-                            )
-
-                            last_error = failure
-
-                            await self._cooldown_provider(
-                                failure,
-                                ignored_providers,
-                            )
-
-            except (
-                KeyError,
-                TypeError,
-                ValueError,
-                httpx.RequestError,
-            ) as exc:
-                last_error = exc
-
-            else:
-                elapsed = time.monotonic() - started
-
-                logger.info(
-                    "OpenRouter inference for %s/%s "
-                    "(%d image(s)) completed in %.2fs "
-                    "on attempt %d/%d",
-                    source.channel_id,
-                    source.message_id,
-                    len(post.images),
-                    elapsed,
-                    attempt,
-                    self._max_attempts,
-                )
-
-                break
-
-            if attempt < self._max_attempts:
-                logger.warning(
-                    "OpenRouter attempt %d/%d failed for %s/%s: %s; retrying",
-                    attempt,
-                    self._max_attempts,
-                    source.channel_id,
-                    source.message_id,
-                    last_error,
-                )
-
-                await asyncio.sleep(0.5 * attempt)
-
-        else:
-            raise RuntimeError(
-                "OpenRouter inference failed after "
-                f"{self._max_attempts} attempt(s): "
-                f"{last_error}"
-            ) from last_error
+        extraction = IntentExtraction.model_validate_json(response.content)
 
         await self._cache_evaluation(
             evaluation_fingerprint,

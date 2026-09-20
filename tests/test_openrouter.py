@@ -155,9 +155,9 @@ def test_failed_provider_is_excluded_on_retry() -> None:
             provider_cooldown_seconds=(12 * 60 * 60),
         )
 
-        await extractor._client.aclose()
+        await extractor._provider._client.aclose()
 
-        extractor._client = httpx.AsyncClient(
+        extractor._provider._client = httpx.AsyncClient(
             base_url=("https://openrouter.test"),
             transport=(httpx.MockTransport(handler)),
         )
@@ -195,6 +195,103 @@ def test_failed_provider_is_excluded_on_retry() -> None:
 
     asyncio.run(run(True))
     asyncio.run(run(False))
+
+
+def test_invalid_structured_output_is_retried() -> None:
+    import asyncio
+    import json
+
+    import httpx
+
+    from cautious_crypto_bro.openrouter import (
+        OpenRouterIntentExtractor,
+    )
+
+    async def run() -> None:
+        store = FakeProviderCooldownStore()
+        payloads = []
+
+        def handler(
+            request: httpx.Request,
+        ) -> httpx.Response:
+            payloads.append(json.loads(request.content))
+
+            if len(payloads) == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "provider": "Venice",
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {
+                                    "content": json.dumps(
+                                        {
+                                            "actionable": False,
+                                        }
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                )
+
+            return httpx.Response(
+                200,
+                json={
+                    "provider": "Healthy",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "actionable": False,
+                                        "reason": "commentary",
+                                        "intents": [],
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                },
+            )
+
+        extractor = OpenRouterIntentExtractor(
+            api_key="test",
+            model="test/model",
+            base_url="https://openrouter.test",
+            inference_timeout_seconds=5,
+            max_attempts=2,
+            provider_cooldown_store=store,
+        )
+
+        await extractor._provider._client.aclose()
+
+        extractor._provider._client = httpx.AsyncClient(
+            base_url="https://openrouter.test",
+            transport=httpx.MockTransport(handler),
+        )
+
+        try:
+            result = await extractor.extract(IncomingPost(source=source()))
+        finally:
+            await extractor.close()
+
+        assert not result.actionable
+        assert len(payloads) == 2
+
+        first_ignore = set(payloads[0]["provider"]["ignore"])
+        second_ignore = set(payloads[1]["provider"]["ignore"])
+
+        assert "venice" not in first_ignore
+        assert "venice" in second_ignore
+
+        # Invalid structured output excludes this backend
+        # for the current retry only.
+        assert store.recorded == []
+
+    asyncio.run(run())
 
 
 class FakeEvaluationCache:
@@ -278,9 +375,9 @@ def test_valid_evaluation_is_reused_from_cache() -> None:
             evaluation_cache_seconds=21600,
         )
 
-        await extractor._client.aclose()
+        await extractor._provider._client.aclose()
 
-        extractor._client = httpx.AsyncClient(
+        extractor._provider._client = httpx.AsyncClient(
             base_url=("https://openrouter.test"),
             transport=(httpx.MockTransport(handler)),
         )
@@ -355,9 +452,9 @@ def test_guidance_change_invalidates_evaluation_cache() -> None:
             evaluation_cache=cache,
         )
 
-        await extractor._client.aclose()
+        await extractor._provider._client.aclose()
 
-        extractor._client = httpx.AsyncClient(
+        extractor._provider._client = httpx.AsyncClient(
             base_url=("https://openrouter.test"),
             transport=(httpx.MockTransport(handler)),
         )
@@ -455,9 +552,9 @@ def test_multiple_actionable_intents_are_returned() -> None:
             max_attempts=1,
         )
 
-        await extractor._client.aclose()
+        await extractor._provider._client.aclose()
 
-        extractor._client = httpx.AsyncClient(
+        extractor._provider._client = httpx.AsyncClient(
             base_url="https://openrouter.test",
             transport=httpx.MockTransport(handler),
         )
@@ -542,9 +639,9 @@ def test_position_actions_are_returned_separately() -> None:
             max_attempts=1,
         )
 
-        await extractor._client.aclose()
+        await extractor._provider._client.aclose()
 
-        extractor._client = httpx.AsyncClient(
+        extractor._provider._client = httpx.AsyncClient(
             base_url="https://openrouter.test",
             transport=httpx.MockTransport(handler),
         )
