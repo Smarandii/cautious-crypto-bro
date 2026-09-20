@@ -12,7 +12,7 @@ dist/
 repomix-output.*
 *.patch
 audit-output/
-audit-artefacts/
+audit-artifacts/
 debug/
 
 backups/
