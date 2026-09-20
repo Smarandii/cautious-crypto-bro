@@ -1,0 +1,1 @@
+AUTO_APPROVAL_MODE=all
