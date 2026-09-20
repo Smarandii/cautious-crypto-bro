@@ -384,13 +384,13 @@ class FakeEvaluationCache:
         self.values = {}
         self.writes = []
 
-    async def get_openrouter_evaluation(
+    async def get_evaluation(
         self,
         fingerprint,
     ):
         return self.values.get(fingerprint)
 
-    async def cache_openrouter_evaluation(
+    async def cache_evaluation(
         self,
         fingerprint,
         payload_json,

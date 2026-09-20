@@ -399,7 +399,7 @@ async def read_evaluation(
 
     if not fresh:
         try:
-            payload = await runtime_store.get_openrouter_evaluation(fingerprint)
+            payload = await runtime_store.get_evaluation(fingerprint)
         except Exception as exc:
             return (
                 None,
@@ -444,7 +444,7 @@ async def read_evaluation(
         )
 
     try:
-        payload = await runtime_store.get_openrouter_evaluation(fingerprint)
+        payload = await runtime_store.get_evaluation(fingerprint)
     except Exception as exc:
         return (
             None,

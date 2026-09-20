@@ -35,7 +35,7 @@ from .llm_provider import (
     LLMResponseValidationError,
 )
 from .runtime_store import (
-    OpenRouterEvaluationCache,
+    EvaluationCache,
     ProviderCooldownStore,
 )
 
@@ -1443,7 +1443,7 @@ class IntentExtractor:
         *,
         provider: LLMProvider,
         cache_identity: str,
-        evaluation_cache: OpenRouterEvaluationCache | None = None,
+        evaluation_cache: EvaluationCache | None = None,
         evaluation_cache_seconds: int = (6 * 60 * 60),
     ) -> None:
         if evaluation_cache_seconds <= 0:
@@ -1470,11 +1470,9 @@ class IntentExtractor:
             return None
 
         try:
-            payload = await self._evaluation_cache.get_openrouter_evaluation(
-                fingerprint
-            )
+            payload = await self._evaluation_cache.get_evaluation(fingerprint)
         except Exception:
-            logger.exception("Failed to read OpenRouter evaluation cache")
+            logger.exception("Failed to read evaluation cache")
             return None
 
         if payload is None:
@@ -1483,7 +1481,7 @@ class IntentExtractor:
         try:
             return IntentExtraction.model_validate_json(payload)
         except ValidationError:
-            logger.warning("Ignoring invalid cached OpenRouter evaluation")
+            logger.warning("Ignoring invalid cached evaluation")
             return None
 
     async def _cache_evaluation(
@@ -1495,13 +1493,13 @@ class IntentExtractor:
             return
 
         try:
-            await self._evaluation_cache.cache_openrouter_evaluation(
+            await self._evaluation_cache.cache_evaluation(
                 fingerprint,
                 (extraction.model_dump_json()),
                 self._evaluation_cache_seconds,
             )
         except Exception:
-            logger.exception("Failed to persist OpenRouter evaluation cache")
+            logger.exception("Failed to persist evaluation cache")
 
     async def extract(
         self,
@@ -1529,7 +1527,7 @@ class IntentExtractor:
 
             if cached_extraction is not None:
                 logger.info(
-                    "OpenRouter evaluation cache hit for %s/%s",
+                    "Evaluation cache hit for %s/%s",
                     source.channel_id,
                     source.message_id,
                 )

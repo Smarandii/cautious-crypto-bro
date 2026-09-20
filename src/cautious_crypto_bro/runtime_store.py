@@ -24,13 +24,13 @@ class ProviderCooldownStore(Protocol):
     ) -> None: ...
 
 
-class OpenRouterEvaluationCache(Protocol):
-    async def get_openrouter_evaluation(
+class EvaluationCache(Protocol):
+    async def get_evaluation(
         self,
         fingerprint: str,
     ) -> str | None: ...
 
-    async def cache_openrouter_evaluation(
+    async def cache_evaluation(
         self,
         fingerprint: str,
         payload_json: str,
@@ -146,7 +146,7 @@ class RedisRuntimeStore:
             ex=duration_seconds,
         )
 
-    async def get_openrouter_evaluation(
+    async def get_evaluation(
         self,
         fingerprint: str,
     ) -> str | None:
@@ -160,7 +160,7 @@ class RedisRuntimeStore:
 
         return value
 
-    async def cache_openrouter_evaluation(
+    async def cache_evaluation(
         self,
         fingerprint: str,
         payload_json: str,

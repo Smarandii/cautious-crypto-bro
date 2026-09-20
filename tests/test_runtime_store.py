@@ -9,7 +9,7 @@ from cautious_crypto_bro.runtime_store import (
 )
 
 
-def test_openrouter_evaluation_cache_uses_ttl() -> None:
+def test_evaluation_cache_preserves_openrouter_namespace() -> None:
     async def run() -> None:
         redis = FakeRedis(decode_responses=True)
 
@@ -21,15 +21,13 @@ def test_openrouter_evaluation_cache_uses_ttl() -> None:
 
         await store.initialize()
 
-        await store.cache_openrouter_evaluation(
+        await store.cache_evaluation(
             "abc123",
             '{"actionable":false}',
             3600,
         )
 
-        assert (
-            await store.get_openrouter_evaluation("abc123")
-        ) == '{"actionable":false}'
+        assert (await store.get_evaluation("abc123")) == '{"actionable":false}'
 
         ttl = await redis.ttl("test:openrouter:evaluation:abc123")
 
