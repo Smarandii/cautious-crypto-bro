@@ -25,335 +25,146 @@ from .domain import (
 
 LATEST_SCHEMA_VERSION = 4
 
+LATEST_SCHEMA_SQL = """
+CREATE TABLE source_messages (
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'COMPLETED',
+    attempt_count INTEGER NOT NULL DEFAULT 1,
+    last_error TEXT,
+    claim_token TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (channel_id, message_id)
+);
 
-async def _source_message_columns(
-    db: aiosqlite.Connection,
-) -> set[str]:
-    cursor = await db.execute("PRAGMA table_info(source_messages)")
-    return {str(row[1]) for row in await cursor.fetchall()}
+CREATE TABLE intents (
+    intent_id TEXT PRIMARY KEY,
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    approval_mode TEXT NOT NULL DEFAULT 'MANUAL',
+    decision_user_id INTEGER,
+    bybit_order_id TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 
+CREATE INDEX ix_intents_approval_status
+ON intents(approval_mode, status);
 
-async def _migrate_to_v1(
-    db: aiosqlite.Connection,
-) -> None:
-    statements = (
-        """
-        CREATE TABLE IF NOT EXISTS source_messages (
-            channel_id INTEGER NOT NULL,
-            message_id INTEGER NOT NULL,
-            payload_json TEXT NOT NULL,
-            status TEXT NOT NULL
-                DEFAULT 'COMPLETED',
-            attempt_count INTEGER NOT NULL
-                DEFAULT 1,
-            last_error TEXT,
-            claim_token TEXT,
-            updated_at TEXT NOT NULL
-                DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (channel_id, message_id)
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS intents (
-            intent_id TEXT PRIMARY KEY,
-            channel_id INTEGER NOT NULL,
-            message_id INTEGER NOT NULL,
-            payload_json TEXT NOT NULL,
-            status TEXT NOT NULL,
-            decision_user_id INTEGER,
-            bybit_order_id TEXT,
-            error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS signal_guidance (
-            scope TEXT NOT NULL
-                CHECK(scope IN ('global', 'channel')),
-            channel_id INTEGER,
-            content TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-                DEFAULT CURRENT_TIMESTAMP,
-            CHECK(
-                (
-                    scope = 'global'
-                    AND channel_id IS NULL
-                )
-                OR
-                (
-                    scope = 'channel'
-                    AND channel_id IS NOT NULL
-                )
-            )
-        )
-        """,
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS
-            ux_signal_guidance_global
-        ON signal_guidance(scope)
-        WHERE scope = 'global'
-        """,
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS
-            ux_signal_guidance_channel
-        ON signal_guidance(channel_id)
-        WHERE scope = 'channel'
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS execution_policy (
-            id INTEGER PRIMARY KEY
-                CHECK(id = 1),
-            trading_capital_usdt TEXT NOT NULL,
-            risk_per_trade_pct TEXT NOT NULL,
-            range_order_count INTEGER NOT NULL,
-            updated_at TEXT NOT NULL
-                DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS execution_exit_policy (
-            id INTEGER PRIMARY KEY
-                CHECK(id = 1),
-            minimum_reward_bps TEXT NOT NULL,
-            basic_r_multiple TEXT NOT NULL,
-            basic_close_pct TEXT NOT NULL,
-            medium_r_multiple TEXT NOT NULL,
-            medium_close_pct TEXT NOT NULL,
-            high_r_multiple TEXT NOT NULL,
-            high_close_pct TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-                DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS execution_plans (
-            intent_id TEXT PRIMARY KEY,
-            payload_json TEXT NOT NULL,
-            bybit_order_ids_json TEXT,
-            created_at TEXT NOT NULL
-        )
-        """,
-        """
-        INSERT OR IGNORE INTO execution_policy(
-            id,
-            trading_capital_usdt,
-            risk_per_trade_pct,
-            range_order_count
-        )
-        VALUES (
-            1,
-            '6800',
-            '1',
-            3
-        )
-        """,
-        """
-        INSERT OR IGNORE INTO execution_exit_policy(
-            id,
-            minimum_reward_bps,
-            basic_r_multiple,
-            basic_close_pct,
-            medium_r_multiple,
-            medium_close_pct,
-            high_r_multiple,
-            high_close_pct
-        )
-        VALUES (
-            1,
-            '20',
-            '0.5',
-            '25',
-            '1',
-            '35',
-            '2',
-            '40'
-        )
-        """,
+CREATE TABLE signal_guidance (
+    scope TEXT NOT NULL CHECK(scope IN ('global', 'channel')),
+    channel_id INTEGER,
+    content TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK(
+        (scope = 'global' AND channel_id IS NULL)
+        OR
+        (scope = 'channel' AND channel_id IS NOT NULL)
     )
+);
 
-    for statement in statements:
-        await db.execute(statement)
+CREATE UNIQUE INDEX ux_signal_guidance_global
+ON signal_guidance(scope)
+WHERE scope = 'global';
 
-    source_columns = await _source_message_columns(db)
+CREATE UNIQUE INDEX ux_signal_guidance_channel
+ON signal_guidance(channel_id)
+WHERE scope = 'channel';
 
-    missing_columns = (
-        (
-            "status",
-            """
-            ALTER TABLE source_messages
-            ADD COLUMN status TEXT NOT NULL
-            DEFAULT 'COMPLETED'
-            """,
-        ),
-        (
-            "attempt_count",
-            """
-            ALTER TABLE source_messages
-            ADD COLUMN attempt_count INTEGER
-            NOT NULL DEFAULT 1
-            """,
-        ),
-        (
-            "last_error",
-            """
-            ALTER TABLE source_messages
-            ADD COLUMN last_error TEXT
-            """,
-        ),
-        (
-            "claim_token",
-            """
-            ALTER TABLE source_messages
-            ADD COLUMN claim_token TEXT
-            """,
-        ),
-        (
-            "updated_at",
-            """
-            ALTER TABLE source_messages
-            ADD COLUMN updated_at TEXT
-            NOT NULL DEFAULT ''
-            """,
-        ),
-    )
+CREATE TABLE execution_policy (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    trading_capital_usdt TEXT NOT NULL,
+    risk_per_trade_pct TEXT NOT NULL,
+    range_order_count INTEGER NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-    for column, statement in missing_columns:
-        if column not in source_columns:
-            await db.execute(statement)
+CREATE TABLE execution_exit_policy (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    minimum_reward_bps TEXT NOT NULL,
+    basic_r_multiple TEXT NOT NULL,
+    basic_close_pct TEXT NOT NULL,
+    medium_r_multiple TEXT NOT NULL,
+    medium_close_pct TEXT NOT NULL,
+    high_r_multiple TEXT NOT NULL,
+    high_close_pct TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-    await db.execute(
-        """
-        UPDATE source_messages
-        SET updated_at = CURRENT_TIMESTAMP
-        WHERE updated_at = ''
-        """
-    )
+CREATE TABLE execution_plans (
+    intent_id TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    bybit_order_ids_json TEXT,
+    created_at TEXT NOT NULL
+);
 
+CREATE TABLE position_actions (
+    action_id TEXT PRIMARY KEY,
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    approval_mode TEXT NOT NULL DEFAULT 'MANUAL',
+    decision_user_id INTEGER,
+    bybit_order_id TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 
-async def _migrate_to_v2(
-    db: aiosqlite.Connection,
-) -> None:
-    await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS position_actions (
-            action_id TEXT PRIMARY KEY,
-            channel_id INTEGER NOT NULL,
-            message_id INTEGER NOT NULL,
-            payload_json TEXT NOT NULL,
-            status TEXT NOT NULL,
-            decision_user_id INTEGER,
-            bybit_order_id TEXT,
-            error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
+CREATE INDEX ix_position_actions_source
+ON position_actions(channel_id, message_id);
 
-    await db.execute(
-        """
-        CREATE INDEX IF NOT EXISTS
-            ix_position_actions_source
-        ON position_actions(
-            channel_id,
-            message_id
-        )
-        """
-    )
+CREATE INDEX ix_position_actions_approval_status
+ON position_actions(approval_mode, status);
 
+CREATE TABLE account_closed_pnl (
+    record_id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    position_side TEXT NOT NULL,
+    closed_pnl TEXT NOT NULL,
+    closed_size TEXT NOT NULL,
+    avg_entry_price TEXT,
+    avg_exit_price TEXT,
+    closed_at TEXT NOT NULL,
+    synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-async def _migrate_to_v3(
-    db: aiosqlite.Connection,
-) -> None:
-    await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS account_closed_pnl (
-            record_id TEXT PRIMARY KEY,
-            order_id TEXT NOT NULL,
-            symbol TEXT NOT NULL,
-            position_side TEXT NOT NULL,
-            closed_pnl TEXT NOT NULL,
-            closed_size TEXT NOT NULL,
-            avg_entry_price TEXT,
-            avg_exit_price TEXT,
-            closed_at TEXT NOT NULL,
-            synced_at TEXT NOT NULL
-                DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
+CREATE INDEX ix_account_closed_pnl_closed_at
+ON account_closed_pnl(closed_at);
 
-    await db.execute(
-        """
-        CREATE INDEX IF NOT EXISTS
-            ix_account_closed_pnl_closed_at
-        ON account_closed_pnl(closed_at)
-        """
-    )
+CREATE TABLE account_pnl_sync (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    history_start_at TEXT NOT NULL,
+    last_synced_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-    await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS account_pnl_sync (
-            id INTEGER PRIMARY KEY
-                CHECK(id = 1),
-            history_start_at TEXT NOT NULL,
-            last_synced_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-                DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
+INSERT INTO execution_policy(
+    id,
+    trading_capital_usdt,
+    risk_per_trade_pct,
+    range_order_count
+)
+VALUES (1, '6800', '1', 3);
 
-
-async def _migrate_to_v4(
-    db: aiosqlite.Connection,
-) -> None:
-    await db.execute(
-        """
-        ALTER TABLE intents
-        ADD COLUMN approval_mode TEXT NOT NULL
-        DEFAULT 'MANUAL'
-        """
-    )
-
-    await db.execute(
-        """
-        ALTER TABLE position_actions
-        ADD COLUMN approval_mode TEXT NOT NULL
-        DEFAULT 'MANUAL'
-        """
-    )
-
-    await db.execute(
-        """
-        CREATE INDEX IF NOT EXISTS
-            ix_intents_approval_status
-        ON intents(
-            approval_mode,
-            status
-        )
-        """
-    )
-
-    await db.execute(
-        """
-        CREATE INDEX IF NOT EXISTS
-            ix_position_actions_approval_status
-        ON position_actions(
-            approval_mode,
-            status
-        )
-        """
-    )
-
-
-MIGRATIONS = {
-    1: _migrate_to_v1,
-    2: _migrate_to_v2,
-    3: _migrate_to_v3,
-    4: _migrate_to_v4,
-}
+INSERT INTO execution_exit_policy(
+    id,
+    minimum_reward_bps,
+    basic_r_multiple,
+    basic_close_pct,
+    medium_r_multiple,
+    medium_close_pct,
+    high_r_multiple,
+    high_close_pct
+)
+VALUES (1, '20', '0.5', '25', '1', '35', '2', '40');
+"""
 
 
 @dataclass(
@@ -386,39 +197,47 @@ class IntentStore:
         self._database_path = database_path
 
     async def initialize(self) -> None:
-        self._database_path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+        self._database_path.parent.mkdir(parents=True, exist_ok=True)
 
         async with aiosqlite.connect(self._database_path) as db:
             await db.execute("PRAGMA journal_mode=WAL")
 
             cursor = await db.execute("PRAGMA user_version")
             row = await cursor.fetchone()
-            current_version = int(row[0]) if row is not None else 0
+            version = int(row[0]) if row is not None else 0
 
-            if current_version > LATEST_SCHEMA_VERSION:
+            if version == LATEST_SCHEMA_VERSION:
+                return
+
+            if version != 0:
                 raise RuntimeError(
-                    "Database schema is newer than this application: "
-                    f"{current_version} > {LATEST_SCHEMA_VERSION}"
+                    "Unsupported database schema version: "
+                    f"{version}; expected 0 or {LATEST_SCHEMA_VERSION}"
                 )
 
-            for version in range(
-                current_version + 1,
-                LATEST_SCHEMA_VERSION + 1,
-            ):
-                migration = MIGRATIONS[version]
+            cursor = await db.execute(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table'
+                  AND name NOT LIKE 'sqlite_%'
+                LIMIT 1
+                """
+            )
 
-                await db.execute("BEGIN IMMEDIATE")
+            if await cursor.fetchone() is not None:
+                raise RuntimeError("Unversioned non-empty database is unsupported")
 
-                try:
-                    await migration(db)
-                    await db.execute(f"PRAGMA user_version = {version}")
-                    await db.commit()
-                except Exception:
-                    await db.rollback()
-                    raise
+            try:
+                await db.executescript(
+                    "BEGIN IMMEDIATE;\n"
+                    + LATEST_SCHEMA_SQL
+                    + f"\nPRAGMA user_version = {LATEST_SCHEMA_VERSION};\n"
+                    + "COMMIT;"
+                )
+            except Exception:
+                await db.rollback()
+                raise
 
     async def claim_source(
         self,
