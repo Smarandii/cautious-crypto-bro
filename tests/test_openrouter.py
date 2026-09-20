@@ -4,6 +4,42 @@ from cautious_crypto_bro.domain import (
     IncomingPost,
     SourceMessage,
 )
+from cautious_crypto_bro.openrouter import (
+    IntentExtractor,
+    OpenRouterProvider,
+)
+
+
+def _openrouter_extractor(
+    *,
+    api_key: str,
+    model: str,
+    base_url: str,
+    inference_timeout_seconds: float = 45,
+    max_attempts: int = 2,
+    provider_cooldown_store=None,
+    persist_provider_cooldowns: bool = True,
+    provider_cooldown_seconds: int = (12 * 60 * 60),
+    evaluation_cache=None,
+    evaluation_cache_seconds: int = (6 * 60 * 60),
+) -> IntentExtractor:
+    provider = OpenRouterProvider(
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        inference_timeout_seconds=(inference_timeout_seconds),
+        max_attempts=max_attempts,
+        provider_cooldown_store=(provider_cooldown_store),
+        persist_provider_cooldowns=(persist_provider_cooldowns),
+        provider_cooldown_seconds=(provider_cooldown_seconds),
+    )
+
+    return IntentExtractor(
+        provider=provider,
+        cache_identity=model,
+        evaluation_cache=evaluation_cache,
+        evaluation_cache_seconds=(evaluation_cache_seconds),
+    )
 
 
 def source() -> SourceMessage:
@@ -18,6 +54,63 @@ def source() -> SourceMessage:
         received_at=now,
         text="LONG BTCUSDT",
     )
+
+
+def test_intent_extractor_accepts_generic_provider() -> None:
+    import asyncio
+    import json
+
+    from cautious_crypto_bro.llm_provider import (
+        LLMResponse,
+    )
+
+    class FakeProvider:
+        def __init__(self) -> None:
+            self.request = None
+            self.closed = False
+
+        async def complete(self, request):
+            self.request = request
+
+            content = json.dumps(
+                {
+                    "actionable": False,
+                    "reason": "commentary",
+                    "intents": [],
+                }
+            )
+
+            if request.response_validator is not None:
+                request.response_validator(content)
+
+            return LLMResponse(content=content)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def run() -> None:
+        provider = FakeProvider()
+
+        extractor = IntentExtractor(
+            provider=provider,
+            cache_identity="generic/test-model",
+        )
+
+        try:
+            result = await extractor.extract(IncomingPost(source=source()))
+        finally:
+            await extractor.close()
+
+        assert not result.actionable
+
+        request = provider.request
+        assert request is not None
+        assert request.response_schema_name == ("trading_intent_extraction")
+        assert "LONG BTCUSDT" in request.user_text
+        assert request.images == ()
+        assert provider.closed
+
+    asyncio.run(run())
 
 
 def test_provider_error_inside_http_success_is_rejected() -> None:
@@ -87,10 +180,6 @@ def test_failed_provider_is_excluded_on_retry() -> None:
 
     import httpx
 
-    from cautious_crypto_bro.openrouter import (
-        OpenRouterIntentExtractor,
-    )
-
     async def run(
         persist_provider_cooldowns: bool,
     ) -> None:
@@ -144,7 +233,7 @@ def test_failed_provider_is_excluded_on_retry() -> None:
                 },
             )
 
-        extractor = OpenRouterIntentExtractor(
+        extractor = _openrouter_extractor(
             api_key="test",
             model="test/model",
             base_url=("https://openrouter.test"),
@@ -203,10 +292,6 @@ def test_invalid_structured_output_is_retried() -> None:
 
     import httpx
 
-    from cautious_crypto_bro.openrouter import (
-        OpenRouterIntentExtractor,
-    )
-
     async def run() -> None:
         store = FakeProviderCooldownStore()
         payloads = []
@@ -257,7 +342,7 @@ def test_invalid_structured_output_is_retried() -> None:
                 },
             )
 
-        extractor = OpenRouterIntentExtractor(
+        extractor = _openrouter_extractor(
             api_key="test",
             model="test/model",
             base_url="https://openrouter.test",
@@ -328,10 +413,6 @@ def test_valid_evaluation_is_reused_from_cache() -> None:
 
     import httpx
 
-    from cautious_crypto_bro.openrouter import (
-        OpenRouterIntentExtractor,
-    )
-
     async def run() -> None:
         calls = 0
         cache = FakeEvaluationCache()
@@ -365,7 +446,7 @@ def test_valid_evaluation_is_reused_from_cache() -> None:
                 },
             )
 
-        extractor = OpenRouterIntentExtractor(
+        extractor = _openrouter_extractor(
             api_key="test",
             model="test/model",
             base_url=("https://openrouter.test"),
@@ -406,10 +487,6 @@ def test_guidance_change_invalidates_evaluation_cache() -> None:
 
     import httpx
 
-    from cautious_crypto_bro.openrouter import (
-        OpenRouterIntentExtractor,
-    )
-
     async def run() -> None:
         calls = 0
         cache = FakeEvaluationCache()
@@ -443,7 +520,7 @@ def test_guidance_change_invalidates_evaluation_cache() -> None:
                 },
             )
 
-        extractor = OpenRouterIntentExtractor(
+        extractor = _openrouter_extractor(
             api_key="test",
             model="test/model",
             base_url=("https://openrouter.test"),
@@ -485,10 +562,6 @@ def test_multiple_actionable_intents_are_returned() -> None:
     import json
 
     import httpx
-
-    from cautious_crypto_bro.openrouter import (
-        OpenRouterIntentExtractor,
-    )
 
     async def run() -> None:
         response_payload = {
@@ -544,7 +617,7 @@ def test_multiple_actionable_intents_are_returned() -> None:
                 },
             )
 
-        extractor = OpenRouterIntentExtractor(
+        extractor = _openrouter_extractor(
             api_key="test",
             model="test/model",
             base_url="https://openrouter.test",
@@ -581,9 +654,6 @@ def test_position_actions_are_returned_separately() -> None:
     from cautious_crypto_bro.domain import (
         PositionActionType,
         Side,
-    )
-    from cautious_crypto_bro.openrouter import (
-        OpenRouterIntentExtractor,
     )
 
     async def run() -> None:
@@ -631,7 +701,7 @@ def test_position_actions_are_returned_separately() -> None:
                 },
             )
 
-        extractor = OpenRouterIntentExtractor(
+        extractor = _openrouter_extractor(
             api_key="test",
             model="test/model",
             base_url="https://openrouter.test",

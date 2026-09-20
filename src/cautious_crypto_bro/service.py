@@ -28,7 +28,7 @@ from .execution_coordinator import (
     ExecutionCoordinator,
 )
 from .openrouter import (
-    OpenRouterIntentExtractor,
+    IntentExtractor,
 )
 from .signal_context import (
     SignalContextProvider,
@@ -43,7 +43,7 @@ class SignalService:
         self,
         *,
         store: IntentStore,
-        extractor: OpenRouterIntentExtractor,
+        extractor: IntentExtractor,
         planner: ExecutionPlanner,
         executor: BybitDemoExecutor,
         approval_bot: ApprovalBot,

@@ -29,7 +29,8 @@ from cautious_crypto_bro.domain import (
 )
 from cautious_crypto_bro.openrouter import (
     SYSTEM_PROMPT,
-    OpenRouterIntentExtractor,
+    IntentExtractor,
+    OpenRouterProvider,
     _evaluation_fingerprint,
     _signals_from_extraction,
 )
@@ -380,7 +381,7 @@ async def read_evaluation(
     position_context: SignalPositionContext,
     model: str,
     runtime_store: RedisRuntimeStore,
-    extractor: OpenRouterIntentExtractor,
+    extractor: IntentExtractor,
     cache_only: bool,
     fresh: bool,
 ) -> tuple[
@@ -562,7 +563,7 @@ async def main() -> int:
         api_secret=settings.bybit_api_secret,
     )
 
-    extractor = OpenRouterIntentExtractor(
+    provider = OpenRouterProvider(
         api_key=(settings.openrouter_api_key),
         model=(settings.openrouter_model),
         base_url=(settings.openrouter_base_url),
@@ -571,7 +572,12 @@ async def main() -> int:
         provider_cooldown_store=runtime_store,
         persist_provider_cooldowns=False,
         provider_cooldown_seconds=(settings.openrouter_provider_cooldown_hours * 3600),
-        evaluation_cache=(runtime_store),
+    )
+
+    extractor = IntentExtractor(
+        provider=provider,
+        cache_identity=settings.openrouter_model,
+        evaluation_cache=runtime_store,
         evaluation_cache_seconds=(settings.openrouter_evaluation_cache_hours * 3600),
     )
 

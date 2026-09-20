@@ -16,7 +16,8 @@ from cautious_crypto_bro.domain import (
     SourceMessage,
 )
 from cautious_crypto_bro.openrouter import (
-    OpenRouterIntentExtractor,
+    IntentExtractor,
+    OpenRouterProvider,
 )
 from cautious_crypto_bro.storage import (
     IntentStore,
@@ -98,12 +99,17 @@ async def main() -> None:
         ),
     )
 
-    extractor = OpenRouterIntentExtractor(
+    provider = OpenRouterProvider(
         api_key=settings.openrouter_api_key,
         model=settings.openrouter_model,
         base_url=settings.openrouter_base_url,
         inference_timeout_seconds=(settings.openrouter_inference_timeout_seconds),
         max_attempts=(settings.openrouter_inference_max_attempts),
+    )
+
+    extractor = IntentExtractor(
+        provider=provider,
+        cache_identity=settings.openrouter_model,
     )
 
     try:

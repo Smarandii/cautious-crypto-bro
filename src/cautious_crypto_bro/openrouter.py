@@ -29,6 +29,7 @@ from .domain import (
 )
 from .llm_provider import (
     LLMImage,
+    LLMProvider,
     LLMRequest,
     LLMResponse,
     LLMResponseValidationError,
@@ -1436,38 +1437,27 @@ def _validate_intent_extraction_response(
         raise LLMResponseValidationError(str(exc)) from exc
 
 
-class OpenRouterIntentExtractor:
+class IntentExtractor:
     def __init__(
         self,
         *,
-        api_key: str,
-        model: str,
-        base_url: str,
-        inference_timeout_seconds: float = 45,
-        max_attempts: int = 2,
-        provider_cooldown_store: ProviderCooldownStore | None = None,
-        persist_provider_cooldowns: bool = True,
-        provider_cooldown_seconds: int = (12 * 60 * 60),
+        provider: LLMProvider,
+        cache_identity: str,
         evaluation_cache: OpenRouterEvaluationCache | None = None,
         evaluation_cache_seconds: int = (6 * 60 * 60),
     ) -> None:
         if evaluation_cache_seconds <= 0:
             raise ValueError("evaluation_cache_seconds must be positive")
 
-        self._model = model
+        cache_identity = cache_identity.strip()
+
+        if not cache_identity:
+            raise ValueError("cache_identity must not be empty")
+
+        self._provider = provider
+        self._cache_identity = cache_identity
         self._evaluation_cache = evaluation_cache
         self._evaluation_cache_seconds = evaluation_cache_seconds
-
-        self._provider = OpenRouterProvider(
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-            inference_timeout_seconds=(inference_timeout_seconds),
-            max_attempts=max_attempts,
-            provider_cooldown_store=(provider_cooldown_store),
-            persist_provider_cooldowns=(persist_provider_cooldowns),
-            provider_cooldown_seconds=(provider_cooldown_seconds),
-        )
 
     async def close(self) -> None:
         await self._provider.close()
@@ -1526,7 +1516,7 @@ class OpenRouterIntentExtractor:
 
         evaluation_fingerprint = _evaluation_fingerprint(
             post,
-            model=self._model,
+            model=self._cache_identity,
             global_guidance=(global_guidance),
             channel_guidance=(channel_guidance),
             position_context=position_context,

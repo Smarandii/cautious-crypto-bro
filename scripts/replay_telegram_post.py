@@ -14,7 +14,8 @@ from cautious_crypto_bro.execution import (
     ExecutionPlanner,
 )
 from cautious_crypto_bro.openrouter import (
-    OpenRouterIntentExtractor,
+    IntentExtractor,
+    OpenRouterProvider,
 )
 from cautious_crypto_bro.runtime_store import (
     RedisRuntimeStore,
@@ -102,7 +103,7 @@ async def main() -> int:
         f"{'yes' if channel_guidance else 'no'}"
     )
 
-    extractor = OpenRouterIntentExtractor(
+    provider = OpenRouterProvider(
         api_key=(settings.openrouter_api_key),
         model=(settings.openrouter_model),
         base_url=(settings.openrouter_base_url),
@@ -113,7 +114,12 @@ async def main() -> int:
         provider_cooldown_seconds=(
             settings.openrouter_provider_cooldown_hours * 60 * 60
         ),
-        evaluation_cache=(runtime_store),
+    )
+
+    extractor = IntentExtractor(
+        provider=provider,
+        cache_identity=settings.openrouter_model,
+        evaluation_cache=runtime_store,
         evaluation_cache_seconds=(settings.openrouter_evaluation_cache_hours * 60 * 60),
     )
 
