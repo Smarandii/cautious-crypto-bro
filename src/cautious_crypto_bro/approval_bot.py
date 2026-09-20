@@ -320,11 +320,9 @@ class ApprovalBot:
                 "</code>"
             )
 
-        await self._edit_card(
+        await self._edit_message(
             callback,
-            outcome.intent,
-            outcome.plan,
-            suffix,
+            self._render(outcome.intent, outcome.plan) + suffix,
         )
 
     async def _execute_position_action(
@@ -354,10 +352,9 @@ class ApprovalBot:
 
         suffix = self._render_action_outcome(outcome)
 
-        await self._edit_position_action_card(
+        await self._edit_message(
             callback,
-            outcome.action,
-            suffix,
+            self._render_position_action(outcome.action) + suffix,
         )
 
     async def _skip_position_action(
@@ -393,10 +390,9 @@ class ApprovalBot:
 
         await callback.answer("Skipped")
 
-        await self._edit_position_action_card(
+        await self._edit_message(
             callback,
-            action,
-            "\n\n<b>SKIPPED</b>",
+            self._render_position_action(action) + "\n\n<b>SKIPPED</b>",
         )
 
     async def _skip(
@@ -439,11 +435,9 @@ class ApprovalBot:
 
         await callback.answer("Skipped")
 
-        await self._edit_card(
+        await self._edit_message(
             callback,
-            intent,
-            plan,
-            "\n\n<b>SKIPPED</b>",
+            self._render(intent, plan) + "\n\n<b>SKIPPED</b>",
         )
 
     async def send_auto_intent_outcome(
@@ -597,41 +591,16 @@ class ApprovalBot:
 
         return suffix
 
-    async def _edit_card(
+    async def _edit_message(
         self,
         callback: CallbackQuery,
-        intent: TradingIntent,
-        plan: ExecutionPlan,
-        suffix: str,
+        text: str,
     ) -> None:
         message = callback.message
 
         if isinstance(message, Message):
             await message.edit_text(
-                self._render(
-                    intent,
-                    plan,
-                )
-                + suffix,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-                reply_markup=None,
-            )
-
-    async def _edit_position_action_card(
-        self,
-        callback: CallbackQuery,
-        action: PositionActionIntent,
-        suffix: str,
-    ) -> None:
-        message = callback.message
-
-        if isinstance(message, Message):
-            await message.edit_text(
-                self._render_position_action(
-                    action,
-                )
-                + suffix,
+                text,
                 parse_mode="HTML",
                 disable_web_page_preview=True,
                 reply_markup=None,
