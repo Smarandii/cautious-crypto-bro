@@ -91,7 +91,9 @@ def test_failed_provider_is_excluded_on_retry() -> None:
         OpenRouterIntentExtractor,
     )
 
-    async def run() -> None:
+    async def run(
+        persist_provider_cooldowns: bool,
+    ) -> None:
         store = FakeProviderCooldownStore()
 
         payloads = []
@@ -149,6 +151,7 @@ def test_failed_provider_is_excluded_on_retry() -> None:
             inference_timeout_seconds=5,
             max_attempts=2,
             provider_cooldown_store=store,
+            persist_provider_cooldowns=persist_provider_cooldowns,
             provider_cooldown_seconds=(12 * 60 * 60),
         )
 
@@ -179,11 +182,19 @@ def test_failed_provider_is_excluded_on_retry() -> None:
             "venice",
         } <= second_ignore
 
-        assert store.recorded[0][0] == "venice"
+        if persist_provider_cooldowns:
+            assert store.recorded == [
+                (
+                    "venice",
+                    store.recorded[0][1],
+                    12 * 60 * 60,
+                )
+            ]
+        else:
+            assert store.recorded == []
 
-        assert store.recorded[0][2] == 12 * 60 * 60
-
-    asyncio.run(run())
+    asyncio.run(run(True))
+    asyncio.run(run(False))
 
 
 class FakeEvaluationCache:

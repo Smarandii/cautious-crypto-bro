@@ -1120,6 +1120,7 @@ class OpenRouterIntentExtractor:
         inference_timeout_seconds: float = 45,
         max_attempts: int = 2,
         provider_cooldown_store: (ProviderCooldownStore | None) = None,
+        persist_provider_cooldowns: bool = True,
         provider_cooldown_seconds: int = (12 * 60 * 60),
         evaluation_cache: (OpenRouterEvaluationCache | None) = None,
         evaluation_cache_seconds: int = (6 * 60 * 60),
@@ -1134,6 +1135,7 @@ class OpenRouterIntentExtractor:
         self._inference_timeout_seconds = inference_timeout_seconds
         self._max_attempts = max_attempts
         self._provider_cooldown_store = provider_cooldown_store
+        self._persist_provider_cooldowns = persist_provider_cooldowns
         self._provider_cooldown_seconds = provider_cooldown_seconds
         self._evaluation_cache = evaluation_cache
         self._evaluation_cache_seconds = evaluation_cache_seconds
@@ -1178,7 +1180,10 @@ class OpenRouterIntentExtractor:
         # even if Redis temporarily fails.
         ignored_providers.add(provider)
 
-        if self._provider_cooldown_store is None:
+        if (
+            self._provider_cooldown_store is None
+            or not self._persist_provider_cooldowns
+        ):
             return
 
         try:
