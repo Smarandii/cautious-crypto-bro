@@ -1343,50 +1343,58 @@ class BybitDemoExecutor:
 
         return str(_wall_clock_ms() + self._clock_offset_ms)
 
-    def _private_get(
+    def _private_request(
         self,
+        method: str,
         path: str,
-        params: dict[
-            str,
-            object,
-        ],
+        payload: dict[str, object],
     ) -> dict:
-        query_string = urlencode(
-            [
-                (
-                    key,
-                    str(value),
-                )
-                for key, value in params.items()
-            ]
-        )
+        if method == "GET":
+            encoded_payload = urlencode(
+                [(key, str(value)) for key, value in payload.items()]
+            )
+        elif method == "POST":
+            encoded_payload = json.dumps(
+                payload,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        else:
+            raise ValueError(f"Unsupported private Bybit HTTP method: {method}")
 
         for attempt in range(2):
             timestamp = self._auth_timestamp()
-
-            payload = timestamp + self._api_key + str(RECV_WINDOW_MS) + query_string
-
+            signature_payload = (
+                timestamp + self._api_key + str(RECV_WINDOW_MS) + encoded_payload
+            )
             signature = hmac.new(
                 self._api_secret.encode(),
-                payload.encode(),
+                signature_payload.encode(),
                 hashlib.sha256,
             ).hexdigest()
 
             headers = {
-                "X-BAPI-API-KEY": (self._api_key),
-                "X-BAPI-TIMESTAMP": (timestamp),
-                "X-BAPI-RECV-WINDOW": (str(RECV_WINDOW_MS)),
-                "X-BAPI-SIGN": (signature),
+                "X-BAPI-API-KEY": self._api_key,
+                "X-BAPI-TIMESTAMP": timestamp,
+                "X-BAPI-RECV-WINDOW": str(RECV_WINDOW_MS),
+                "X-BAPI-SIGN": signature,
             }
 
             try:
-                response = self._client.get(
-                    (f"{path}?{query_string}"),
-                    headers=headers,
-                )
+                if method == "GET":
+                    response = self._client.get(
+                        f"{path}?{encoded_payload}",
+                        headers=headers,
+                    )
+                else:
+                    headers["Content-Type"] = "application/json"
+                    response = self._client.post(
+                        path,
+                        content=encoded_payload,
+                        headers=headers,
+                    )
 
                 response.raise_for_status()
-
             except httpx.HTTPError as exc:
                 raise TradeExecutionError(f"Bybit HTTP request failed: {exc}") from exc
 
@@ -1400,7 +1408,6 @@ class BybitDemoExecutor:
                 logger.warning(
                     "Bybit rejected request timestamp; re-synchronizing clock"
                 )
-
                 self._sync_clock(force=True)
                 continue
 
@@ -1409,75 +1416,20 @@ class BybitDemoExecutor:
             )
 
         raise TradeExecutionError("Bybit request failed after clock re-sync")
+
+    def _private_get(
+        self,
+        path: str,
+        params: dict[str, object],
+    ) -> dict:
+        return self._private_request("GET", path, params)
 
     def _private_post(
         self,
         path: str,
-        body: dict[
-            str,
-            object,
-        ],
+        body: dict[str, object],
     ) -> dict:
-        body_json = json.dumps(
-            body,
-            separators=(
-                ",",
-                ":",
-            ),
-            ensure_ascii=False,
-        )
-
-        for attempt in range(2):
-            timestamp = self._auth_timestamp()
-
-            payload = timestamp + self._api_key + str(RECV_WINDOW_MS) + body_json
-
-            signature = hmac.new(
-                self._api_secret.encode(),
-                payload.encode(),
-                hashlib.sha256,
-            ).hexdigest()
-
-            headers = {
-                "X-BAPI-API-KEY": (self._api_key),
-                "X-BAPI-TIMESTAMP": (timestamp),
-                "X-BAPI-RECV-WINDOW": (str(RECV_WINDOW_MS)),
-                "X-BAPI-SIGN": (signature),
-                "Content-Type": ("application/json"),
-            }
-
-            try:
-                response = self._client.post(
-                    path,
-                    content=body_json,
-                    headers=headers,
-                )
-
-                response.raise_for_status()
-
-            except httpx.HTTPError as exc:
-                raise TradeExecutionError(f"Bybit HTTP request failed: {exc}") from exc
-
-            data = response.json()
-            code = data.get("retCode")
-
-            if str(code) == "0":
-                return data
-
-            if str(code) == "10002" and attempt == 0:
-                logger.warning(
-                    "Bybit rejected request timestamp; re-synchronizing clock"
-                )
-
-                self._sync_clock(force=True)
-
-                continue
-
-            raise TradeExecutionError(
-                f"Bybit rejected request: {code} {data.get('retMsg')}"
-            )
-
-        raise TradeExecutionError("Bybit request failed after clock re-sync")
+        return self._private_request("POST", path, body)
 
     def _public_get(
         self,
