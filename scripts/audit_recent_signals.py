@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import hashlib
 import json
 import logging
@@ -432,218 +431,6 @@ async def read_evaluation(
     )
 
 
-def markdown_block(
-    text: str,
-) -> str:
-    if not text:
-        return "    (none)"
-
-    return "\n".join(("    " + line if line else "    ") for line in text.splitlines())
-
-
-def write_report(
-    *,
-    output_path: Path,
-    generated_at: datetime,
-    cutoff: datetime,
-    model: str,
-    records: list[dict[str, Any]],
-    global_guidance: str | None,
-    channel_guidance: dict[
-        str,
-        str | None,
-    ],
-) -> None:
-    counts = Counter(record["category"] for record in records)
-
-    lines = [
-        "# Recent signal audit",
-        "",
-        (f"Generated: {generated_at.isoformat()}"),
-        (f"Window start: {cutoff.isoformat()}"),
-        (f"Model: `{model}`"),
-        (f"Total Telegram posts: {len(records)}"),
-        "",
-        "## Summary",
-        "",
-        "| Category | Count |",
-        "| --- | ---: |",
-    ]
-
-    for category in CATEGORY_ORDER:
-        lines.append(f"| {category} | {counts.get(category, 0)} |")
-
-    lines.extend(
-        [
-            "",
-            "## Prompt and guidance",
-            "",
-            "### System prompt",
-            "",
-            markdown_block(SYSTEM_PROMPT),
-            "",
-            "### Global guidance",
-            "",
-            markdown_block(global_guidance or ""),
-            "",
-            "### Channel guidance",
-            "",
-        ]
-    )
-
-    for channel, guidance in channel_guidance.items():
-        lines.extend(
-            [
-                f"#### {channel}",
-                "",
-                markdown_block(guidance or ""),
-                "",
-            ]
-        )
-
-    for category in CATEGORY_ORDER:
-        category_records = [
-            record for record in records if (record["category"] == category)
-        ]
-
-        category_records.sort(
-            key=lambda record: record["published_at"],
-            reverse=True,
-        )
-
-        lines.extend(
-            [
-                "",
-                f"## {category}",
-                "",
-            ]
-        )
-
-        if not category_records:
-            lines.append("(none)")
-            continue
-
-        for record in category_records:
-            lines.extend(
-                [
-                    (f"### {record['channel_title']} — {record['message_id']}"),
-                    "",
-                    (f"- Published: `{record['published_at']}`"),
-                    (f"- URL: {record['url']}"),
-                    (f"- Telegram messages: {record['message_ids']}"),
-                    (f"- Decision source: `{record['decision_source']}`"),
-                    (
-                        f"- Production source state: "
-                        f"`{record['app_state']['source_processing']}`"
-                    ),
-                    (
-                        f"- Persisted intents: "
-                        f"{len(record['app_state']['persisted_intents'])}"
-                    ),
-                    "",
-                    "**Raw post text/caption**",
-                    "",
-                    markdown_block(record["raw_text"]),
-                    "",
-                    "**Media seen in Telegram**",
-                    "",
-                ]
-            )
-
-            for media in record["raw_media"]:
-                lines.append(
-                    "- "
-                    f"message={media['message_id']} "
-                    f"kind={media['kind']} "
-                    f"mime={media['mime_type']}"
-                )
-
-            images = record.get(
-                "images",
-                [],
-            )
-
-            if images:
-                lines.extend(
-                    [
-                        "",
-                        "**Images supplied to Gemma**",
-                        "",
-                    ]
-                )
-
-                for image in images:
-                    lines.append(f"![{image['filename']}](images/{image['filename']})")
-
-            lines.extend(
-                [
-                    "",
-                    "**Gemma decision**",
-                    "",
-                ]
-            )
-
-            evaluation = record.get("evaluation")
-
-            if evaluation is not None:
-                lines.extend(
-                    [
-                        (f"- actionable: `{evaluation['actionable']}`"),
-                        (f"- reason: {evaluation.get('reason')}"),
-                    ]
-                )
-
-                if evaluation.get("intents"):
-                    lines.extend(
-                        [
-                            "",
-                            "**Extracted intents**",
-                            "",
-                            "```json",
-                            json.dumps(
-                                evaluation["intents"],
-                                ensure_ascii=False,
-                                indent=2,
-                            ),
-                            "```",
-                        ]
-                    )
-
-                if evaluation.get("position_actions"):
-                    lines.extend(
-                        [
-                            "",
-                            "**Position actions**",
-                            "",
-                            "```json",
-                            json.dumps(
-                                evaluation["position_actions"],
-                                ensure_ascii=False,
-                                indent=2,
-                            ),
-                            "```",
-                        ]
-                    )
-            else:
-                lines.append("- No validated OpenRouter evaluation")
-
-                if record.get("evaluation_error"):
-                    lines.append(f"- Error: {record['evaluation_error']}")
-
-            lines.extend(
-                [
-                    "",
-                    "---",
-                    "",
-                ]
-            )
-
-    output_path.write_text(
-        "\n".join(lines),
-        encoding="utf-8",
-    )
-
-
 async def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -904,10 +691,7 @@ async def main() -> int:
                                 {
                                     "filename": (filename),
                                     "media_type": (image.media_type),
-                                    "sha256": (hashlib.sha256(image.data).hexdigest()),
-                                    "base64": (
-                                        base64.b64encode(image.data).decode("ascii")
-                                    ),
+                                    "sha256": hashlib.sha256(image.data).hexdigest(),
                                 }
                             )
 
@@ -971,19 +755,7 @@ async def main() -> int:
 
     records.sort(key=lambda record: record["published_at"])
 
-    report_path = output_dir / "report.md"
-
     bundle_path = output_dir / "audit_bundle.json"
-
-    write_report(
-        output_path=report_path,
-        generated_at=generated_at,
-        cutoff=cutoff,
-        model=(settings.openrouter_model),
-        records=records,
-        global_guidance=(global_guidance_report),
-        channel_guidance=(channel_guidance_report),
-    )
 
     bundle = {
         "generated_at": (generated_at.isoformat()),
@@ -1016,9 +788,8 @@ async def main() -> int:
         print(f"{category}: {counts.get(category, 0)}")
 
     print()
-    print(f"Markdown: {report_path}")
-    print(f"Bundle:   {bundle_path}")
-    print(f"Images:   {images_dir}")
+    print(f"Bundle: {bundle_path}")
+    print(f"Images: {images_dir}")
 
     fresh_count = sum(1 for record in records if (record["decision_source"] == "fresh"))
 
