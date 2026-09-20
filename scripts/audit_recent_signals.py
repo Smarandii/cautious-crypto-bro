@@ -37,7 +37,7 @@ from cautious_crypto_bro.runtime_store import (
     RedisRuntimeStore,
 )
 from cautious_crypto_bro.signal_context import (
-    SignalContextProvider,
+    build_position_context,
 )
 from cautious_crypto_bro.storage import (
     IntentStore,
@@ -334,6 +334,44 @@ async def current_app_state(
     return result
 
 
+async def historical_position_context(
+    *,
+    store: IntentStore,
+    executor: BybitDemoExecutor,
+    channel_id: int,
+    published_at: datetime,
+) -> tuple[SignalPositionContext, str | None]:
+    source_intents = tuple(
+        intent
+        for intent in await store.get_recent_source_intents(channel_id)
+        if intent.created_at < published_at
+    )
+
+    executed_closes = tuple(
+        action
+        for action in await store.get_recent_executed_closes()
+        if action.created_at < published_at
+    )
+
+    account_state = None
+    account_state_error = None
+
+    try:
+        account_state = await executor.account_state()
+    except Exception as exc:
+        account_state_error = f"{type(exc).__name__}: {exc}"
+
+    return (
+        build_position_context(
+            channel_id=channel_id,
+            source_intents=source_intents,
+            executed_closes=executed_closes,
+            account_state=account_state,
+        ),
+        account_state_error,
+    )
+
+
 async def read_evaluation(
     *,
     post: Any,
@@ -524,11 +562,6 @@ async def main() -> int:
         api_secret=settings.bybit_api_secret,
     )
 
-    context_provider = SignalContextProvider(
-        store=store,
-        executor=executor,
-    )
-
     extractor = OpenRouterIntentExtractor(
         api_key=(settings.openrouter_api_key),
         model=(settings.openrouter_model),
@@ -716,8 +749,14 @@ async def main() -> int:
                             )
 
                         try:
-                            context_snapshot = await context_provider.snapshot(
-                                channel_id
+                            (
+                                position_context,
+                                account_state_error,
+                            ) = await historical_position_context(
+                                store=store,
+                                executor=executor,
+                                channel_id=channel_id,
+                                published_at=post.source.published_at,
                             )
                         except Exception as exc:
                             record["category"] = "EVALUATION_ERROR"
@@ -729,11 +768,9 @@ async def main() -> int:
                             continue
 
                         record["position_context"] = json.loads(
-                            context_snapshot.position_context.model_dump_json()
+                            position_context.model_dump_json()
                         )
-                        record["account_state_error"] = (
-                            context_snapshot.account_state_error
-                        )
+                        record["account_state_error"] = account_state_error
 
                         (
                             extraction,
@@ -743,7 +780,7 @@ async def main() -> int:
                             post=post,
                             global_guidance=(global_guidance),
                             channel_guidance=(channel_guidance),
-                            position_context=context_snapshot.position_context,
+                            position_context=position_context,
                             model=(settings.openrouter_model),
                             runtime_store=(runtime_store),
                             extractor=(extractor),
