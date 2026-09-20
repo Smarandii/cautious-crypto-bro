@@ -10,9 +10,8 @@ from .execution import ExecutionPlanner
 from .execution_coordinator import (
     ExecutionCoordinator,
 )
-from .openrouter import (
-    IntentExtractor,
-    OpenRouterProvider,
+from .llm_factory import (
+    build_intent_extractor,
 )
 from .runtime_store import (
     RedisRuntimeStore,
@@ -49,23 +48,10 @@ async def async_main() -> None:
     )
     await runtime_store.initialize()
 
-    provider = OpenRouterProvider(
-        api_key=(settings.openrouter_api_key),
-        model=(settings.openrouter_model),
-        base_url=(settings.openrouter_base_url),
-        inference_timeout_seconds=(settings.openrouter_inference_timeout_seconds),
-        max_attempts=(settings.openrouter_inference_max_attempts),
-        provider_cooldown_store=runtime_store,
-        provider_cooldown_seconds=(
-            settings.openrouter_provider_cooldown_hours * 60 * 60
-        ),
-    )
-
-    extractor = IntentExtractor(
-        provider=provider,
-        cache_identity=settings.openrouter_model,
+    extractor = build_intent_extractor(
+        settings,
         evaluation_cache=runtime_store,
-        evaluation_cache_seconds=(settings.openrouter_evaluation_cache_hours * 60 * 60),
+        provider_cooldown_store=runtime_store,
     )
 
     planner = ExecutionPlanner()

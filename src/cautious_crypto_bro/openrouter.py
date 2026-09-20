@@ -1459,6 +1459,10 @@ class IntentExtractor:
         self._evaluation_cache = evaluation_cache
         self._evaluation_cache_seconds = evaluation_cache_seconds
 
+    @property
+    def cache_identity(self) -> str:
+        return self._cache_identity
+
     async def close(self) -> None:
         await self._provider.close()
 

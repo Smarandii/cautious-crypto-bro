@@ -13,9 +13,8 @@ from cautious_crypto_bro.config import (
 from cautious_crypto_bro.execution import (
     ExecutionPlanner,
 )
-from cautious_crypto_bro.openrouter import (
-    IntentExtractor,
-    OpenRouterProvider,
+from cautious_crypto_bro.llm_factory import (
+    build_intent_extractor,
 )
 from cautious_crypto_bro.runtime_store import (
     RedisRuntimeStore,
@@ -50,7 +49,7 @@ async def main() -> int:
     parser.add_argument(
         "--intent-only",
         action="store_true",
-        help=("Stop after OpenRouter extraction; do not build an execution plan."),
+        help=("Stop after LLM extraction; do not build an execution plan."),
     )
 
     args = parser.parse_args()
@@ -103,24 +102,11 @@ async def main() -> int:
         f"{'yes' if channel_guidance else 'no'}"
     )
 
-    provider = OpenRouterProvider(
-        api_key=(settings.openrouter_api_key),
-        model=(settings.openrouter_model),
-        base_url=(settings.openrouter_base_url),
-        inference_timeout_seconds=(settings.openrouter_inference_timeout_seconds),
-        max_attempts=(settings.openrouter_inference_max_attempts),
+    extractor = build_intent_extractor(
+        settings,
+        evaluation_cache=runtime_store,
         provider_cooldown_store=runtime_store,
         persist_provider_cooldowns=False,
-        provider_cooldown_seconds=(
-            settings.openrouter_provider_cooldown_hours * 60 * 60
-        ),
-    )
-
-    extractor = IntentExtractor(
-        provider=provider,
-        cache_identity=settings.openrouter_model,
-        evaluation_cache=runtime_store,
-        evaluation_cache_seconds=(settings.openrouter_evaluation_cache_hours * 60 * 60),
     )
 
     try:

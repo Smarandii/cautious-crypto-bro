@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .domain import AutoApprovalMode
@@ -30,7 +31,22 @@ class Settings(BaseSettings):
     telegram_approver_user_id: int
     telegram_approval_chat_id: int
 
-    openrouter_api_key: str
+    llm_provider: Literal[
+        "openrouter",
+        "opencode_go",
+    ] = "openrouter"
+
+    llm_evaluation_cache_hours: int = Field(
+        default=6,
+        ge=1,
+        le=168,
+        validation_alias=AliasChoices(
+            "LLM_EVALUATION_CACHE_HOURS",
+            "OPENROUTER_EVALUATION_CACHE_HOURS",
+        ),
+    )
+
+    openrouter_api_key: str | None = None
     openrouter_model: str = "google/gemma-4-26b-a4b-it"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_inference_timeout_seconds: float = Field(
@@ -48,10 +64,19 @@ class Settings(BaseSettings):
         ge=1,
         le=168,
     )
-    openrouter_evaluation_cache_hours: int = Field(
-        default=6,
+
+    opencode_go_api_key: str | None = None
+    opencode_go_model: str = "gpt-5.6-luna"
+    opencode_go_base_url: str = "https://opencode.ai/zen/go/v1"
+    opencode_go_inference_timeout_seconds: float = Field(
+        default=60,
+        ge=5,
+        le=120,
+    )
+    opencode_go_inference_max_attempts: int = Field(
+        default=3,
         ge=1,
-        le=168,
+        le=3,
     )
 
     redis_url: str = "redis://redis:6379/0"

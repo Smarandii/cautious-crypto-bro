@@ -27,10 +27,12 @@ from cautious_crypto_bro.domain import (
     IntentExtraction,
     SignalPositionContext,
 )
+from cautious_crypto_bro.llm_factory import (
+    build_intent_extractor,
+)
 from cautious_crypto_bro.openrouter import (
     SYSTEM_PROMPT,
     IntentExtractor,
-    OpenRouterProvider,
     _evaluation_fingerprint,
     _signals_from_extraction,
 )
@@ -379,7 +381,6 @@ async def read_evaluation(
     global_guidance: str | None,
     channel_guidance: str | None,
     position_context: SignalPositionContext,
-    model: str,
     runtime_store: RedisRuntimeStore,
     extractor: IntentExtractor,
     cache_only: bool,
@@ -391,7 +392,7 @@ async def read_evaluation(
 ]:
     fingerprint = _evaluation_fingerprint(
         post,
-        model=model,
+        model=extractor.cache_identity,
         global_guidance=global_guidance,
         channel_guidance=channel_guidance,
         position_context=position_context,
@@ -482,7 +483,7 @@ async def read_evaluation(
 async def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Audit recent Telegram posts against current OpenRouter signal decisions."
+            "Audit recent Telegram posts against current LLM signal decisions."
         )
     )
 
@@ -501,14 +502,14 @@ async def main() -> int:
     parser.add_argument(
         "--cache-only",
         action="store_true",
-        help=("Do not call OpenRouter for cache misses."),
+        help=("Do not call the LLM provider for cache misses."),
     )
 
     parser.add_argument(
         "--fresh",
         action="store_true",
         help=(
-            "Ignore matching OpenRouter "
+            "Ignore matching "
             "evaluation-cache reads and "
             "re-evaluate every supported post."
         ),
@@ -563,22 +564,11 @@ async def main() -> int:
         api_secret=settings.bybit_api_secret,
     )
 
-    provider = OpenRouterProvider(
-        api_key=(settings.openrouter_api_key),
-        model=(settings.openrouter_model),
-        base_url=(settings.openrouter_base_url),
-        inference_timeout_seconds=(settings.openrouter_inference_timeout_seconds),
-        max_attempts=(settings.openrouter_inference_max_attempts),
+    extractor = build_intent_extractor(
+        settings,
+        evaluation_cache=runtime_store,
         provider_cooldown_store=runtime_store,
         persist_provider_cooldowns=False,
-        provider_cooldown_seconds=(settings.openrouter_provider_cooldown_hours * 3600),
-    )
-
-    extractor = IntentExtractor(
-        provider=provider,
-        cache_identity=settings.openrouter_model,
-        evaluation_cache=runtime_store,
-        evaluation_cache_seconds=(settings.openrouter_evaluation_cache_hours * 3600),
     )
 
     records: list[dict[str, Any]] = []
@@ -787,7 +777,6 @@ async def main() -> int:
                             global_guidance=(global_guidance),
                             channel_guidance=(channel_guidance),
                             position_context=position_context,
-                            model=(settings.openrouter_model),
                             runtime_store=(runtime_store),
                             extractor=(extractor),
                             cache_only=(args.cache_only),
@@ -847,7 +836,8 @@ async def main() -> int:
         "cutoff": (cutoff.isoformat()),
         "hours": args.hours,
         "fresh": args.fresh,
-        "model": (settings.openrouter_model),
+        "provider": settings.llm_provider,
+        "model": extractor.cache_identity,
         "system_prompt": (SYSTEM_PROMPT),
         "global_guidance": (global_guidance_report),
         "channel_guidance": (channel_guidance_report),
@@ -882,7 +872,7 @@ async def main() -> int:
 
     print()
     print(f"Cached decisions reused: {cache_count}")
-    print(f"Fresh OpenRouter calls: {fresh_count}")
+    print(f"Fresh LLM calls: {fresh_count}")
 
     return 0
 
