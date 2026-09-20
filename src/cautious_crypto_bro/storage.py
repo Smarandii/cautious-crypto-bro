@@ -652,30 +652,6 @@ class IntentStore:
             ),
         )
 
-    async def create_position_action(
-        self,
-        action: PositionActionIntent,
-    ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
-            await self._insert_position_action(
-                db,
-                action,
-            )
-            await db.commit()
-
-    async def create_intent_with_plan(
-        self,
-        intent: TradingIntent,
-        plan: ExecutionPlan,
-    ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
-            await self._insert_intent_with_plan(
-                db,
-                intent,
-                plan,
-            )
-            await db.commit()
-
     async def create_signal_batch_and_complete_source(
         self,
         items: Sequence[

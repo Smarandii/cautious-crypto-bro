@@ -300,15 +300,6 @@ class BybitDemoExecutor:
             action,
         )
 
-    async def cancel_all_orders(
-        self,
-        symbol: str,
-    ) -> int:
-        return await asyncio.to_thread(
-            self._cancel_all_orders_sync,
-            symbol,
-        )
-
     def close(self) -> None:
         self._client.close()
 
@@ -937,22 +928,6 @@ class BybitDemoExecutor:
             )
 
         return len(cancelled)
-
-    def _cancel_all_orders_sync(
-        self,
-        symbol: str,
-    ) -> int:
-        self._sync_clock()
-
-        response = self._private_post(
-            "/v5/order/cancel-all",
-            {
-                "category": "linear",
-                "symbol": symbol,
-            },
-        )
-
-        return len(response.get("result", {}).get("list", []))
 
     def _market_context_sync(
         self,

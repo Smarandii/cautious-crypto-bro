@@ -4,9 +4,6 @@ import argparse
 import asyncio
 import logging
 
-from cautious_crypto_bro.approval_bot import (
-    ApprovalBot,
-)
 from cautious_crypto_bro.bybit import (
     BybitDemoExecutor,
 )
@@ -56,20 +53,7 @@ async def main() -> int:
         help=("Stop after OpenRouter extraction; do not build an execution plan."),
     )
 
-    parser.add_argument(
-        "--send-approval",
-        action="store_true",
-        help=(
-            "Persist the replayed intent/plan "
-            "and send the normal Telegram "
-            "approval card."
-        ),
-    )
-
     args = parser.parse_args()
-
-    if args.intent_only and args.send_approval:
-        parser.error("--send-approval requires an execution plan")
 
     settings = get_settings()
 
@@ -183,21 +167,8 @@ async def main() -> int:
         api_secret=settings.bybit_api_secret,
     )
 
-    bot = None
-
-    if args.send_approval:
-        bot = ApprovalBot(
-            token=settings.telegram_bot_token,
-            approval_chat_id=settings.telegram_approval_chat_id,
-            approver_user_id=settings.telegram_approver_user_id,
-            max_age_seconds=settings.intent_max_age_seconds,
-            store=store,
-            executor=executor,
-        )
-
     planner = ExecutionPlanner()
     planning_failures = 0
-    approvals_sent = 0
 
     try:
         for index, intent in enumerate(
@@ -228,70 +199,18 @@ async def main() -> int:
             print(f"=== EXECUTION PLAN {index} ({intent.symbol}) ===")
             print(plan.model_dump_json(indent=2))
 
-            if not args.send_approval:
-                continue
-
-            await store.create_intent_with_plan(
-                intent,
-                plan,
-            )
-
-            assert bot is not None
-
-            await bot.send_intent(
-                intent,
-                plan,
-                send_account_state=(approvals_sent == 0),
-            )
-
-            approvals_sent += 1
-
         for action in signals.position_actions:
             print()
             print(f"=== POSITION ACTION {action.symbol} ===")
             print(action.model_dump_json(indent=2))
 
-            if not args.send_approval:
-                continue
-
-            await store.create_position_action(action)
-
-            assert bot is not None
-
-            try:
-                account_state = await executor.account_state()
-                account_state_error = None
-            except Exception as exc:
-                account_state = None
-                account_state_error = f"{type(exc).__name__}: {exc}"
-
-            await bot.send_position_action(
-                action,
-                account_state=account_state,
-                account_state_error=(account_state_error),
-                send_account_state=(approvals_sent == 0),
-            )
-
-            approvals_sent += 1
-
         print()
 
-        if args.send_approval:
-            print(f"Approval cards sent: {approvals_sent}")
-            print(
-                "Pressing Execute uses the normal "
-                "approval path and places Bybit Demo orders."
-            )
-        else:
-            print("Replay complete. Nothing was persisted or executed.")
-            print("Use --send-approval to create normal approval cards.")
+        print("Replay complete. Nothing was persisted or executed.")
 
         return 2 if planning_failures else 0
 
     finally:
-        if bot is not None:
-            await bot.close()
-
         executor.close()
 
 
