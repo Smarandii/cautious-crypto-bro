@@ -1377,7 +1377,6 @@ class OpenRouterIntentExtractor:
                 content = _completion_content(response_data)
 
                 # This schema normally produces only a
-                # This schema normally produces only a
                 # small JSON object. A very large result
                 # indicates a broken structured-output
                 # response rather than a useful intent.
