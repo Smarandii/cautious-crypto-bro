@@ -47,16 +47,13 @@ class SignalService:
         planner: ExecutionPlanner,
         executor: BybitDemoExecutor,
         approval_bot: ApprovalBot,
-        coordinator: (ExecutionCoordinator | None) = None,
-        context_provider: (SignalContextProvider | None) = None,
+        coordinator: ExecutionCoordinator,
+        context_provider: SignalContextProvider,
         auto_approval_mode: AutoApprovalMode = (AutoApprovalMode.DISABLED),
         source_processing_lease_seconds: int = 300,
     ) -> None:
         if source_processing_lease_seconds <= 0:
             raise ValueError("Source processing lease must be positive")
-
-        if auto_approval_mode is not AutoApprovalMode.DISABLED and coordinator is None:
-            raise ValueError("Auto approval requires ExecutionCoordinator")
 
         self._store = store
         self._extractor = extractor
@@ -105,7 +102,7 @@ class SignalService:
         self,
         intent: TradingIntent,
         *,
-        position_context: (SignalPositionContext | None),
+        position_context: SignalPositionContext,
         account_state: (AccountStateSummary | None),
         duplicate_in_batch: bool,
     ) -> ApprovalMode:
@@ -137,11 +134,7 @@ class SignalService:
             )
             return ApprovalMode.MANUAL
 
-        if (
-            position_context is None
-            or account_state is None
-            or not (position_context.account_state_available)
-        ):
+        if account_state is None or not position_context.account_state_available:
             logger.warning(
                 "OPEN %s from %s/%s remains "
                 "MANUAL because trusted live "
@@ -167,8 +160,6 @@ class SignalService:
                 intent.source.message_id,
             )
             return ApprovalMode.MANUAL
-
-        assert self._coordinator is not None
 
         safety_reason = self._coordinator.auto_open_safety_reason(
             intent,
@@ -243,9 +234,6 @@ class SignalService:
     async def recover_auto_execution(
         self,
     ) -> None:
-        if self._coordinator is None:
-            return
-
         (
             uncertain_intents,
             uncertain_actions,
@@ -338,28 +326,19 @@ class SignalService:
             )
             return
 
-        context_snapshot = None
-
         try:
             (
                 global_guidance,
                 channel_guidance,
             ) = await self._store.get_guidance(source.channel_id)
 
-            if self._context_provider is not None:
-                context_snapshot = await self._context_provider.snapshot(
-                    source.channel_id
-                )
+            context_snapshot = await self._context_provider.snapshot(source.channel_id)
 
             signals = await self._extractor.extract(
                 post,
-                global_guidance=(global_guidance),
-                channel_guidance=(channel_guidance),
-                position_context=(
-                    context_snapshot.position_context
-                    if context_snapshot is not None
-                    else None
-                ),
+                global_guidance=global_guidance,
+                channel_guidance=channel_guidance,
+                position_context=context_snapshot.position_context,
             )
 
         except Exception as exc:
@@ -383,32 +362,9 @@ class SignalService:
             )
             return
 
-        account_state = (
-            context_snapshot.account_state if context_snapshot is not None else None
-        )
-
-        account_state_error = (
-            context_snapshot.account_state_error
-            if context_snapshot is not None
-            else None
-        )
-
-        position_context = (
-            context_snapshot.position_context if context_snapshot is not None else None
-        )
-
-        if context_snapshot is None:
-            try:
-                account_state = await self._executor.account_state()
-
-            except Exception as exc:
-                account_state_error = f"{type(exc).__name__}: {exc}"
-
-                logger.exception(
-                    "Account-state check failed for %s/%s",
-                    source.channel_id,
-                    source.message_id,
-                )
+        account_state = context_snapshot.account_state
+        account_state_error = context_snapshot.account_state_error
+        position_context = context_snapshot.position_context
 
         open_counts = Counter(
             (
@@ -582,8 +538,6 @@ class SignalService:
 
         for intent, plan in planned:
             if intent.approval_mode is ApprovalMode.AUTO:
-                assert self._coordinator is not None
-
                 outcome = await self._coordinator.execute_intent(
                     intent.intent_id,
                     approval_mode=(ApprovalMode.AUTO),
@@ -633,8 +587,6 @@ class SignalService:
 
         for action in position_actions:
             if action.approval_mode is ApprovalMode.AUTO:
-                assert self._coordinator is not None
-
                 outcome = await self._coordinator.execute_position_action(
                     action.action_id,
                     approval_mode=(ApprovalMode.AUTO),

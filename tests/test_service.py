@@ -7,10 +7,14 @@ from datetime import (
 from cautious_crypto_bro.domain import (
     IncomingPost,
     SignalExtraction,
+    SignalPositionContext,
     SourceMessage,
 )
 from cautious_crypto_bro.service import (
     SignalService,
+)
+from cautious_crypto_bro.signal_context import (
+    SignalContextSnapshot,
 )
 
 
@@ -45,8 +49,21 @@ class MustNotBeCalled:
         self,
         name,
     ):
-        raise AssertionError(
-            f"{name} must not be called for a duplicate source message"
+        raise AssertionError(f"{name} must not be called")
+
+
+class ContextProvider:
+    def __init__(self, account_state=None) -> None:
+        self.account_state = account_state
+
+    async def snapshot(self, channel_id):
+        return SignalContextSnapshot(
+            position_context=SignalPositionContext(
+                source_channel_id=channel_id,
+                account_state_available=(self.account_state is not None),
+            ),
+            account_state=self.account_state,
+            account_state_error=None,
         )
 
 
@@ -60,6 +77,8 @@ def test_duplicate_source_stops_before_processing() -> None:
             planner=never,
             executor=never,
             approval_bot=never,
+            coordinator=never,
+            context_provider=never,
         )
 
         await service.on_message(post())
@@ -147,6 +166,8 @@ def test_extraction_failure_is_retryable() -> None:
             planner=never,
             executor=never,
             approval_bot=never,
+            coordinator=never,
+            context_provider=ContextProvider(),
         )
 
         source_post = post()
@@ -248,7 +269,6 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
     class Executor:
         def __init__(self) -> None:
             self.market_context_calls = []
-            self.account_state_calls = 0
 
         async def market_context(
             self,
@@ -256,10 +276,6 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
         ):
             self.market_context_calls.append(symbol)
             return symbol
-
-        async def account_state(self):
-            self.account_state_calls += 1
-            return AccountState()
 
     class Bot:
         def __init__(self) -> None:
@@ -325,6 +341,8 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
             planner=Planner(),
             executor=executor,
             approval_bot=bot,
+            coordinator=MustNotBeCalled(),
+            context_provider=ContextProvider(AccountState()),
         )
 
         await service.on_message(source_post)
@@ -334,8 +352,6 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
             "BTCUSDT",
             "ETHUSDT",
         ]
-        assert executor.account_state_calls == 1
-
         assert len(bot.calls) == 2
 
         assert bot.calls[0][2]["send_account_state"] is True

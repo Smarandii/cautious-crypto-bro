@@ -295,6 +295,7 @@ def test_service_auto_routing_requires_trusted_state() -> None:
         "executor": object(),
         "approval_bot": object(),
         "coordinator": Coordinator(),
+        "context_provider": object(),
     }
 
     service = SignalService(
