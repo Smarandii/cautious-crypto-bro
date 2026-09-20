@@ -8,7 +8,6 @@ import logging
 import re
 import time
 import unicodedata
-from pathlib import Path
 
 import httpx
 from pydantic import ValidationError
@@ -54,22 +53,12 @@ class OpenRouterProviderFailure(ValueError):
 
 
 def _response_provider(
-    response_data: dict[
-        str,
-        object,
-    ],
+    response_data: dict[str, object],
 ) -> str | None:
     provider = response_data.get("provider")
-
-    if not isinstance(
-        provider,
-        str,
-    ):
+    if not isinstance(provider, str):
         return None
-
-    provider = provider.strip()
-
-    return provider if provider else None
+    return provider.strip() or None
 
 
 SYSTEM_PROMPT = """
@@ -339,7 +328,6 @@ def _side_from_transport(
 ) -> Side | None:
     if value is None:
         return None
-
     try:
         return Side(value.strip().upper())
     except ValueError:
@@ -425,12 +413,7 @@ def _entry_from_transport(
 def _normalize_evidence_text(
     value: str,
 ) -> str:
-    normalized = unicodedata.normalize(
-        "NFKC",
-        value,
-    )
-
-    return " ".join(normalized.casefold().split())
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
 _LIFECYCLE_NEGATION_PATTERNS: tuple[
@@ -1266,8 +1249,7 @@ class OpenRouterIntentExtractor:
         *,
         global_guidance: str | None = None,
         channel_guidance: str | None = None,
-        position_context: (SignalPositionContext | None) = None,
-        debug_dir: Path | None = None,
+        position_context: SignalPositionContext | None = None,
         bypass_evaluation_cache: bool = False,
     ) -> SignalExtraction:
         source = post.source
@@ -1280,7 +1262,7 @@ class OpenRouterIntentExtractor:
             position_context=position_context,
         )
 
-        if debug_dir is None and not bypass_evaluation_cache:
+        if not bypass_evaluation_cache:
             cached_extraction = await self._read_cached_evaluation(
                 evaluation_fingerprint
             )
@@ -1394,69 +1376,7 @@ class OpenRouterIntentExtractor:
 
                 content = _completion_content(response_data)
 
-                if debug_dir is not None:
-                    debug_dir.mkdir(
-                        parents=True,
-                        exist_ok=True,
-                    )
-
-                    stem = f"{source.channel_id}_{source.message_id}_attempt{attempt}"
-
-                    response_path = debug_dir / f"{stem}.response.json"
-
-                    content_path = debug_dir / f"{stem}.content.txt"
-
-                    metadata_path = debug_dir / f"{stem}.meta.json"
-
-                    response_path.write_text(
-                        response.text,
-                        encoding="utf-8",
-                    )
-
-                    content_path.write_text(
-                        content,
-                        encoding="utf-8",
-                    )
-
-                    image_bytes = [len(image.data) for image in post.images]
-
-                    estimated_base64_chars = [
-                        ((size + 2) // 3 * 4) for size in image_bytes
-                    ]
-
-                    metadata = {
-                        "channel_id": (source.channel_id),
-                        "message_id": (source.message_id),
-                        "attempt": attempt,
-                        "model": self._model,
-                        "http_status": (response.status_code),
-                        "image_count": (len(post.images)),
-                        "image_bytes": (image_bytes),
-                        "estimated_base64_chars": (estimated_base64_chars),
-                        "response_body_chars": (len(response.text)),
-                        "content_chars": (len(content)),
-                        "elapsed_seconds": (time.monotonic() - started),
-                    }
-
-                    metadata_path.write_text(
-                        json.dumps(
-                            metadata,
-                            indent=2,
-                        ),
-                        encoding="utf-8",
-                    )
-
-                    logger.info(
-                        "Saved OpenRouter debug capture to %s",
-                        debug_dir,
-                    )
-
-                if not isinstance(
-                    content,
-                    str,
-                ):
-                    raise ValueError("OpenRouter response content is not a string")
-
+                # This schema normally produces only a
                 # This schema normally produces only a
                 # small JSON object. A very large result
                 # indicates a broken structured-output
@@ -1610,11 +1530,10 @@ class OpenRouterIntentExtractor:
                 f"{last_error}"
             ) from last_error
 
-        if debug_dir is None:
-            await self._cache_evaluation(
-                evaluation_fingerprint,
-                extraction,
-            )
+        await self._cache_evaluation(
+            evaluation_fingerprint,
+            extraction,
+        )
 
         signals = _signals_from_extraction(
             source,

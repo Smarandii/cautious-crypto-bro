@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-from pathlib import Path
 
 from cautious_crypto_bro.approval_bot import (
     ApprovalBot,
@@ -49,12 +48,6 @@ async def main() -> int:
     parser.add_argument(
         "url",
         help=("Telegram post URL, for example https://t.me/c/2243423111/7905"),
-    )
-
-    parser.add_argument(
-        "--debug-dir",
-        type=Path,
-        help=("Save raw OpenRouter responses for diagnostic inspection."),
     )
 
     parser.add_argument(
@@ -145,7 +138,6 @@ async def main() -> int:
             post,
             global_guidance=global_guidance,
             channel_guidance=channel_guidance,
-            debug_dir=args.debug_dir,
         )
     finally:
         await extractor.close()
