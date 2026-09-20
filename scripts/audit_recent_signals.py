@@ -17,11 +17,15 @@ from typing import Any
 import aiosqlite
 from telethon import TelegramClient
 
+from cautious_crypto_bro.bybit import (
+    BybitDemoExecutor,
+)
 from cautious_crypto_bro.config import (
     get_settings,
 )
 from cautious_crypto_bro.domain import (
     IntentExtraction,
+    SignalPositionContext,
 )
 from cautious_crypto_bro.openrouter import (
     SYSTEM_PROMPT,
@@ -31,6 +35,9 @@ from cautious_crypto_bro.openrouter import (
 )
 from cautious_crypto_bro.runtime_store import (
     RedisRuntimeStore,
+)
+from cautious_crypto_bro.signal_context import (
+    SignalContextProvider,
 )
 from cautious_crypto_bro.storage import (
     IntentStore,
@@ -332,6 +339,7 @@ async def read_evaluation(
     post: Any,
     global_guidance: str | None,
     channel_guidance: str | None,
+    position_context: SignalPositionContext,
     model: str,
     runtime_store: RedisRuntimeStore,
     extractor: OpenRouterIntentExtractor,
@@ -347,6 +355,7 @@ async def read_evaluation(
         model=model,
         global_guidance=global_guidance,
         channel_guidance=channel_guidance,
+        position_context=position_context,
     )
 
     if not fresh:
@@ -385,6 +394,7 @@ async def read_evaluation(
             post,
             global_guidance=global_guidance,
             channel_guidance=channel_guidance,
+            position_context=position_context,
             bypass_evaluation_cache=fresh,
         )
     except Exception as exc:
@@ -508,6 +518,16 @@ async def main() -> int:
     )
 
     await runtime_store.initialize()
+
+    executor = BybitDemoExecutor(
+        api_key=settings.bybit_api_key,
+        api_secret=settings.bybit_api_secret,
+    )
+
+    context_provider = SignalContextProvider(
+        store=store,
+        executor=executor,
+    )
 
     extractor = OpenRouterIntentExtractor(
         api_key=(settings.openrouter_api_key),
@@ -695,6 +715,26 @@ async def main() -> int:
                                 }
                             )
 
+                        try:
+                            context_snapshot = await context_provider.snapshot(
+                                channel_id
+                            )
+                        except Exception as exc:
+                            record["category"] = "EVALUATION_ERROR"
+                            record["decision_source"] = "context-error"
+                            record["evaluation_error"] = (
+                                f"Context snapshot: {type(exc).__name__}: {exc}"
+                            )
+                            records.append(record)
+                            continue
+
+                        record["position_context"] = json.loads(
+                            context_snapshot.position_context.model_dump_json()
+                        )
+                        record["account_state_error"] = (
+                            context_snapshot.account_state_error
+                        )
+
                         (
                             extraction,
                             decision_source,
@@ -703,6 +743,7 @@ async def main() -> int:
                             post=post,
                             global_guidance=(global_guidance),
                             channel_guidance=(channel_guidance),
+                            position_context=context_snapshot.position_context,
                             model=(settings.openrouter_model),
                             runtime_store=(runtime_store),
                             extractor=(extractor),
@@ -752,6 +793,7 @@ async def main() -> int:
     finally:
         await extractor.close()
         await runtime_store.close()
+        executor.close()
 
     records.sort(key=lambda record: record["published_at"])
 
