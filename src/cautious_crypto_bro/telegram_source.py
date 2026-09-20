@@ -171,17 +171,6 @@ async def telegram_messages_to_post(
     )
 
 
-async def telegram_message_to_post(
-    message: Message,
-    *,
-    chat: object | None = None,
-) -> IncomingPost | None:
-    return await telegram_messages_to_post(
-        (message,),
-        chat=chat,
-    )
-
-
 def telegram_image_media_type(
     message: Message,
 ) -> str | None:

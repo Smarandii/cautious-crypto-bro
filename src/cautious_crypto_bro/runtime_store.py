@@ -24,30 +24,6 @@ class ProviderCooldownStore(Protocol):
     ) -> None: ...
 
 
-class ReadOnlyProviderCooldownStore:
-    def __init__(
-        self,
-        store: ProviderCooldownStore,
-    ) -> None:
-        self._store = store
-
-    async def get_openrouter_provider_cooldowns(
-        self,
-    ) -> tuple[str, ...]:
-        return await self._store.get_openrouter_provider_cooldowns()
-
-    async def cooldown_openrouter_provider(
-        self,
-        provider: str,
-        reason: str,
-        duration_seconds: int,
-    ) -> None:
-        # Diagnostic replay/audit should respect
-        # existing production cooldowns but must
-        # never mutate production routing state.
-        return None
-
-
 class OpenRouterEvaluationCache(Protocol):
     async def get_openrouter_evaluation(
         self,

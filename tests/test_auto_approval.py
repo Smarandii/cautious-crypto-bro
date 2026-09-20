@@ -105,6 +105,23 @@ def _plan(
     )
 
 
+async def _persist_intent(
+    store: IntentStore,
+    intent: TradingIntent,
+) -> None:
+    claim = await store.claim_source(
+        intent.source,
+        lease_seconds=300,
+    )
+    assert claim is not None
+
+    assert await store.create_signal_batch_and_complete_source(
+        ((intent, _plan(intent)),),
+        (),
+        claim,
+    )
+
+
 def _position(
     side: Side = Side.LONG,
 ) -> AccountPosition:
@@ -206,10 +223,7 @@ def test_storage_persists_auto_mode_and_claims_match(
 
         intent = _intent(approval_mode=ApprovalMode.AUTO)
 
-        await store.create_intent_with_plan(
-            intent,
-            _plan(intent),
-        )
+        await _persist_intent(store, intent)
 
         stored = await store.get_intent(intent.intent_id)
 
@@ -242,10 +256,7 @@ def test_restart_quarantines_inflight_auto_execution(
 
         intent = _intent(approval_mode=ApprovalMode.AUTO)
 
-        await store.create_intent_with_plan(
-            intent,
-            _plan(intent),
-        )
+        await _persist_intent(store, intent)
 
         assert await store.claim_for_execution(
             intent.intent_id,
@@ -284,6 +295,7 @@ def test_service_auto_routing_requires_trusted_state() -> None:
         "executor": object(),
         "approval_bot": object(),
         "coordinator": Coordinator(),
+        "context_provider": object(),
     }
 
     service = SignalService(

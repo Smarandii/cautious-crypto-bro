@@ -70,70 +70,43 @@ def test_fresh_database_is_migrated_to_latest_version(
     asyncio.run(run())
 
 
-def test_pre_versioned_database_is_upgraded_without_data_loss(
+def test_obsolete_database_schema_is_rejected(
     tmp_path,
 ) -> None:
     database = tmp_path / "state.sqlite3"
 
     with sqlite3.connect(database) as db:
-        db.execute(
-            """
-            CREATE TABLE source_messages (
-                channel_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                payload_json TEXT NOT NULL,
-                PRIMARY KEY (channel_id, message_id)
-            )
-            """
-        )
-        db.execute(
-            """
-            INSERT INTO source_messages(
-                channel_id,
-                message_id,
-                payload_json
-            )
-            VALUES (?, ?, ?)
-            """,
-            (
-                -1001234567890,
-                42,
-                '{"legacy":true}',
-            ),
-        )
-        db.commit()
+        db.execute("PRAGMA user_version = 3")
 
     async def run() -> None:
         store = IntentStore(database)
-        await store.initialize()
 
-        async with aiosqlite.connect(database) as db:
-            cursor = await db.execute("PRAGMA user_version")
-            assert (await cursor.fetchone())[0] == LATEST_SCHEMA_VERSION
+        try:
+            await store.initialize()
+        except RuntimeError as exc:
+            assert "Unsupported database schema version" in str(exc)
+        else:
+            raise AssertionError("Expected obsolete schema to be rejected")
 
-            cursor = await db.execute(
-                """
-                SELECT
-                    payload_json,
-                    status,
-                    attempt_count,
-                    updated_at
-                FROM source_messages
-                WHERE channel_id = ?
-                  AND message_id = ?
-                """,
-                (
-                    -1001234567890,
-                    42,
-                ),
-            )
+    asyncio.run(run())
 
-            row = await cursor.fetchone()
 
-            assert row is not None
-            assert row[0] == '{"legacy":true}'
-            assert row[1] == "COMPLETED"
-            assert row[2] == 1
-            assert row[3]
+def test_unversioned_non_empty_database_is_rejected(
+    tmp_path,
+) -> None:
+    database = tmp_path / "state.sqlite3"
+
+    with sqlite3.connect(database) as db:
+        db.execute("CREATE TABLE legacy_data(value TEXT)")
+
+    async def run() -> None:
+        store = IntentStore(database)
+
+        try:
+            await store.initialize()
+        except RuntimeError as exc:
+            assert "Unversioned non-empty database" in str(exc)
+        else:
+            raise AssertionError("Expected unversioned legacy DB to be rejected")
 
     asyncio.run(run())

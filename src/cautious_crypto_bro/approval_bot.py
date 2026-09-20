@@ -125,6 +125,37 @@ class ApprovalBot:
     async def close(self) -> None:
         await self._bot.session.close()
 
+    async def _authorized(self, callback: CallbackQuery) -> bool:
+        if callback.from_user.id == self._approver_user_id:
+            return True
+
+        await callback.answer("Not authorized", show_alert=True)
+        return False
+
+    async def _send_account_snapshot(
+        self,
+        state: AccountStateSummary | None,
+        *,
+        state_error: str | None,
+        pnl: AccountPnlSummary | None,
+        pnl_error: str | None,
+    ) -> None:
+        try:
+            await self._bot.send_message(
+                chat_id=self._approval_chat_id,
+                text=self._render_account_state(
+                    state,
+                    error=state_error,
+                    pnl=pnl,
+                    pnl_error=pnl_error,
+                ),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            # Informational only; the actionable card must still be delivered.
+            logger.exception("Failed to send account snapshot")
+
     async def send_intent(
         self,
         intent: TradingIntent,
@@ -139,23 +170,12 @@ class ApprovalBot:
         send_account_state: bool = True,
     ) -> None:
         if send_account_state:
-            try:
-                await self._bot.send_message(
-                    chat_id=self._approval_chat_id,
-                    text=self._render_account_state(
-                        account_state,
-                        error=account_state_error,
-                        pnl=account_pnl,
-                        pnl_error=account_pnl_error,
-                    ),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-            except Exception:
-                # The snapshot is informational and
-                # must never prevent delivery of the
-                # actionable approval card.
-                logger.exception("Failed to send account snapshot")
+            await self._send_account_snapshot(
+                account_state,
+                state_error=account_state_error,
+                pnl=account_pnl,
+                pnl_error=account_pnl_error,
+            )
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -208,20 +228,12 @@ class ApprovalBot:
         send_account_state: bool = True,
     ) -> None:
         if send_account_state:
-            try:
-                await self._bot.send_message(
-                    chat_id=self._approval_chat_id,
-                    text=self._render_account_state(
-                        account_state,
-                        error=account_state_error,
-                        pnl=account_pnl,
-                        pnl_error=account_pnl_error,
-                    ),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-            except Exception:
-                logger.exception("Failed to send account snapshot")
+            await self._send_account_snapshot(
+                account_state,
+                state_error=account_state_error,
+                pnl=account_pnl,
+                pnl_error=account_pnl_error,
+            )
 
         execute_label = (
             "Execute close"
@@ -272,11 +284,7 @@ class ApprovalBot:
         callback: CallbackQuery,
         callback_data: IntentAction,
     ) -> None:
-        if callback.from_user.id != self._approver_user_id:
-            await callback.answer(
-                "Not authorized",
-                show_alert=True,
-            )
+        if not await self._authorized(callback):
             return
 
         intent_id = UUID(callback_data.intent_id)
@@ -312,11 +320,9 @@ class ApprovalBot:
                 "</code>"
             )
 
-        await self._edit_card(
+        await self._edit_message(
             callback,
-            outcome.intent,
-            outcome.plan,
-            suffix,
+            self._render(outcome.intent, outcome.plan) + suffix,
         )
 
     async def _execute_position_action(
@@ -324,11 +330,7 @@ class ApprovalBot:
         callback: CallbackQuery,
         callback_data: PositionActionCallback,
     ) -> None:
-        if callback.from_user.id != self._approver_user_id:
-            await callback.answer(
-                "Not authorized",
-                show_alert=True,
-            )
+        if not await self._authorized(callback):
             return
 
         action_id = UUID(callback_data.action_id)
@@ -350,10 +352,9 @@ class ApprovalBot:
 
         suffix = self._render_action_outcome(outcome)
 
-        await self._edit_position_action_card(
+        await self._edit_message(
             callback,
-            outcome.action,
-            suffix,
+            self._render_position_action(outcome.action) + suffix,
         )
 
     async def _skip_position_action(
@@ -361,11 +362,7 @@ class ApprovalBot:
         callback: CallbackQuery,
         callback_data: PositionActionCallback,
     ) -> None:
-        if callback.from_user.id != self._approver_user_id:
-            await callback.answer(
-                "Not authorized",
-                show_alert=True,
-            )
+        if not await self._authorized(callback):
             return
 
         action_id = UUID(callback_data.action_id)
@@ -393,10 +390,9 @@ class ApprovalBot:
 
         await callback.answer("Skipped")
 
-        await self._edit_position_action_card(
+        await self._edit_message(
             callback,
-            action,
-            "\n\n<b>SKIPPED</b>",
+            self._render_position_action(action) + "\n\n<b>SKIPPED</b>",
         )
 
     async def _skip(
@@ -404,11 +400,7 @@ class ApprovalBot:
         callback: CallbackQuery,
         callback_data: IntentAction,
     ) -> None:
-        if callback.from_user.id != self._approver_user_id:
-            await callback.answer(
-                "Not authorized",
-                show_alert=True,
-            )
+        if not await self._authorized(callback):
             return
 
         intent_id = UUID(callback_data.intent_id)
@@ -443,11 +435,9 @@ class ApprovalBot:
 
         await callback.answer("Skipped")
 
-        await self._edit_card(
+        await self._edit_message(
             callback,
-            intent,
-            plan,
-            "\n\n<b>SKIPPED</b>",
+            self._render(intent, plan) + "\n\n<b>SKIPPED</b>",
         )
 
     async def send_auto_intent_outcome(
@@ -601,41 +591,16 @@ class ApprovalBot:
 
         return suffix
 
-    async def _edit_card(
+    async def _edit_message(
         self,
         callback: CallbackQuery,
-        intent: TradingIntent,
-        plan: ExecutionPlan,
-        suffix: str,
+        text: str,
     ) -> None:
         message = callback.message
 
         if isinstance(message, Message):
             await message.edit_text(
-                self._render(
-                    intent,
-                    plan,
-                )
-                + suffix,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-                reply_markup=None,
-            )
-
-    async def _edit_position_action_card(
-        self,
-        callback: CallbackQuery,
-        action: PositionActionIntent,
-        suffix: str,
-    ) -> None:
-        message = callback.message
-
-        if isinstance(message, Message):
-            await message.edit_text(
-                self._render_position_action(
-                    action,
-                )
-                + suffix,
+                text,
                 parse_mode="HTML",
                 disable_web_page_preview=True,
                 reply_markup=None,
@@ -1128,49 +1093,6 @@ class ApprovalBot:
             parts.append("Trailing stop active")
 
         return "Protection: " + " · ".join(parts)
-
-    @staticmethod
-    def _render_account_order(
-        order: AccountOrder,
-    ) -> str:
-        quantity = ApprovalBot._fmt_decimal(order.quantity)
-
-        kind = order.kind
-
-        if order.is_protective and order.trigger_price is not None:
-            price = "trigger " + ApprovalBot._fmt_decimal(order.trigger_price)
-
-        elif order.avg_price is not None:
-            price = ApprovalBot._fmt_decimal(order.avg_price)
-
-        elif order.price is not None:
-            price = ApprovalBot._fmt_decimal(order.price)
-
-        else:
-            price = "Market"
-
-        if kind == "ENTRY":
-            description = (
-                f"{html.escape(order.side.value)} {html.escape(order.order_type)}"
-            )
-
-        elif kind == "CONDITIONAL":
-            description = f"CONDITIONAL {html.escape(order.side.value)}"
-
-        elif kind == "REDUCE":
-            description = f"REDUCE {html.escape(order.side.value)}"
-
-        else:
-            description = kind
-
-        return (
-            "• "
-            f"{html.escape(order.symbol)} "
-            f"{description} "
-            f"{quantity} @ {price}"
-            " — "
-            f"{html.escape(order.status)}"
-        )
 
     @staticmethod
     def _fmt_signed(

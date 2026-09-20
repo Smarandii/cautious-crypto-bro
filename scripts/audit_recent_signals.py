@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import hashlib
 import json
 import logging
@@ -18,11 +17,15 @@ from typing import Any
 import aiosqlite
 from telethon import TelegramClient
 
+from cautious_crypto_bro.bybit import (
+    BybitDemoExecutor,
+)
 from cautious_crypto_bro.config import (
     get_settings,
 )
 from cautious_crypto_bro.domain import (
     IntentExtraction,
+    SignalPositionContext,
 )
 from cautious_crypto_bro.openrouter import (
     SYSTEM_PROMPT,
@@ -31,8 +34,10 @@ from cautious_crypto_bro.openrouter import (
     _signals_from_extraction,
 )
 from cautious_crypto_bro.runtime_store import (
-    ReadOnlyProviderCooldownStore,
     RedisRuntimeStore,
+)
+from cautious_crypto_bro.signal_context import (
+    build_position_context,
 )
 from cautious_crypto_bro.storage import (
     IntentStore,
@@ -329,11 +334,50 @@ async def current_app_state(
     return result
 
 
+async def historical_position_context(
+    *,
+    store: IntentStore,
+    executor: BybitDemoExecutor,
+    channel_id: int,
+    published_at: datetime,
+) -> tuple[SignalPositionContext, str | None]:
+    source_intents = tuple(
+        intent
+        for intent in await store.get_recent_source_intents(channel_id)
+        if intent.created_at < published_at
+    )
+
+    executed_closes = tuple(
+        action
+        for action in await store.get_recent_executed_closes()
+        if action.created_at < published_at
+    )
+
+    account_state = None
+    account_state_error = None
+
+    try:
+        account_state = await executor.account_state()
+    except Exception as exc:
+        account_state_error = f"{type(exc).__name__}: {exc}"
+
+    return (
+        build_position_context(
+            channel_id=channel_id,
+            source_intents=source_intents,
+            executed_closes=executed_closes,
+            account_state=account_state,
+        ),
+        account_state_error,
+    )
+
+
 async def read_evaluation(
     *,
     post: Any,
     global_guidance: str | None,
     channel_guidance: str | None,
+    position_context: SignalPositionContext,
     model: str,
     runtime_store: RedisRuntimeStore,
     extractor: OpenRouterIntentExtractor,
@@ -349,6 +393,7 @@ async def read_evaluation(
         model=model,
         global_guidance=global_guidance,
         channel_guidance=channel_guidance,
+        position_context=position_context,
     )
 
     if not fresh:
@@ -387,6 +432,7 @@ async def read_evaluation(
             post,
             global_guidance=global_guidance,
             channel_guidance=channel_guidance,
+            position_context=position_context,
             bypass_evaluation_cache=fresh,
         )
     except Exception as exc:
@@ -429,218 +475,6 @@ async def read_evaluation(
         extraction,
         "fresh",
         None,
-    )
-
-
-def markdown_block(
-    text: str,
-) -> str:
-    if not text:
-        return "    (none)"
-
-    return "\n".join(("    " + line if line else "    ") for line in text.splitlines())
-
-
-def write_report(
-    *,
-    output_path: Path,
-    generated_at: datetime,
-    cutoff: datetime,
-    model: str,
-    records: list[dict[str, Any]],
-    global_guidance: str | None,
-    channel_guidance: dict[
-        str,
-        str | None,
-    ],
-) -> None:
-    counts = Counter(record["category"] for record in records)
-
-    lines = [
-        "# Recent signal audit",
-        "",
-        (f"Generated: {generated_at.isoformat()}"),
-        (f"Window start: {cutoff.isoformat()}"),
-        (f"Model: `{model}`"),
-        (f"Total Telegram posts: {len(records)}"),
-        "",
-        "## Summary",
-        "",
-        "| Category | Count |",
-        "| --- | ---: |",
-    ]
-
-    for category in CATEGORY_ORDER:
-        lines.append(f"| {category} | {counts.get(category, 0)} |")
-
-    lines.extend(
-        [
-            "",
-            "## Prompt and guidance",
-            "",
-            "### System prompt",
-            "",
-            markdown_block(SYSTEM_PROMPT),
-            "",
-            "### Global guidance",
-            "",
-            markdown_block(global_guidance or ""),
-            "",
-            "### Channel guidance",
-            "",
-        ]
-    )
-
-    for channel, guidance in channel_guidance.items():
-        lines.extend(
-            [
-                f"#### {channel}",
-                "",
-                markdown_block(guidance or ""),
-                "",
-            ]
-        )
-
-    for category in CATEGORY_ORDER:
-        category_records = [
-            record for record in records if (record["category"] == category)
-        ]
-
-        category_records.sort(
-            key=lambda record: record["published_at"],
-            reverse=True,
-        )
-
-        lines.extend(
-            [
-                "",
-                f"## {category}",
-                "",
-            ]
-        )
-
-        if not category_records:
-            lines.append("(none)")
-            continue
-
-        for record in category_records:
-            lines.extend(
-                [
-                    (f"### {record['channel_title']} — {record['message_id']}"),
-                    "",
-                    (f"- Published: `{record['published_at']}`"),
-                    (f"- URL: {record['url']}"),
-                    (f"- Telegram messages: {record['message_ids']}"),
-                    (f"- Decision source: `{record['decision_source']}`"),
-                    (
-                        f"- Production source state: "
-                        f"`{record['app_state']['source_processing']}`"
-                    ),
-                    (
-                        f"- Persisted intents: "
-                        f"{len(record['app_state']['persisted_intents'])}"
-                    ),
-                    "",
-                    "**Raw post text/caption**",
-                    "",
-                    markdown_block(record["raw_text"]),
-                    "",
-                    "**Media seen in Telegram**",
-                    "",
-                ]
-            )
-
-            for media in record["raw_media"]:
-                lines.append(
-                    "- "
-                    f"message={media['message_id']} "
-                    f"kind={media['kind']} "
-                    f"mime={media['mime_type']}"
-                )
-
-            images = record.get(
-                "images",
-                [],
-            )
-
-            if images:
-                lines.extend(
-                    [
-                        "",
-                        "**Images supplied to Gemma**",
-                        "",
-                    ]
-                )
-
-                for image in images:
-                    lines.append(f"![{image['filename']}](images/{image['filename']})")
-
-            lines.extend(
-                [
-                    "",
-                    "**Gemma decision**",
-                    "",
-                ]
-            )
-
-            evaluation = record.get("evaluation")
-
-            if evaluation is not None:
-                lines.extend(
-                    [
-                        (f"- actionable: `{evaluation['actionable']}`"),
-                        (f"- reason: {evaluation.get('reason')}"),
-                    ]
-                )
-
-                if evaluation.get("intents"):
-                    lines.extend(
-                        [
-                            "",
-                            "**Extracted intents**",
-                            "",
-                            "```json",
-                            json.dumps(
-                                evaluation["intents"],
-                                ensure_ascii=False,
-                                indent=2,
-                            ),
-                            "```",
-                        ]
-                    )
-
-                if evaluation.get("position_actions"):
-                    lines.extend(
-                        [
-                            "",
-                            "**Position actions**",
-                            "",
-                            "```json",
-                            json.dumps(
-                                evaluation["position_actions"],
-                                ensure_ascii=False,
-                                indent=2,
-                            ),
-                            "```",
-                        ]
-                    )
-            else:
-                lines.append("- No validated OpenRouter evaluation")
-
-                if record.get("evaluation_error"):
-                    lines.append(f"- Error: {record['evaluation_error']}")
-
-            lines.extend(
-                [
-                    "",
-                    "---",
-                    "",
-                ]
-            )
-
-    output_path.write_text(
-        "\n".join(lines),
-        encoding="utf-8",
     )
 
 
@@ -723,13 +557,19 @@ async def main() -> int:
 
     await runtime_store.initialize()
 
+    executor = BybitDemoExecutor(
+        api_key=settings.bybit_api_key,
+        api_secret=settings.bybit_api_secret,
+    )
+
     extractor = OpenRouterIntentExtractor(
         api_key=(settings.openrouter_api_key),
         model=(settings.openrouter_model),
         base_url=(settings.openrouter_base_url),
         inference_timeout_seconds=(settings.openrouter_inference_timeout_seconds),
         max_attempts=(settings.openrouter_inference_max_attempts),
-        provider_cooldown_store=(ReadOnlyProviderCooldownStore(runtime_store)),
+        provider_cooldown_store=runtime_store,
+        persist_provider_cooldowns=False,
         provider_cooldown_seconds=(settings.openrouter_provider_cooldown_hours * 3600),
         evaluation_cache=(runtime_store),
         evaluation_cache_seconds=(settings.openrouter_evaluation_cache_hours * 3600),
@@ -904,12 +744,33 @@ async def main() -> int:
                                 {
                                     "filename": (filename),
                                     "media_type": (image.media_type),
-                                    "sha256": (hashlib.sha256(image.data).hexdigest()),
-                                    "base64": (
-                                        base64.b64encode(image.data).decode("ascii")
-                                    ),
+                                    "sha256": hashlib.sha256(image.data).hexdigest(),
                                 }
                             )
+
+                        try:
+                            (
+                                position_context,
+                                account_state_error,
+                            ) = await historical_position_context(
+                                store=store,
+                                executor=executor,
+                                channel_id=channel_id,
+                                published_at=post.source.published_at,
+                            )
+                        except Exception as exc:
+                            record["category"] = "EVALUATION_ERROR"
+                            record["decision_source"] = "context-error"
+                            record["evaluation_error"] = (
+                                f"Context snapshot: {type(exc).__name__}: {exc}"
+                            )
+                            records.append(record)
+                            continue
+
+                        record["position_context"] = json.loads(
+                            position_context.model_dump_json()
+                        )
+                        record["account_state_error"] = account_state_error
 
                         (
                             extraction,
@@ -919,6 +780,7 @@ async def main() -> int:
                             post=post,
                             global_guidance=(global_guidance),
                             channel_guidance=(channel_guidance),
+                            position_context=position_context,
                             model=(settings.openrouter_model),
                             runtime_store=(runtime_store),
                             extractor=(extractor),
@@ -968,22 +830,11 @@ async def main() -> int:
     finally:
         await extractor.close()
         await runtime_store.close()
+        executor.close()
 
     records.sort(key=lambda record: record["published_at"])
 
-    report_path = output_dir / "report.md"
-
     bundle_path = output_dir / "audit_bundle.json"
-
-    write_report(
-        output_path=report_path,
-        generated_at=generated_at,
-        cutoff=cutoff,
-        model=(settings.openrouter_model),
-        records=records,
-        global_guidance=(global_guidance_report),
-        channel_guidance=(channel_guidance_report),
-    )
 
     bundle = {
         "generated_at": (generated_at.isoformat()),
@@ -1016,9 +867,8 @@ async def main() -> int:
         print(f"{category}: {counts.get(category, 0)}")
 
     print()
-    print(f"Markdown: {report_path}")
-    print(f"Bundle:   {bundle_path}")
-    print(f"Images:   {images_dir}")
+    print(f"Bundle: {bundle_path}")
+    print(f"Images: {images_dir}")
 
     fresh_count = sum(1 for record in records if (record["decision_source"] == "fresh"))
 
