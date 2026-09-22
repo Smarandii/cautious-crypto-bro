@@ -479,9 +479,7 @@ def test_failed_full_stop_verification_does_not_cancel_partials() -> None:
                 avg_price=None,
                 order_id="legacy-sl",
                 order_link_id="",
-                parent_order_link_id=(
-                    f"ccb-v2-{strategy_plan.intent_id.hex[:20]}-e1"
-                ),
+                parent_order_link_id=(f"ccb-v2-{strategy_plan.intent_id.hex[:20]}-e1"),
                 reduce_only=False,
                 updated_at=datetime.now(UTC),
                 stop_order_type="PartialStopLoss",
@@ -552,9 +550,7 @@ def test_unattributed_partial_stop_requires_manual_review() -> None:
     assert store.state.status is StrategyStatus.MANUAL_OVERRIDE
     assert executor.protection == []
     assert executor.cancelled_orders == []
-    assert [order.order_id for order in executor.state.open_orders] == [
-        "manual-stop"
-    ]
+    assert [order.order_id for order in executor.state.open_orders] == ["manual-stop"]
 
 
 def test_interrupted_exit_install_reuses_matching_order() -> None:
