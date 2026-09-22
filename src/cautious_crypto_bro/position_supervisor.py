@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from uuid import UUID
+
 from decimal import (
     ROUND_CEILING,
     ROUND_DOWN,
@@ -44,6 +46,7 @@ class PositionSupervisor:
         self._executor = executor
         self._mutation_lock = mutation_lock
         self._poll_interval_seconds = poll_interval_seconds
+        self._reported_uncertain: set[UUID] = set()
 
     async def run(self) -> None:
         while True:
@@ -62,10 +65,18 @@ class PositionSupervisor:
         records = await self._store.get_active_position_strategies()
 
         if not records:
+            self._reported_uncertain.clear()
             return
 
+        uncertain_ids = {
+            state.strategy_id
+            for state, _ in records
+            if state.status is StrategyStatus.UNCERTAIN
+        }
+        self._reported_uncertain.intersection_update(uncertain_ids)
+
         async with self._mutation_lock:
-            account = await self._executor.account_state()
+            account: AccountStateSummary | None = None
 
             by_symbol: dict[
                 str,
@@ -105,6 +116,19 @@ class PositionSupervisor:
 
                 state, plan = strategies[0]
 
+                if state.status is StrategyStatus.UNCERTAIN:
+                    if state.strategy_id not in self._reported_uncertain:
+                        logger.warning(
+                            "Strategy %s %s is UNCERTAIN; leaving exchange state untouched",
+                            state.strategy_id,
+                            state.symbol,
+                        )
+                        self._reported_uncertain.add(state.strategy_id)
+                    continue
+
+                if account is None:
+                    account = await self._executor.account_state()
+
                 account = await self._reconcile(
                     state,
                     plan,
@@ -126,15 +150,6 @@ class PositionSupervisor:
             state,
             account,
         )
-
-        if state.status is StrategyStatus.UNCERTAIN:
-            logger.warning(
-                "Strategy %s %s is UNCERTAIN; leaving exchange state untouched",
-                state.strategy_id,
-                state.symbol,
-            )
-
-            return account
 
         if state.status is StrategyStatus.CLOSING:
             if position is None:
