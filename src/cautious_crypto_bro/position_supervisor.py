@@ -599,7 +599,16 @@ class PositionSupervisor:
             live_position, protected_stop, trailing_distance,
         )
         account = await self._handoff_partial_stops(
-            state, plan, live_position, verified,
+            state.model_copy(
+                update={
+                    "protected_stop_loss": protected_stop,
+                    "trailing_active": enable_trailing,
+                    "trailing_distance": trailing_distance,
+                }
+            ),
+            plan,
+            live_position,
+            verified,
         )
 
         done = (
