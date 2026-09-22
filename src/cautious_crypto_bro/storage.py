@@ -700,6 +700,30 @@ class IntentStore:
 
         return ExecutionPlan.model_validate_json(row[0])
 
+    async def update_execution_plan(
+        self,
+        plan: ExecutionPlan,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE execution_plans
+                SET payload_json = ?
+                WHERE intent_id = ?
+                """,
+                (
+                    plan.model_dump_json(),
+                    str(plan.intent_id),
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                await db.rollback()
+
+                raise RuntimeError("Execution plan no longer exists")
+
+            await db.commit()
+
     async def _transition_pending(
         self,
         *,

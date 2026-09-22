@@ -1,3 +1,4 @@
+import json
 from datetime import (
     UTC,
     datetime,
@@ -398,6 +399,258 @@ def test_v2_entries_use_stop_only_payloads() -> None:
             "e2",
             "e3",
         ]
+
+    finally:
+        executor.close()
+
+
+def test_v2_market_direct_batch_execution_is_rejected() -> None:
+    plan = ExecutionPlanner().plan(
+        TradingIntent(
+            source=SourceMessage(
+                channel_id=1,
+                channel_title="Test",
+                message_id=1,
+                published_at=datetime.now(UTC),
+                received_at=datetime.now(UTC),
+                text="test",
+            ),
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            entry=Entry(
+                type=EntryType.MARKET,
+            ),
+            stop_loss=90,
+            take_profit=None,
+            summary="test",
+            confidence=1,
+        ),
+        policy(),
+        InstrumentContext(
+            market_price=Decimal("120"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+    executor = BybitDemoExecutor(
+        api_key="key",
+        api_secret="secret",
+    )
+
+    try:
+        with patch.object(
+            executor,
+            "_sync_clock",
+        ):
+            try:
+                executor._execute_sync(plan)
+            except TradeExecutionError as exc:
+                assert "staged E1" in str(exc)
+            else:
+                raise AssertionError(
+                    "Expected direct V2 MARKET batch execution rejection"
+                )
+
+    finally:
+        executor.close()
+
+
+def test_v2_market_primary_fill_precedes_scale_ins() -> None:
+    plan = ExecutionPlanner().plan(
+        TradingIntent(
+            source=SourceMessage(
+                channel_id=1,
+                channel_title="Test",
+                message_id=2,
+                published_at=datetime.now(UTC),
+                received_at=datetime.now(UTC),
+                text="test",
+            ),
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            entry=Entry(
+                type=EntryType.MARKET,
+            ),
+            stop_loss=90,
+            take_profit=None,
+            summary="test",
+            confidence=1,
+        ),
+        policy(),
+        InstrumentContext(
+            market_price=Decimal("120"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+    calls: list[str] = []
+    batch_request = None
+
+    def handler(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        nonlocal batch_request
+
+        calls.append(request.url.path)
+
+        if request.url.path == "/v5/market/tickers":
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "result": {
+                        "list": [
+                            {
+                                "lastPrice": "120",
+                            }
+                        ]
+                    },
+                },
+            )
+
+        if request.url.path == "/v5/order/create":
+            body = json.loads(request.read().decode())
+
+            assert body["orderType"] == "Market"
+
+            assert body["orderLinkId"].endswith("-e1")
+
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "result": {
+                        "orderId": "e1-live",
+                    },
+                },
+            )
+
+        if request.url.path == "/v5/order/realtime":
+            assert request.url.params["orderId"] == "e1-live"
+
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "result": {
+                        "list": [
+                            {
+                                "orderId": ("e1-live"),
+                                "orderStatus": ("Filled"),
+                                "avgPrice": "121",
+                                "cumExecQty": str(plan.orders[0].quantity),
+                                "leavesQty": "0",
+                            }
+                        ]
+                    },
+                },
+            )
+
+        if request.url.path == "/v5/order/history":
+            raise AssertionError("History fallback should not be needed")
+
+        if request.url.path == "/v5/order/create-batch":
+            batch_request = json.loads(request.read().decode())
+
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "result": {
+                        "list": [
+                            {"orderId": "e2-live"},
+                            {"orderId": "e3-live"},
+                        ]
+                    },
+                    "retExtInfo": {
+                        "list": [
+                            {
+                                "code": 0,
+                                "msg": "OK",
+                            },
+                            {
+                                "code": 0,
+                                "msg": "OK",
+                            },
+                        ]
+                    },
+                },
+            )
+
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    executor = BybitDemoExecutor(
+        api_key="key",
+        api_secret="secret",
+    )
+
+    executor._client.close()
+
+    executor._client = httpx.Client(
+        base_url=("https://api-demo.bybit.com"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    try:
+        with patch.object(
+            executor,
+            "_sync_clock",
+        ):
+            primary = executor._execute_market_primary_sync(plan)
+
+            rebased = ExecutionPlanner().rebase_market_plan(
+                plan,
+                fill_price=(primary.average_fill_price),
+                filled_quantity=(primary.filled_quantity),
+                context=InstrumentContext(
+                    market_price=Decimal("121"),
+                    tick_size=Decimal("0.1"),
+                    qty_step=Decimal("0.001"),
+                    min_qty=Decimal("0.001"),
+                    min_notional=Decimal("5"),
+                ),
+            )
+
+            remaining = executor._execute_remaining_entries_sync(rebased)
+
+        assert primary.order_id == "e1-live"
+
+        assert primary.average_fill_price == Decimal("121")
+
+        assert remaining == (
+            "e2-live",
+            "e3-live",
+        )
+
+        assert batch_request is not None
+
+        requests = batch_request["request"]
+
+        assert len(requests) == 2
+
+        assert [
+            item["orderLinkId"].rsplit(
+                "-",
+                1,
+            )[-1]
+            for item in requests
+        ] == [
+            "e2",
+            "e3",
+        ]
+
+        assert [item["price"] for item in requests] == [
+            "110.8",
+            "100.5",
+        ]
+
+        assert calls.index("/v5/order/realtime") < calls.index("/v5/order/create-batch")
 
     finally:
         executor.close()

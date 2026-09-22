@@ -156,6 +156,325 @@ class ExecutionPlanner:
             planned_max_loss_usdt=(planned_max_loss),
         )
 
+    def rebase_market_plan(
+        self,
+        plan: ExecutionPlan,
+        *,
+        fill_price: Decimal,
+        filled_quantity: Decimal,
+        context: InstrumentContext,
+    ) -> ExecutionPlan:
+        if plan.strategy_version < 2:
+            raise ExecutionPlanningError("Only Strategy V2 plans can be rebased")
+
+        if len(plan.orders) != 3:
+            raise ExecutionPlanningError("Strategy V2 requires three entry legs")
+
+        if plan.orders[0].order_type is not ExecutionOrderType.MARKET:
+            raise ExecutionPlanningError("Only MARKET-primary V2 plans can be rebased")
+
+        if any(
+            order.order_type is not ExecutionOrderType.LIMIT
+            for order in plan.orders[1:]
+        ):
+            raise ExecutionPlanningError("V2 MARKET scale-ins must be LIMIT orders")
+
+        if fill_price <= 0:
+            raise ExecutionPlanningError("Actual E1 fill price must be positive")
+
+        if filled_quantity <= 0:
+            raise ExecutionPlanningError("Actual E1 fill quantity must be positive")
+
+        stop_loss = plan.stop_loss
+        strategy = plan.policy.strategy_v2
+
+        if plan.side is Side.LONG and fill_price <= stop_loss:
+            raise ExecutionPlanningError("Actual LONG E1 fill is outside stop geometry")
+
+        if plan.side is Side.SHORT and fill_price >= stop_loss:
+            raise ExecutionPlanningError(
+                "Actual SHORT E1 fill is outside stop geometry"
+            )
+
+        primary_distance = abs(fill_price - stop_loss)
+
+        direction = Decimal("-1") if plan.side is Side.LONG else Decimal("1")
+
+        second_price = self._round_price(
+            fill_price
+            + (direction * strategy.secondary_entry_depth_r * primary_distance),
+            context.tick_size,
+        )
+
+        third_price = self._round_price(
+            fill_price
+            + (direction * strategy.tertiary_entry_depth_r * primary_distance),
+            context.tick_size,
+        )
+
+        reference_prices = (
+            fill_price,
+            second_price,
+            third_price,
+        )
+
+        self._validate_entry_geometry(
+            plan.side,
+            reference_prices,
+            stop_loss,
+        )
+
+        risk_budget = plan.policy.risk_budget_usdt
+
+        primary_risk = filled_quantity * primary_distance
+
+        if primary_risk >= risk_budget:
+            raise ExecutionPlanningError(
+                "Actual E1 fill consumes the full Strategy V2 risk budget"
+            )
+
+        nominal_remaining_budget = (
+            risk_budget
+            * (strategy.secondary_entry_risk_pct + strategy.tertiary_entry_risk_pct)
+            / Decimal("100")
+        )
+
+        available_remaining_budget = risk_budget - primary_risk
+
+        remaining_scale = min(
+            Decimal("1"),
+            (available_remaining_budget / nominal_remaining_budget),
+        )
+
+        if remaining_scale <= 0:
+            raise ExecutionPlanningError("No risk budget remains for V2 scale-ins")
+
+        primary = plan.orders[0].model_copy(
+            update={
+                "quantity": filled_quantity,
+                "reference_price": fill_price,
+                "price": None,
+            }
+        )
+
+        def scale_in(
+            *,
+            name: str,
+            reference_price: Decimal,
+            risk_pct: Decimal,
+        ) -> PlannedOrder:
+            distance = abs(reference_price - stop_loss)
+
+            if distance <= 0:
+                raise ExecutionPlanningError(f"{name} has no entry-to-stop distance")
+
+            nominal_budget = risk_budget * risk_pct / Decimal("100")
+
+            effective_budget = nominal_budget * remaining_scale
+
+            quantity = self._round_down(
+                effective_budget / distance,
+                context.qty_step,
+            )
+
+            if quantity <= 0 or quantity < context.min_qty:
+                raise ExecutionPlanningError(
+                    f"{name} actual-fill rebasing rounds below Bybit minimum quantity"
+                )
+
+            if context.min_notional and (
+                quantity * reference_price < context.min_notional
+            ):
+                raise ExecutionPlanningError(
+                    f"{name} actual-fill rebasing rounds below Bybit minimum notional"
+                )
+
+            return PlannedOrder(
+                name=name,
+                risk_pct=risk_pct,
+                order_type=(ExecutionOrderType.LIMIT),
+                quantity=quantity,
+                price=reference_price,
+                reference_price=reference_price,
+                take_profit=None,
+            )
+
+        secondary = scale_in(
+            name="E2",
+            reference_price=second_price,
+            risk_pct=(strategy.secondary_entry_risk_pct),
+        )
+
+        tertiary = scale_in(
+            name="E3",
+            reference_price=third_price,
+            risk_pct=(strategy.tertiary_entry_risk_pct),
+        )
+
+        orders = (
+            primary,
+            secondary,
+            tertiary,
+        )
+
+        planned_max_loss = sum(
+            (
+                order.quantity * abs(order.reference_price - stop_loss)
+                for order in orders
+            ),
+            Decimal("0"),
+        )
+
+        if planned_max_loss > risk_budget:
+            raise ExecutionPlanningError(
+                "Actual-fill V2 plan exceeds the configured risk budget"
+            )
+
+        total_quantity = sum(
+            (order.quantity for order in orders),
+            Decimal("0"),
+        )
+
+        weighted_entry = (
+            sum(
+                (order.reference_price * order.quantity for order in orders),
+                Decimal("0"),
+            )
+            / total_quantity
+        )
+
+        risk_distance = abs(weighted_entry - stop_loss)
+
+        if risk_distance <= 0:
+            raise ExecutionPlanningError(
+                "Actual-fill weighted entry has no stop distance"
+            )
+
+        rules = list(strategy.exit_rules)
+
+        take_profit_source = TakeProfitSource.POLICY
+
+        if plan.take_profit_source is TakeProfitSource.TRADER:
+            trader_tp = plan.take_profit
+
+            if plan.side is Side.LONG:
+                trader_reward = trader_tp - weighted_entry
+            else:
+                trader_reward = weighted_entry - trader_tp
+
+            trader_r = trader_reward / risk_distance
+
+            if trader_r <= strategy.first_take_profit_r:
+                raise ExecutionPlanningError(
+                    "Trader take profit became too close after actual E1 fill"
+                )
+
+            if trader_r < strategy.third_take_profit_r:
+                take_profit_source = TakeProfitSource.TRADER
+
+                middle_r = (strategy.first_take_profit_r + trader_r) / Decimal("2")
+
+                rules = [
+                    (
+                        "TP1",
+                        strategy.first_take_profit_r,
+                        strategy.first_take_profit_pct,
+                    ),
+                    (
+                        "TP2",
+                        middle_r,
+                        strategy.second_take_profit_pct,
+                    ),
+                    (
+                        "TP3",
+                        trader_r,
+                        strategy.third_take_profit_pct,
+                    ),
+                ]
+
+        targets: list[PlannedTakeProfit] = []
+
+        previous_price: Decimal | None = None
+
+        for (
+            name,
+            configured_r,
+            close_pct,
+        ) in rules:
+            reward_distance = risk_distance * configured_r
+
+            if plan.side is Side.LONG:
+                raw_price = weighted_entry + reward_distance
+            else:
+                raw_price = weighted_entry - reward_distance
+
+            price = self._round_price(
+                raw_price,
+                context.tick_size,
+            )
+
+            if price <= 0:
+                raise ExecutionPlanningError("Derived take profit is not positive")
+
+            if previous_price is not None:
+                if plan.side is Side.LONG and price <= previous_price:
+                    raise ExecutionPlanningError(
+                        "Actual-fill V2 take-profit levels collapse after rounding"
+                    )
+
+                if plan.side is Side.SHORT and price >= previous_price:
+                    raise ExecutionPlanningError(
+                        "Actual-fill V2 take-profit levels collapse after rounding"
+                    )
+
+            targets.append(
+                PlannedTakeProfit(
+                    name=name,
+                    price=price,
+                    close_pct=close_pct,
+                    r_multiple=configured_r,
+                )
+            )
+
+            previous_price = price
+
+        if len(targets) != 3:
+            raise ExecutionPlanningError("Strategy V2 requires three fixed exits")
+
+        target_tuple = (
+            targets[0],
+            targets[1],
+            targets[2],
+        )
+
+        self._validate_target_geometry(
+            plan.side,
+            weighted_entry,
+            tuple(target.price for target in target_tuple),
+        )
+
+        self._validate_initial_exit_capacity(
+            plan.side,
+            primary,
+            stop_loss,
+            target_tuple,
+            context,
+        )
+
+        payload = plan.model_dump()
+
+        payload.update(
+            {
+                "orders": orders,
+                "take_profit": (target_tuple[-1].price),
+                "take_profit_targets": (target_tuple),
+                "take_profit_source": (take_profit_source),
+                "planned_max_loss_usdt": (planned_max_loss),
+            }
+        )
+
+        return ExecutionPlan.model_validate(payload)
+
     def _entry_specs(
         self,
         intent: TradingIntent,

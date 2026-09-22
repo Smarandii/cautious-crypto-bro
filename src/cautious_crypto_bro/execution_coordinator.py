@@ -14,6 +14,7 @@ from .bybit import (
 )
 from .domain import (
     ApprovalMode,
+    ExecutionOrderType,
     ExecutionPlan,
     IntentStatus,
     OpenRelation,
@@ -22,6 +23,7 @@ from .domain import (
     StrategyStatus,
     TradingIntent,
 )
+from .execution import ExecutionPlanner
 from .storage import IntentStore
 
 logger = logging.getLogger(__name__)
@@ -293,6 +295,8 @@ class ExecutionCoordinator:
                 plan=plan,
             )
 
+        effective_plan = plan
+
         try:
             async with self._execution_lock:
                 if approval_mode is ApprovalMode.AUTO:
@@ -309,7 +313,41 @@ class ExecutionCoordinator:
                 if plan.strategy_version >= 2:
                     await self._store.ensure_position_strategy(plan)
 
-                order_ids = await self._executor.execute(plan)
+                staged_market = (
+                    plan.strategy_version >= 2
+                    and plan.orders[0].order_type is ExecutionOrderType.MARKET
+                )
+
+                if staged_market:
+                    primary = await self._executor.execute_market_primary(plan)
+
+                    context = await self._executor.market_context(plan.symbol)
+
+                    effective_plan = ExecutionPlanner().rebase_market_plan(
+                        plan,
+                        fill_price=(primary.average_fill_price),
+                        filled_quantity=(primary.filled_quantity),
+                        context=context,
+                    )
+
+                    # Persist the fill-derived geometry
+                    # before E2/E3 are submitted. The
+                    # supervisor shares this mutation lock,
+                    # so it can never observe the new orders
+                    # against the old snapshot plan.
+                    await self._store.update_execution_plan(effective_plan)
+
+                    remaining_ids = await self._executor.execute_remaining_entries(
+                        effective_plan
+                    )
+
+                    order_ids = (
+                        primary.order_id,
+                        *remaining_ids,
+                    )
+
+                else:
+                    order_ids = await self._executor.execute(plan)
 
         except Exception as exc:
             logger.exception(
@@ -334,7 +372,7 @@ class ExecutionCoordinator:
                 status=IntentStatus.FAILED,
                 message=message,
                 intent=intent,
-                plan=plan,
+                plan=effective_plan,
             )
 
         await self._store.mark_executed(
@@ -346,7 +384,7 @@ class ExecutionCoordinator:
             status=IntentStatus.EXECUTED,
             message="Executed on Bybit Demo",
             intent=intent,
-            plan=plan,
+            plan=effective_plan,
             order_ids=order_ids,
         )
 

@@ -60,6 +60,13 @@ class PositionActionExecutionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class MarketPrimaryExecutionResult:
+    order_id: str
+    average_fill_price: Decimal
+    filled_quantity: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class OpenOrderExposure:
     side: Side
     remaining_quantity: Decimal
@@ -264,6 +271,24 @@ class BybitDemoExecutor:
     ) -> tuple[str, ...]:
         return await asyncio.to_thread(
             self._execute_sync,
+            plan,
+        )
+
+    async def execute_market_primary(
+        self,
+        plan: ExecutionPlan,
+    ) -> MarketPrimaryExecutionResult:
+        return await asyncio.to_thread(
+            self._execute_market_primary_sync,
+            plan,
+        )
+
+    async def execute_remaining_entries(
+        self,
+        plan: ExecutionPlan,
+    ) -> tuple[str, ...]:
+        return await asyncio.to_thread(
+            self._execute_remaining_entries_sync,
             plan,
         )
 
@@ -1172,6 +1197,179 @@ class BybitDemoExecutor:
             ),
         )
 
+    @staticmethod
+    def _validate_staged_market_plan(
+        plan: ExecutionPlan,
+    ) -> None:
+        if plan.strategy_version < 2:
+            raise TradeExecutionError("Staged MARKET execution requires Strategy V2")
+
+        if len(plan.orders) != 3:
+            raise TradeExecutionError("Strategy V2 requires three entry legs")
+
+        if plan.orders[0].order_type is not ExecutionOrderType.MARKET:
+            raise TradeExecutionError("Staged V2 execution requires MARKET E1")
+
+        if any(
+            order.order_type is not ExecutionOrderType.LIMIT
+            for order in plan.orders[1:]
+        ):
+            raise TradeExecutionError("Staged V2 E2/E3 must be LIMIT orders")
+
+    def _wait_for_market_fill_sync(
+        self,
+        symbol: str,
+        order_id: str,
+    ) -> MarketPrimaryExecutionResult:
+        terminal_without_fill = {
+            "Rejected",
+            "Cancelled",
+            "Deactivated",
+            "PartiallyFilledCanceled",
+        }
+
+        params: dict[str, object] = {
+            "category": "linear",
+            "symbol": symbol,
+            "orderId": order_id,
+        }
+
+        for attempt in range(20):
+            record = None
+
+            for path in (
+                "/v5/order/realtime",
+                "/v5/order/history",
+            ):
+                response = self._private_get(
+                    path,
+                    params,
+                )
+
+                items = response.get(
+                    "result",
+                    {},
+                ).get(
+                    "list",
+                    [],
+                )
+
+                record = next(
+                    (
+                        item
+                        for item in items
+                        if str(item.get("orderId") or "") == order_id
+                    ),
+                    None,
+                )
+
+                if record is not None:
+                    break
+
+            if record is not None:
+                status = str(record.get("orderStatus") or "")
+
+                filled_quantity = self._decimal(record.get("cumExecQty"))
+
+                average_price = self._decimal(record.get("avgPrice"))
+
+                remaining = self._decimal(record.get("leavesQty"))
+
+                if (
+                    filled_quantity > 0
+                    and average_price > 0
+                    and (status == "Filled" or remaining <= 0)
+                ):
+                    return MarketPrimaryExecutionResult(
+                        order_id=order_id,
+                        average_fill_price=(average_price),
+                        filled_quantity=(filled_quantity),
+                    )
+
+                if filled_quantity <= 0 and status in terminal_without_fill:
+                    raise TradeExecutionError(
+                        f"V2 MARKET E1 ended without a fill: {status}"
+                    )
+
+            if attempt < 19:
+                time.sleep(0.25)
+
+        raise TradeExecutionError("Timed out confirming V2 MARKET E1 fill")
+
+    def _execute_market_primary_sync(
+        self,
+        plan: ExecutionPlan,
+    ) -> MarketPrimaryExecutionResult:
+        self._validate_staged_market_plan(plan)
+
+        self._sync_clock()
+
+        market_price = self._last_price(plan.symbol)
+
+        self._validate_market_plan(
+            plan,
+            market_price,
+        )
+
+        request = self._order_params(
+            plan,
+            0,
+        )
+
+        response = self._private_post(
+            "/v5/order/create",
+            {
+                "category": "linear",
+                **request,
+            },
+        )
+
+        order_id = response.get(
+            "result",
+            {},
+        ).get("orderId")
+
+        if not order_id:
+            raise TradeExecutionError("Bybit returned success without E1 orderId")
+
+        return self._wait_for_market_fill_sync(
+            plan.symbol,
+            str(order_id),
+        )
+
+    def _execute_remaining_entries_sync(
+        self,
+        plan: ExecutionPlan,
+    ) -> tuple[str, ...]:
+        self._validate_staged_market_plan(plan)
+
+        self._sync_clock()
+
+        requests = [
+            self._order_params(
+                plan,
+                index,
+            )
+            for index in (
+                1,
+                2,
+            )
+        ]
+
+        response = self._private_post(
+            "/v5/order/create-batch",
+            {
+                "category": "linear",
+                "request": requests,
+            },
+        )
+
+        return self._parse_batch_result(
+            plan.symbol,
+            requests,
+            response,
+        )
+
     def _execute_sync(
         self,
         plan: ExecutionPlan,
@@ -1185,6 +1383,11 @@ class BybitDemoExecutor:
         ]
 
         if market_orders:
+            if plan.strategy_version >= 2 and len(market_orders) != len(plan.orders):
+                raise TradeExecutionError(
+                    "Strategy V2 MARKET plans require staged E1 execution"
+                )
+
             if plan.strategy_version < 2 and len(market_orders) != len(plan.orders):
                 raise TradeExecutionError(
                     "V1 execution plan cannot mix MARKET and LIMIT orders"

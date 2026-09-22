@@ -396,3 +396,47 @@ def test_v2_accepts_primary_entry_with_partial_exit_and_runner() -> None:
     )
 
     assert plan.orders[0].quantity >= Decimal("0.4")
+
+
+def test_market_plan_rebases_scale_ins_from_actual_fill() -> None:
+    planner = ExecutionPlanner()
+
+    initial = planner.plan(
+        market_intent(),
+        policy(),
+        context(),
+    )
+
+    rebased = planner.rebase_market_plan(
+        initial,
+        fill_price=Decimal("121"),
+        filled_quantity=(initial.orders[0].quantity),
+        context=context("121"),
+    )
+
+    assert rebased.orders[0].reference_price == Decimal("121")
+
+    assert rebased.orders[0].quantity == initial.orders[0].quantity
+
+    assert [order.reference_price for order in rebased.orders] == [
+        Decimal("121"),
+        Decimal("110.8"),
+        Decimal("100.5"),
+    ]
+
+    assert [order.price for order in rebased.orders] == [
+        None,
+        Decimal("110.8"),
+        Decimal("100.5"),
+    ]
+
+    # Adverse E1 slippage consumes more than
+    # the nominal 60% E1 risk allocation, so
+    # E2/E3 are conservatively downsized.
+    assert rebased.orders[1].quantity < initial.orders[1].quantity
+
+    assert rebased.orders[2].quantity < initial.orders[2].quantity
+
+    assert rebased.planned_max_loss_usdt <= rebased.policy.risk_budget_usdt
+
+    assert rebased.take_profit_targets != initial.take_profit_targets
