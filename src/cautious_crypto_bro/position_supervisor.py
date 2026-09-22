@@ -219,6 +219,29 @@ class PositionSupervisor:
         strategy = plan.policy.strategy_v2
 
         if not state.entry_frozen:
+            previous_position_qty = state.last_position_qty
+
+            state = self._detect_fixed_exit_fills(
+                state,
+                account,
+                position,
+            )
+
+            fixed_exit_filled = any(
+                (
+                    state.tp1_done,
+                    state.tp2_done,
+                    state.tp3_done,
+                )
+            )
+
+            position_grew = (
+                previous_position_qty is not None
+                and position.size > previous_position_qty
+            )
+
+            structure_missing = state.exit_revision == 0
+
             base_quantity = max(
                 (state.base_position_qty or Decimal("0")),
                 position.size,
@@ -233,14 +256,51 @@ class PositionSupervisor:
                 }
             )
 
-            if live_r < strategy.trailing_activation_r and not state.rebalance_needed:
+            should_freeze = (
+                fixed_exit_filled
+                or (live_r >= strategy.trailing_activation_r)
+                or state.rebalance_needed
+            )
+
+            if not should_freeze:
+                if structure_missing or position_grew:
+                    if not structure_missing:
+                        await self._executor.cancel_strategy_exits(state.symbol)
+
+                    state = state.model_copy(
+                        update={
+                            "exit_revision": (state.exit_revision + 1),
+                        }
+                    )
+
+                    (
+                        account,
+                        installed_stop,
+                        installed_trail,
+                    ) = await self._install_structure(
+                        state,
+                        plan,
+                        position,
+                        account,
+                        enable_trailing=False,
+                    )
+
+                    state = state.model_copy(
+                        update={
+                            "protected_stop_loss": (installed_stop),
+                            "trailing_distance": (installed_trail),
+                        }
+                    )
+
                 await self._save(state)
 
                 return account
 
             await self._executor.cancel_pending_entries(state.symbol)
 
-            # Read again after cancelling accumulation.
+            # Re-read after freezing accumulation.
+            # An entry may have filled concurrently
+            # while cancellation was in flight.
             account = await self._executor.account_state()
 
             position = self._position(
