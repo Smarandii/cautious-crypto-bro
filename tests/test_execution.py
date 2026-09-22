@@ -336,3 +336,63 @@ def test_v2_exit_r_multiples_are_not_changed_by_tick_rounding() -> None:
         Decimal("1"),
         Decimal("1.5"),
     ]
+
+
+def sol_smoke_intent() -> TradingIntent:
+    return TradingIntent(
+        source=source(),
+        symbol="SOLUSDT",
+        side=Side.LONG,
+        entry=Entry(
+            type=EntryType.MARKET,
+        ),
+        stop_loss=111.08,
+        take_profit=None,
+        summary="SOL V2 smoke.",
+        confidence=1,
+    )
+
+
+def sol_smoke_context() -> InstrumentContext:
+    return InstrumentContext(
+        market_price=Decimal("116.93"),
+        tick_size=Decimal("0.01"),
+        qty_step=Decimal("0.1"),
+        min_qty=Decimal("0.1"),
+        min_notional=Decimal("5"),
+    )
+
+
+def test_v2_rejects_primary_entry_too_small_for_partial_exit() -> None:
+    tiny_policy = ExecutionPolicy(
+        trading_capital_usdt=(Decimal("7341.40")),
+        risk_per_trade_pct=(Decimal("0.05")),
+    )
+
+    try:
+        ExecutionPlanner().plan(
+            sol_smoke_intent(),
+            tiny_policy,
+            sol_smoke_context(),
+        )
+
+    except ExecutionPlanningError as exc:
+        assert "too small to support any fixed partial exit" in str(exc)
+
+    else:
+        raise AssertionError("Expected undersized V2 plan rejection")
+
+
+def test_v2_accepts_primary_entry_with_partial_exit_and_runner() -> None:
+    smoke_policy = ExecutionPolicy(
+        trading_capital_usdt=(Decimal("7341.40")),
+        risk_per_trade_pct=(Decimal("0.10")),
+    )
+
+    plan = ExecutionPlanner().plan(
+        sol_smoke_intent(),
+        smoke_policy,
+        sol_smoke_context(),
+    )
+
+    assert plan.orders[0].quantity >= Decimal("0.4")

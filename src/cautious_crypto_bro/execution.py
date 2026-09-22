@@ -133,6 +133,14 @@ class ExecutionPlanner:
             tuple(target.price for target in take_profit_targets),
         )
 
+        self._validate_initial_exit_capacity(
+            intent.side,
+            orders[0],
+            stop_loss,
+            take_profit_targets,
+            context,
+        )
+
         return ExecutionPlan(
             strategy_version=2,
             intent_id=intent.intent_id,
@@ -462,6 +470,76 @@ class ExecutionPlanner:
             ),
             source,
         )
+
+    @classmethod
+    def _validate_initial_exit_capacity(
+        cls,
+        side: Side,
+        primary_order: PlannedOrder,
+        stop_loss: Decimal,
+        targets: tuple[
+            PlannedTakeProfit,
+            PlannedTakeProfit,
+            PlannedTakeProfit,
+        ],
+        context: InstrumentContext,
+    ) -> None:
+        position_quantity = primary_order.quantity
+
+        entry_price = primary_order.reference_price
+
+        risk_distance = abs(entry_price - stop_loss)
+
+        placeable_quantity = Decimal("0")
+        placeable_count = 0
+
+        total_exit_pct = Decimal("0")
+
+        for target in targets:
+            total_exit_pct += target.close_pct
+
+            quantity = cls._round_down(
+                (position_quantity * target.close_pct / Decimal("100")),
+                context.qty_step,
+            )
+
+            if quantity <= 0 or quantity < context.min_qty:
+                continue
+
+            reward_distance = risk_distance * target.r_multiple
+
+            if side is Side.LONG:
+                raw_price = entry_price + reward_distance
+            else:
+                raw_price = entry_price - reward_distance
+
+            price = cls._round_price(
+                raw_price,
+                context.tick_size,
+            )
+
+            if context.min_notional and (quantity * price < context.min_notional):
+                continue
+
+            placeable_count += 1
+            placeable_quantity += quantity
+
+        runner_quantity = position_quantity - placeable_quantity
+
+        if placeable_count == 0:
+            raise ExecutionPlanningError(
+                "Primary V2 entry is too small to support any fixed partial exit"
+            )
+
+        if runner_quantity <= 0 or runner_quantity < context.min_qty:
+            raise ExecutionPlanningError(
+                "Primary V2 entry is too small to preserve a runner after fixed exits"
+            )
+
+        if total_exit_pct >= Decimal("100"):
+            raise ExecutionPlanningError(
+                "Strategy V2 fixed exits leave no configured runner"
+            )
 
     @staticmethod
     def _validate_entry_geometry(
