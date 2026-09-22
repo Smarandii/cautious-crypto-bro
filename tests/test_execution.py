@@ -316,3 +316,23 @@ def test_historical_v1_plan_still_parses() -> None:
     assert plan.runner_pct == 0
     assert plan.orders[0].name == "ENTRY"
     assert plan.orders[0].risk_pct is None
+
+
+def test_v2_exit_r_multiples_are_not_changed_by_tick_rounding() -> None:
+    plan = ExecutionPlanner().plan(
+        market_intent(),
+        policy(),
+        InstrumentContext(
+            market_price=Decimal("100"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+    assert [target.r_multiple for target in plan.take_profit_targets] == [
+        Decimal("0.5"),
+        Decimal("1"),
+        Decimal("1.5"),
+    ]

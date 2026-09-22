@@ -435,14 +435,17 @@ class ExecutionPlanner:
                         "V2 take-profit levels collapse after rounding"
                     )
 
-            actual_r = abs(price - weighted_entry) / risk_distance
-
             targets.append(
                 PlannedTakeProfit(
                     name=name,
                     price=price,
                     close_pct=close_pct,
-                    r_multiple=actual_r,
+                    # Keep the semantic Strategy V2
+                    # target. The preview price is
+                    # tick-rounded and may be rebuilt
+                    # later from the actual live
+                    # average entry.
+                    r_multiple=configured_r,
                 )
             )
 
