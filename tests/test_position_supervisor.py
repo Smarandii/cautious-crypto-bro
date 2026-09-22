@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from dataclasses import replace
 from datetime import (
     UTC,
@@ -29,7 +30,7 @@ from cautious_crypto_bro.position_supervisor import (
 )
 
 
-def plan():
+def plan(symbol: str = "BTCUSDT"):
     now = datetime.now(UTC)
 
     intent = TradingIntent(
@@ -41,7 +42,7 @@ def plan():
             received_at=now,
             text="test",
         ),
-        symbol="BTCUSDT",
+        symbol=symbol,
         side=Side.LONG,
         entry=Entry(
             type=EntryType.MARKET,
@@ -132,12 +133,14 @@ class Executor:
             open_orders=(),
         )
 
+        self.account_state_calls = 0
         self.cancelled_entries = 0
         self.cancelled_exits = 0
         self.protection = []
         self.exits = []
 
     async def account_state(self):
+        self.account_state_calls += 1
         return self.state
 
     async def cancel_pending_entries(
@@ -352,7 +355,7 @@ def test_supervisor_installs_exits_before_profit_threshold() -> None:
     assert store.state.exit_revision == 1
 
 
-def test_uncertain_strategy_is_quarantined() -> None:
+def test_uncertain_strategy_is_quarantined(caplog) -> None:
     strategy_plan = plan()
 
     state = PositionStrategy(
@@ -379,14 +382,68 @@ def test_uncertain_strategy_is_quarantined() -> None:
         poll_interval_seconds=1,
     )
 
-    asyncio.run(supervisor.reconcile_once())
+    with caplog.at_level(
+        logging.WARNING, logger="cautious_crypto_bro.position_supervisor"
+    ):
+        asyncio.run(supervisor.reconcile_once())
+        asyncio.run(supervisor.reconcile_once())
 
+    assert executor.account_state_calls == 0
+    assert sum("is UNCERTAIN" in record.message for record in caplog.records) == 1
     assert executor.cancelled_entries == 0
     assert executor.cancelled_exits == 0
     assert executor.protection == []
     assert executor.exits == []
 
     assert store.state.status is StrategyStatus.UNCERTAIN
+
+
+def test_uncertain_strategy_does_not_block_other_symbols() -> None:
+    uncertain_plan = plan()
+    active_plan = plan("ETHUSDT")
+    uncertain = PositionStrategy(
+        strategy_id=uncertain_plan.intent_id,
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        status=StrategyStatus.UNCERTAIN,
+    )
+    active = PositionStrategy(
+        strategy_id=active_plan.intent_id,
+        symbol="ETHUSDT",
+        side=Side.LONG,
+        status=StrategyStatus.CLOSING,
+    )
+
+    class MixedStore(Store):
+        def __init__(self) -> None:
+            super().__init__(uncertain, uncertain_plan)
+            self.active = active
+
+        async def get_active_position_strategies(self):
+            return ((self.state, self.strategy_plan), (self.active, active_plan))
+
+        async def save_position_strategy(self, state) -> None:
+            assert state.strategy_id == active.strategy_id
+            self.active = state
+
+    store = MixedStore()
+    executor = Executor()
+    executor.state = replace(
+        executor.state,
+        positions=(replace(executor.state.positions[0], symbol="ETHUSDT"),),
+    )
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+    )
+
+    asyncio.run(supervisor.reconcile_once())
+
+    assert executor.account_state_calls == 1
+    assert store.state.status is StrategyStatus.UNCERTAIN
+    assert store.active.status is StrategyStatus.CLOSING
+    assert store.active.last_position_qty == Decimal("4.08")
 
 
 def test_reduce_rebalance_skips_unchanged_protection() -> None:
