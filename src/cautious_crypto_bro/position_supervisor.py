@@ -238,7 +238,10 @@ class PositionSupervisor:
         # revision was persisted on a previous reconciliation.
         if self._partial_stops(state, plan, account):
             account = await self._handoff_partial_stops(
-                state, plan, position, account,
+                state,
+                plan,
+                position,
+                account,
             )
             position = self._position(state, account)
             if position is None:
@@ -596,7 +599,9 @@ class PositionSupervisor:
         if live_position is None:
             raise RuntimeError("Position disappeared during protection handoff")
         self._verify_protection(
-            live_position, protected_stop, trailing_distance,
+            live_position,
+            protected_stop,
+            trailing_distance,
         )
         account = await self._handoff_partial_stops(
             state.model_copy(
@@ -689,7 +694,9 @@ class PositionSupervisor:
         if verified_position is None:
             raise RuntimeError("Position disappeared while installing exits")
         self._verify_protection(
-            verified_position, protected_stop, trailing_distance,
+            verified_position,
+            protected_stop,
+            trailing_distance,
         )
 
         return (verified, protected_stop, trailing_distance)
