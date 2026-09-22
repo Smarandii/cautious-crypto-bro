@@ -355,3 +355,40 @@ def test_supervisor_installs_exits_before_profit_threshold() -> None:
     assert store.state.status is StrategyStatus.OPEN_RISK
 
     assert store.state.exit_revision == 1
+
+
+def test_uncertain_strategy_is_quarantined() -> None:
+    strategy_plan = plan()
+
+    state = PositionStrategy(
+        strategy_id=(strategy_plan.intent_id),
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        status=StrategyStatus.UNCERTAIN,
+        entry_frozen=True,
+        last_position_qty=Decimal("4.08"),
+        last_avg_price=Decimal("100"),
+    )
+
+    store = Store(
+        state,
+        strategy_plan,
+    )
+
+    executor = Executor()
+
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+        poll_interval_seconds=1,
+    )
+
+    asyncio.run(supervisor.reconcile_once())
+
+    assert executor.cancelled_entries == 0
+    assert executor.cancelled_exits == 0
+    assert executor.protection == []
+    assert executor.exits == []
+
+    assert store.state.status is StrategyStatus.UNCERTAIN

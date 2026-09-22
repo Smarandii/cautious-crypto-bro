@@ -127,6 +127,15 @@ class PositionSupervisor:
             account,
         )
 
+        if state.status is StrategyStatus.UNCERTAIN:
+            logger.warning(
+                "Strategy %s %s is UNCERTAIN; leaving exchange state untouched",
+                state.strategy_id,
+                state.symbol,
+            )
+
+            return account
+
         if state.status is StrategyStatus.CLOSING:
             if position is None:
                 await self._save(

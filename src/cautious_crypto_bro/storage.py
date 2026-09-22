@@ -1359,6 +1359,34 @@ class IntentStore:
             error=error,
         )
 
+    async def mark_position_action_uncertain(
+        self,
+        action_id: UUID,
+        order_id: str,
+        error: str,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                UPDATE position_actions
+                SET
+                    status = ?,
+                    bybit_order_id = ?,
+                    error = ?,
+                    updated_at =
+                        CURRENT_TIMESTAMP
+                WHERE action_id = ?
+                """,
+                (
+                    IntentStatus.UNCERTAIN.value,
+                    order_id,
+                    error[:2000],
+                    str(action_id),
+                ),
+            )
+
+            await db.commit()
+
     async def mark_executed(
         self,
         intent_id: UUID,

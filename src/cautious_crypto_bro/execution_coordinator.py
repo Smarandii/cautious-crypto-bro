@@ -4,6 +4,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from .bybit import (
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 
 class AutoExecutionSafetyError(RuntimeError):
+    pass
+
+
+class PositionActionConfirmationError(RuntimeError):
     pass
 
 
@@ -133,6 +138,88 @@ class ExecutionCoordinator:
             )
 
         return None
+
+    async def _confirm_position_action(
+        self,
+        action: PositionActionIntent,
+        result: PositionActionExecutionResult,
+    ) -> None:
+        expected_remaining: Decimal | None = None
+
+        if action.action is PositionActionType.REDUCE:
+            submitted = result.submitted_quantity
+
+            if submitted is None:
+                raise PositionActionConfirmationError(
+                    "REDUCE returned no submitted quantity"
+                )
+
+            expected_remaining = result.position_size_before - submitted
+
+            if expected_remaining <= 0:
+                raise PositionActionConfirmationError(
+                    "REDUCE confirmation geometry is invalid"
+                )
+
+        for attempt in range(20):
+            state = await self._executor.account_state()
+
+            positions = tuple(
+                position
+                for position in state.positions
+                if (position.symbol == action.symbol)
+            )
+
+            if action.action is PositionActionType.CLOSE:
+                if not positions:
+                    return
+
+                if len(positions) != 1:
+                    raise PositionActionConfirmationError(
+                        "CLOSE confirmation found multiple live positions"
+                    )
+
+                position = positions[0]
+
+                if position.side is not result.position_side:
+                    raise PositionActionConfirmationError(
+                        "CLOSE confirmation found opposite-side exposure"
+                    )
+
+            else:
+                assert expected_remaining is not None
+
+                if not positions:
+                    raise PositionActionConfirmationError(
+                        "REDUCE unexpectedly closed the full position"
+                    )
+
+                if len(positions) != 1:
+                    raise PositionActionConfirmationError(
+                        "REDUCE confirmation found multiple live positions"
+                    )
+
+                position = positions[0]
+
+                if position.side is not result.position_side:
+                    raise PositionActionConfirmationError(
+                        "REDUCE confirmation found opposite-side exposure"
+                    )
+
+                if position.size <= expected_remaining:
+                    return
+
+            if attempt < 19:
+                await asyncio.sleep(0.25)
+
+        if action.action is PositionActionType.CLOSE:
+            detail = "position is still open"
+        else:
+            detail = "position quantity did not reach the submitted REDUCE target"
+
+        raise PositionActionConfirmationError(
+            f"Bybit accepted position action {result.order_id}, but {detail}"
+        )
 
     async def execute_intent(
         self,
@@ -325,9 +412,51 @@ class ExecutionCoordinator:
                 action=current or action,
             )
 
+        result: PositionActionExecutionResult | None = None
+
         try:
             async with self._execution_lock:
                 result = await self._executor.execute_position_action(action)
+
+                await self._confirm_position_action(
+                    action,
+                    result,
+                )
+
+        except PositionActionConfirmationError as exc:
+            assert result is not None
+
+            logger.error(
+                "Position action %s is uncertain: %s",
+                action_id,
+                exc,
+            )
+
+            message = f"{type(exc).__name__}: {exc}"
+
+            await self._store.mark_position_action_uncertain(
+                action_id,
+                result.order_id,
+                message,
+            )
+
+            records = await self._store.get_active_position_strategies()
+
+            for state, _ in records:
+                if state.symbol != action.symbol:
+                    continue
+
+                await self._store.set_position_strategy_status(
+                    state.strategy_id,
+                    StrategyStatus.UNCERTAIN,
+                )
+
+            return PositionActionExecutionOutcome(
+                status=IntentStatus.UNCERTAIN,
+                message=message,
+                action=action,
+                result=result,
+            )
 
         except Exception as exc:
             logger.exception(
@@ -352,6 +481,8 @@ class ExecutionCoordinator:
                 message=message,
                 action=action,
             )
+
+        assert result is not None
 
         await self._store.mark_position_action_executed(
             action_id,
