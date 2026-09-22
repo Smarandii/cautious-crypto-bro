@@ -4,6 +4,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from .bybit import (
@@ -13,18 +14,26 @@ from .bybit import (
 )
 from .domain import (
     ApprovalMode,
+    ExecutionOrderType,
     ExecutionPlan,
     IntentStatus,
     OpenRelation,
     PositionActionIntent,
+    PositionActionType,
+    StrategyStatus,
     TradingIntent,
 )
+from .execution import ExecutionPlanner
 from .storage import IntentStore
 
 logger = logging.getLogger(__name__)
 
 
 class AutoExecutionSafetyError(RuntimeError):
+    pass
+
+
+class PositionActionConfirmationError(RuntimeError):
     pass
 
 
@@ -52,6 +61,7 @@ class ExecutionCoordinator:
         store: IntentStore,
         executor: BybitDemoExecutor,
         max_age_seconds: int,
+        execution_lock: asyncio.Lock | None = None,
     ) -> None:
         if max_age_seconds <= 0:
             raise ValueError("max_age_seconds must be positive")
@@ -60,10 +70,11 @@ class ExecutionCoordinator:
         self._executor = executor
         self._max_age_seconds = max_age_seconds
 
-        # Serialize account mutations. This closes the
-        # race where two concurrent NEW signals could
-        # both inspect an empty account and then execute.
-        self._execution_lock = asyncio.Lock()
+        # Serialize every account mutation, including
+        # supervisor reconciliation.
+        self._execution_lock = (
+            execution_lock if execution_lock is not None else asyncio.Lock()
+        )
 
     @staticmethod
     def auto_open_safety_reason(
@@ -129,6 +140,88 @@ class ExecutionCoordinator:
             )
 
         return None
+
+    async def _confirm_position_action(
+        self,
+        action: PositionActionIntent,
+        result: PositionActionExecutionResult,
+    ) -> None:
+        expected_remaining: Decimal | None = None
+
+        if action.action is PositionActionType.REDUCE:
+            submitted = result.submitted_quantity
+
+            if submitted is None:
+                raise PositionActionConfirmationError(
+                    "REDUCE returned no submitted quantity"
+                )
+
+            expected_remaining = result.position_size_before - submitted
+
+            if expected_remaining <= 0:
+                raise PositionActionConfirmationError(
+                    "REDUCE confirmation geometry is invalid"
+                )
+
+        for attempt in range(20):
+            state = await self._executor.account_state()
+
+            positions = tuple(
+                position
+                for position in state.positions
+                if (position.symbol == action.symbol)
+            )
+
+            if action.action is PositionActionType.CLOSE:
+                if not positions:
+                    return
+
+                if len(positions) != 1:
+                    raise PositionActionConfirmationError(
+                        "CLOSE confirmation found multiple live positions"
+                    )
+
+                position = positions[0]
+
+                if position.side is not result.position_side:
+                    raise PositionActionConfirmationError(
+                        "CLOSE confirmation found opposite-side exposure"
+                    )
+
+            else:
+                assert expected_remaining is not None
+
+                if not positions:
+                    raise PositionActionConfirmationError(
+                        "REDUCE unexpectedly closed the full position"
+                    )
+
+                if len(positions) != 1:
+                    raise PositionActionConfirmationError(
+                        "REDUCE confirmation found multiple live positions"
+                    )
+
+                position = positions[0]
+
+                if position.side is not result.position_side:
+                    raise PositionActionConfirmationError(
+                        "REDUCE confirmation found opposite-side exposure"
+                    )
+
+                if position.size <= expected_remaining:
+                    return
+
+            if attempt < 19:
+                await asyncio.sleep(0.25)
+
+        if action.action is PositionActionType.CLOSE:
+            detail = "position is still open"
+        else:
+            detail = "position quantity did not reach the submitted REDUCE target"
+
+        raise PositionActionConfirmationError(
+            f"Bybit accepted position action {result.order_id}, but {detail}"
+        )
 
     async def execute_intent(
         self,
@@ -202,6 +295,22 @@ class ExecutionCoordinator:
                 plan=plan,
             )
 
+        if plan.strategy_version != 2:
+            message = (
+                f"Historical Strategy V{plan.strategy_version} plans are read-only; "
+                "only Strategy V2 can execute"
+            )
+            await self._store.mark_failed(intent_id, message)
+
+            return IntentExecutionOutcome(
+                status=IntentStatus.FAILED,
+                message=message,
+                intent=intent,
+                plan=plan,
+            )
+
+        effective_plan = plan
+
         try:
             async with self._execution_lock:
                 if approval_mode is ApprovalMode.AUTO:
@@ -213,9 +322,42 @@ class ExecutionCoordinator:
                     )
 
                     if safety_reason is not None:
-                        raise (AutoExecutionSafetyError(safety_reason))
+                        raise AutoExecutionSafetyError(safety_reason)
 
-                order_ids = await self._executor.execute(plan)
+                await self._store.ensure_position_strategy(plan)
+
+                staged_market = plan.orders[0].order_type is ExecutionOrderType.MARKET
+
+                if staged_market:
+                    primary = await self._executor.execute_market_primary(plan)
+
+                    context = await self._executor.market_context(plan.symbol)
+
+                    effective_plan = ExecutionPlanner().rebase_market_plan(
+                        plan,
+                        fill_price=(primary.average_fill_price),
+                        filled_quantity=(primary.filled_quantity),
+                        context=context,
+                    )
+
+                    # Persist the fill-derived geometry
+                    # before E2/E3 are submitted. The
+                    # supervisor shares this mutation lock,
+                    # so it can never observe the new orders
+                    # against the old snapshot plan.
+                    await self._store.update_execution_plan(effective_plan)
+
+                    remaining_ids = await self._executor.execute_remaining_entries(
+                        effective_plan
+                    )
+
+                    order_ids = (
+                        primary.order_id,
+                        *remaining_ids,
+                    )
+
+                else:
+                    order_ids = await self._executor.execute(plan)
 
         except Exception as exc:
             logger.exception(
@@ -230,11 +372,16 @@ class ExecutionCoordinator:
                 message,
             )
 
+            await self._store.set_position_strategy_status(
+                intent_id,
+                StrategyStatus.UNCERTAIN,
+            )
+
             return IntentExecutionOutcome(
                 status=IntentStatus.FAILED,
                 message=message,
                 intent=intent,
-                plan=plan,
+                plan=effective_plan,
             )
 
         await self._store.mark_executed(
@@ -246,7 +393,7 @@ class ExecutionCoordinator:
             status=IntentStatus.EXECUTED,
             message="Executed on Bybit Demo",
             intent=intent,
-            plan=plan,
+            plan=effective_plan,
             order_ids=order_ids,
         )
 
@@ -312,9 +459,51 @@ class ExecutionCoordinator:
                 action=current or action,
             )
 
+        result: PositionActionExecutionResult | None = None
+
         try:
             async with self._execution_lock:
                 result = await self._executor.execute_position_action(action)
+
+                await self._confirm_position_action(
+                    action,
+                    result,
+                )
+
+        except PositionActionConfirmationError as exc:
+            assert result is not None
+
+            logger.error(
+                "Position action %s is uncertain: %s",
+                action_id,
+                exc,
+            )
+
+            message = f"{type(exc).__name__}: {exc}"
+
+            await self._store.mark_position_action_uncertain(
+                action_id,
+                result.order_id,
+                message,
+            )
+
+            records = await self._store.get_active_position_strategies()
+
+            for state, _ in records:
+                if state.symbol != action.symbol:
+                    continue
+
+                await self._store.set_position_strategy_status(
+                    state.strategy_id,
+                    StrategyStatus.UNCERTAIN,
+                )
+
+            return PositionActionExecutionOutcome(
+                status=IntentStatus.UNCERTAIN,
+                message=message,
+                action=action,
+                result=result,
+            )
 
         except Exception as exc:
             logger.exception(
@@ -329,16 +518,29 @@ class ExecutionCoordinator:
                 message,
             )
 
+            # Execution may already have cancelled
+            # V2 exits before the final market action
+            # failed. Ask the supervisor to rebuild.
+            await self._store.request_strategy_rebalance(action.symbol)
+
             return PositionActionExecutionOutcome(
                 status=IntentStatus.FAILED,
                 message=message,
                 action=action,
             )
 
+        assert result is not None
+
         await self._store.mark_position_action_executed(
             action_id,
             result.order_id,
         )
+
+        if action.action is PositionActionType.REDUCE:
+            await self._store.request_strategy_rebalance(action.symbol)
+
+        elif action.action is PositionActionType.CLOSE:
+            await self._store.request_strategy_close(action.symbol)
 
         return PositionActionExecutionOutcome(
             status=IntentStatus.EXECUTED,

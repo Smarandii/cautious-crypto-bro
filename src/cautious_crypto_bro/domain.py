@@ -75,6 +75,16 @@ class IntentStatus(StrEnum):
     UNCERTAIN = "UNCERTAIN"
 
 
+class StrategyStatus(StrEnum):
+    ENTERING = "ENTERING"
+    OPEN_RISK = "OPEN_RISK"
+    PROFIT_PROTECTED = "PROFIT_PROTECTED"
+    CLOSING = "CLOSING"
+    CLOSED = "CLOSED"
+    MANUAL_OVERRIDE = "MANUAL_OVERRIDE"
+    UNCERTAIN = "UNCERTAIN"
+
+
 def _normalize_usdt_symbol(
     symbol: str,
 ) -> str:
@@ -576,25 +586,221 @@ class ExitPolicy(BaseModel):
         )
 
 
+class StrategyV2Policy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    primary_entry_risk_pct: Decimal = Field(
+        default=Decimal("60"),
+        gt=0,
+        lt=100,
+    )
+    secondary_entry_risk_pct: Decimal = Field(
+        default=Decimal("25"),
+        gt=0,
+        lt=100,
+    )
+    tertiary_entry_risk_pct: Decimal = Field(
+        default=Decimal("15"),
+        gt=0,
+        lt=100,
+    )
+
+    secondary_entry_depth_r: Decimal = Field(
+        default=Decimal("0.33"),
+        gt=0,
+        lt=1,
+    )
+    tertiary_entry_depth_r: Decimal = Field(
+        default=Decimal("0.66"),
+        gt=0,
+        lt=1,
+    )
+
+    first_take_profit_r: Decimal = Field(
+        default=Decimal("0.5"),
+        gt=0,
+    )
+    second_take_profit_r: Decimal = Field(
+        default=Decimal("1"),
+        gt=0,
+    )
+    third_take_profit_r: Decimal = Field(
+        default=Decimal("1.5"),
+        gt=0,
+    )
+
+    first_take_profit_pct: Decimal = Field(
+        default=Decimal("25"),
+        gt=0,
+        lt=100,
+    )
+    second_take_profit_pct: Decimal = Field(
+        default=Decimal("25"),
+        gt=0,
+        lt=100,
+    )
+    third_take_profit_pct: Decimal = Field(
+        default=Decimal("25"),
+        gt=0,
+        lt=100,
+    )
+    runner_pct: Decimal = Field(
+        default=Decimal("25"),
+        gt=0,
+        lt=100,
+    )
+
+    trailing_activation_r: Decimal = Field(
+        default=Decimal("0.5"),
+        gt=0,
+    )
+    trailing_distance_r: Decimal = Field(
+        default=Decimal("0.3"),
+        gt=0,
+    )
+    minimum_locked_profit_r: Decimal = Field(
+        default=Decimal("0.05"),
+        ge=0,
+    )
+
+    @model_validator(mode="after")
+    def validate_v2_policy(
+        self,
+    ) -> StrategyV2Policy:
+        entry_total = (
+            self.primary_entry_risk_pct
+            + self.secondary_entry_risk_pct
+            + self.tertiary_entry_risk_pct
+        )
+
+        if entry_total != Decimal("100"):
+            raise ValueError("V2 entry risk percentages must total 100")
+
+        if not (self.secondary_entry_depth_r < self.tertiary_entry_depth_r):
+            raise ValueError("V2 entry depths must increase")
+
+        if not (
+            self.first_take_profit_r
+            < self.second_take_profit_r
+            < self.third_take_profit_r
+        ):
+            raise ValueError("V2 take-profit R multiples must increase")
+
+        exit_total = (
+            self.first_take_profit_pct
+            + self.second_take_profit_pct
+            + self.third_take_profit_pct
+            + self.runner_pct
+        )
+
+        if exit_total != Decimal("100"):
+            raise ValueError("V2 fixed exits and runner must total 100")
+
+        if self.trailing_distance_r >= self.trailing_activation_r:
+            raise ValueError("V2 trailing distance must be smaller than activation R")
+
+        nominal_floor = self.trailing_activation_r - self.trailing_distance_r
+
+        if self.minimum_locked_profit_r > nominal_floor:
+            raise ValueError(
+                "V2 minimum locked profit "
+                "cannot exceed the nominal "
+                "initial trailing floor"
+            )
+
+        return self
+
+    @property
+    def entry_rules(
+        self,
+    ) -> tuple[
+        tuple[Decimal, Decimal],
+        ...,
+    ]:
+        return (
+            (
+                Decimal("0"),
+                self.primary_entry_risk_pct,
+            ),
+            (
+                self.secondary_entry_depth_r,
+                self.secondary_entry_risk_pct,
+            ),
+            (
+                self.tertiary_entry_depth_r,
+                self.tertiary_entry_risk_pct,
+            ),
+        )
+
+    @property
+    def exit_rules(
+        self,
+    ) -> tuple[
+        tuple[str, Decimal, Decimal],
+        ...,
+    ]:
+        return (
+            (
+                "TP1",
+                self.first_take_profit_r,
+                self.first_take_profit_pct,
+            ),
+            (
+                "TP2",
+                self.second_take_profit_r,
+                self.second_take_profit_pct,
+            ),
+            (
+                "TP3",
+                self.third_take_profit_r,
+                self.third_take_profit_pct,
+            ),
+        )
+
+
 class ExecutionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    trading_capital_usdt: Decimal = Field(gt=0)
+    # Runtime configuration does not persist capital.
+    # SignalService freezes live Bybit wallet balance
+    # into each ExecutionPlan before planning.
+    trading_capital_usdt: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+
     risk_per_trade_pct: Decimal = Field(
+        default=Decimal("1"),
         gt=0,
         le=10,
     )
+
+    # Historical V1 compatibility only. Keep accepting
+    # these fields when old execution plans are loaded,
+    # but never serialize them into new V2 plans.
     range_order_count: int = Field(
+        default=3,
         ge=1,
         le=10,
+        exclude=True,
     )
     exit_policy: ExitPolicy = Field(
         default_factory=ExitPolicy,
+        exclude=True,
+    )
+
+    strategy_v2: StrategyV2Policy = Field(
+        default_factory=StrategyV2Policy,
     )
 
     @property
     def risk_budget_usdt(self) -> Decimal:
-        return self.trading_capital_usdt * self.risk_per_trade_pct / Decimal("100")
+        capital = self.trading_capital_usdt
+
+        if capital is None:
+            raise ValueError("Execution policy has no frozen live-capital snapshot")
+
+        return capital * self.risk_per_trade_pct / Decimal("100")
 
 
 class PlannedTakeProfit(BaseModel):
@@ -611,6 +817,18 @@ class PlannedTakeProfit(BaseModel):
 
 class PlannedOrder(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    # Defaults preserve historical V1 plan loading.
+    name: str = Field(
+        default="ENTRY",
+        min_length=1,
+        max_length=20,
+    )
+    risk_pct: Decimal | None = Field(
+        default=None,
+        gt=0,
+        le=100,
+    )
 
     order_type: ExecutionOrderType
     quantity: Decimal = Field(gt=0)
@@ -640,6 +858,11 @@ class PlannedOrder(BaseModel):
 class ExecutionPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    strategy_version: int = Field(
+        default=1,
+        ge=1,
+    )
+
     intent_id: UUID
     symbol: str
     side: Side
@@ -657,6 +880,14 @@ class ExecutionPlan(BaseModel):
         ...,
     ] = ()
     take_profit_source: TakeProfitSource = TakeProfitSource.TRADER
+
+    # V1 plans load as zero runner. New V2 plans set 25%.
+    runner_pct: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        lt=100,
+    )
+
     policy: ExecutionPolicy
     planned_max_loss_usdt: Decimal = Field(ge=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -668,6 +899,44 @@ class ExecutionPlan(BaseModel):
         if self.planned_max_loss_usdt > self.policy.risk_budget_usdt:
             raise ValueError("Execution plan exceeds configured risk budget")
 
+        if self.strategy_version >= 2:
+            if len(self.orders) != 3:
+                raise ValueError("Strategy V2 requires exactly three entry legs")
+
+            if tuple(order.name for order in self.orders) != (
+                "E1",
+                "E2",
+                "E3",
+            ):
+                raise ValueError("Strategy V2 entries must be E1, E2, E3")
+
+            if any(order.risk_pct is None for order in self.orders):
+                raise ValueError("Strategy V2 entries require risk allocations")
+
+            entry_risk_total = sum(
+                (order.risk_pct for order in self.orders if order.risk_pct is not None),
+                Decimal("0"),
+            )
+
+            if entry_risk_total != Decimal("100"):
+                raise ValueError("Strategy V2 entry risk allocations must total 100")
+
+            if any(order.take_profit is not None for order in self.orders):
+                raise ValueError("Strategy V2 entry orders must not own take profits")
+
+            if len(self.take_profit_targets) != 3:
+                raise ValueError("Strategy V2 requires exactly three fixed exits")
+
+            total_close_pct = sum(
+                (target.close_pct for target in self.take_profit_targets),
+                Decimal("0"),
+            )
+
+            if total_close_pct + self.runner_pct != Decimal("100"):
+                raise ValueError("Strategy V2 fixed exits and runner must total 100")
+
+            return self
+
         if self.take_profit_targets:
             total_close_pct = sum(
                 (target.close_pct for target in self.take_profit_targets),
@@ -676,5 +945,69 @@ class ExecutionPlan(BaseModel):
 
             if total_close_pct != Decimal("100"):
                 raise ValueError("Planned TP close percentages must total 100")
+
+        return self
+
+
+class PositionStrategy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_id: UUID
+    symbol: str
+    side: Side
+    status: StrategyStatus = StrategyStatus.ENTERING
+
+    entry_frozen: bool = False
+
+    # Highest/frozen live quantity observed by the
+    # supervisor. Once entry_frozen=True, this is the
+    # quantity against which the V2 exit buckets were
+    # constructed.
+    base_position_qty: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+
+    last_position_qty: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+    last_avg_price: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+
+    tp1_done: bool = False
+    tp2_done: bool = False
+    tp3_done: bool = False
+
+    trailing_active: bool = False
+
+    # Exact protection last verified on Bybit.
+    protected_stop_loss: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+    trailing_distance: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+
+    # Increment whenever exits are rebuilt after REDUCE.
+    exit_revision: int = Field(
+        default=0,
+        ge=0,
+    )
+
+    rebalance_needed: bool = False
+
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def validate_strategy(
+        self,
+    ) -> PositionStrategy:
+        self.symbol = _normalize_usdt_symbol(self.symbol)
 
         return self

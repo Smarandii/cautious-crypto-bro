@@ -1,3 +1,4 @@
+import json
 from datetime import (
     UTC,
     datetime,
@@ -6,17 +7,26 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 from cautious_crypto_bro.bybit import (
     BybitDemoExecutor,
     TradeExecutionError,
 )
 from cautious_crypto_bro.domain import (
+    Entry,
+    EntryType,
     ExecutionOrderType,
     ExecutionPlan,
     ExecutionPolicy,
     PlannedOrder,
     Side,
+    SourceMessage,
+    TradingIntent,
+)
+from cautious_crypto_bro.execution import (
+    ExecutionPlanner,
+    InstrumentContext,
 )
 
 
@@ -58,6 +68,68 @@ def range_plan() -> ExecutionPlan:
         policy=policy(),
         planned_max_loss_usdt=(Decimal("4.5")),
         created_at=datetime.now(UTC),
+    )
+
+
+def v2_range_plan() -> ExecutionPlan:
+    now = datetime.now(UTC)
+    return ExecutionPlanner().plan(
+        TradingIntent(
+            source=SourceMessage(
+                channel_id=1,
+                channel_title="Test",
+                message_id=1,
+                published_at=now,
+                received_at=now,
+                text="test",
+            ),
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            entry=Entry(type=EntryType.RANGE, range_low=100, range_high=110),
+            stop_loss=90,
+            take_profit=None,
+            summary="test",
+            confidence=1,
+        ),
+        policy(),
+        InstrumentContext(
+            market_price=Decimal("120"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+
+def v2_market_plan() -> ExecutionPlan:
+    now = datetime.now(UTC)
+    return ExecutionPlanner().plan(
+        TradingIntent(
+            source=SourceMessage(
+                channel_id=1,
+                channel_title="Test",
+                message_id=2,
+                published_at=now,
+                received_at=now,
+                text="test",
+            ),
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            entry=Entry(type=EntryType.MARKET),
+            stop_loss=90,
+            take_profit=None,
+            summary="test",
+            confidence=1,
+        ),
+        policy(),
+        InstrumentContext(
+            market_price=Decimal("120"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
     )
 
 
@@ -104,7 +176,7 @@ def test_clock_sync_compensates_for_local_drift() -> None:
         executor.close()
 
 
-def test_range_plan_uses_batch_partial_tpsl() -> None:
+def test_v2_range_plan_uses_batch_stop_only_entries() -> None:
     def handler(
         request: httpx.Request,
     ) -> httpx.Response:
@@ -113,6 +185,7 @@ def test_range_plan_uses_batch_partial_tpsl() -> None:
         body = request.read().decode()
 
         assert body.count('"tpslMode":"Partial"') == 3
+        assert '"takeProfit"' not in body
 
         return httpx.Response(
             200,
@@ -162,7 +235,7 @@ def test_range_plan_uses_batch_partial_tpsl() -> None:
             executor,
             "_sync_clock",
         ):
-            order_ids = executor._execute_sync(range_plan())
+            order_ids = executor._execute_sync(v2_range_plan())
 
         assert order_ids == (
             "a",
@@ -175,44 +248,39 @@ def test_range_plan_uses_batch_partial_tpsl() -> None:
 
 
 def test_market_execution_rejects_risk_above_budget() -> None:
-    plan = ExecutionPlan(
-        intent_id=("22222222-2222-2222-2222-222222222222"),
-        symbol="BTCUSDT",
-        side=Side.LONG,
-        orders=(
-            PlannedOrder(
-                order_type=(ExecutionOrderType.MARKET),
-                quantity=Decimal("1"),
-                reference_price=(Decimal("100")),
-            ),
-        ),
-        stop_loss=Decimal("50"),
-        take_profit=Decimal("200"),
-        policy=policy(),
-        planned_max_loss_usdt=(Decimal("50")),
-    )
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
 
-    executor = BybitDemoExecutor(
-        api_key="key",
-        api_secret="secret",
-    )
+    try:
+        with pytest.raises(TradeExecutionError, match="risk budget"):
+            executor._validate_market_plan(
+                v2_market_plan(),
+                Decimal("200"),
+            )
+    finally:
+        executor.close()
+
+
+def test_historical_v1_cannot_reach_order_submission() -> None:
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
+    legacy_plan = range_plan()
 
     try:
         with patch.object(
             executor,
-            "_last_price",
-            return_value=Decimal("130"),
+            "_sync_clock",
+            side_effect=AssertionError("V1 must not make exchange calls"),
         ):
-            try:
-                executor._validate_market_plan(
-                    plan,
-                    Decimal("130"),
-                )
-            except TradeExecutionError:
-                pass
-            else:
-                raise AssertionError("Expected market risk validation to fail")
+            with pytest.raises(TradeExecutionError, match="read-only"):
+                executor._execute_sync(legacy_plan)
 
+        with pytest.raises(TradeExecutionError, match="read-only"):
+            executor._order_params(legacy_plan, 0)
+
+        with pytest.raises(TradeExecutionError, match="read-only"):
+            executor._validate_market_plan(legacy_plan, Decimal("105"))
+
+        with pytest.raises(TradeExecutionError, match="read-only"):
+            executor._execute_market_primary_sync(legacy_plan)
     finally:
         executor.close()
 
@@ -317,6 +385,331 @@ def test_exposure_reads_position_and_pending_ccb_orders() -> None:
         assert pending.side is Side.SHORT
         assert pending.remaining_quantity == Decimal("0.1")
         assert pending.order_id == "ccb-order"
+
+    finally:
+        executor.close()
+
+
+def test_v2_entries_use_stop_only_payloads() -> None:
+    plan = ExecutionPlanner().plan(
+        TradingIntent(
+            source=SourceMessage(
+                channel_id=1,
+                channel_title="Test",
+                message_id=1,
+                published_at=datetime.now(UTC),
+                received_at=datetime.now(UTC),
+                text="test",
+            ),
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            entry=Entry(
+                type=EntryType.MARKET,
+            ),
+            stop_loss=90,
+            take_profit=None,
+            summary="test",
+            confidence=1,
+        ),
+        policy(),
+        InstrumentContext(
+            market_price=Decimal("120"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+    executor = BybitDemoExecutor(
+        api_key="key",
+        api_secret="secret",
+    )
+
+    try:
+        requests = [
+            executor._order_params(
+                plan,
+                index,
+            )
+            for index in range(len(plan.orders))
+        ]
+
+        assert [request["orderType"] for request in requests] == [
+            "Market",
+            "Limit",
+            "Limit",
+        ]
+
+        assert all("takeProfit" not in request for request in requests)
+
+        assert all(request["stopLoss"] == "90" for request in requests)
+
+        assert all(request["tpslMode"] == "Partial" for request in requests)
+
+        assert [
+            request["orderLinkId"].rsplit(
+                "-",
+                1,
+            )[-1]
+            for request in requests
+        ] == [
+            "e1",
+            "e2",
+            "e3",
+        ]
+
+    finally:
+        executor.close()
+
+
+def test_v2_market_direct_batch_execution_is_rejected() -> None:
+    plan = ExecutionPlanner().plan(
+        TradingIntent(
+            source=SourceMessage(
+                channel_id=1,
+                channel_title="Test",
+                message_id=1,
+                published_at=datetime.now(UTC),
+                received_at=datetime.now(UTC),
+                text="test",
+            ),
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            entry=Entry(
+                type=EntryType.MARKET,
+            ),
+            stop_loss=90,
+            take_profit=None,
+            summary="test",
+            confidence=1,
+        ),
+        policy(),
+        InstrumentContext(
+            market_price=Decimal("120"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+    executor = BybitDemoExecutor(
+        api_key="key",
+        api_secret="secret",
+    )
+
+    try:
+        with patch.object(
+            executor,
+            "_sync_clock",
+        ):
+            try:
+                executor._execute_sync(plan)
+            except TradeExecutionError as exc:
+                assert "staged E1" in str(exc)
+            else:
+                raise AssertionError(
+                    "Expected direct V2 MARKET batch execution rejection"
+                )
+
+    finally:
+        executor.close()
+
+
+def test_v2_market_primary_fill_precedes_scale_ins() -> None:
+    plan = ExecutionPlanner().plan(
+        TradingIntent(
+            source=SourceMessage(
+                channel_id=1,
+                channel_title="Test",
+                message_id=2,
+                published_at=datetime.now(UTC),
+                received_at=datetime.now(UTC),
+                text="test",
+            ),
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            entry=Entry(
+                type=EntryType.MARKET,
+            ),
+            stop_loss=90,
+            take_profit=None,
+            summary="test",
+            confidence=1,
+        ),
+        policy(),
+        InstrumentContext(
+            market_price=Decimal("120"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+    calls: list[str] = []
+    batch_request = None
+
+    def handler(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        nonlocal batch_request
+
+        calls.append(request.url.path)
+
+        if request.url.path == "/v5/market/tickers":
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "result": {
+                        "list": [
+                            {
+                                "lastPrice": "120",
+                            }
+                        ]
+                    },
+                },
+            )
+
+        if request.url.path == "/v5/order/create":
+            body = json.loads(request.read().decode())
+
+            assert body["orderType"] == "Market"
+
+            assert body["orderLinkId"].endswith("-e1")
+
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "result": {
+                        "orderId": "e1-live",
+                    },
+                },
+            )
+
+        if request.url.path == "/v5/order/realtime":
+            assert request.url.params["orderId"] == "e1-live"
+
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "result": {
+                        "list": [
+                            {
+                                "orderId": ("e1-live"),
+                                "orderStatus": ("Filled"),
+                                "avgPrice": "121",
+                                "cumExecQty": str(plan.orders[0].quantity),
+                                "leavesQty": "0",
+                            }
+                        ]
+                    },
+                },
+            )
+
+        if request.url.path == "/v5/order/history":
+            raise AssertionError("History fallback should not be needed")
+
+        if request.url.path == "/v5/order/create-batch":
+            batch_request = json.loads(request.read().decode())
+
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "result": {
+                        "list": [
+                            {"orderId": "e2-live"},
+                            {"orderId": "e3-live"},
+                        ]
+                    },
+                    "retExtInfo": {
+                        "list": [
+                            {
+                                "code": 0,
+                                "msg": "OK",
+                            },
+                            {
+                                "code": 0,
+                                "msg": "OK",
+                            },
+                        ]
+                    },
+                },
+            )
+
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    executor = BybitDemoExecutor(
+        api_key="key",
+        api_secret="secret",
+    )
+
+    executor._client.close()
+
+    executor._client = httpx.Client(
+        base_url=("https://api-demo.bybit.com"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    try:
+        with patch.object(
+            executor,
+            "_sync_clock",
+        ):
+            primary = executor._execute_market_primary_sync(plan)
+
+            rebased = ExecutionPlanner().rebase_market_plan(
+                plan,
+                fill_price=(primary.average_fill_price),
+                filled_quantity=(primary.filled_quantity),
+                context=InstrumentContext(
+                    market_price=Decimal("121"),
+                    tick_size=Decimal("0.1"),
+                    qty_step=Decimal("0.001"),
+                    min_qty=Decimal("0.001"),
+                    min_notional=Decimal("5"),
+                ),
+            )
+
+            remaining = executor._execute_remaining_entries_sync(rebased)
+
+        assert primary.order_id == "e1-live"
+
+        assert primary.average_fill_price == Decimal("121")
+
+        assert remaining == (
+            "e2-live",
+            "e3-live",
+        )
+
+        assert batch_request is not None
+
+        requests = batch_request["request"]
+
+        assert len(requests) == 2
+
+        assert [
+            item["orderLinkId"].rsplit(
+                "-",
+                1,
+            )[-1]
+            for item in requests
+        ] == [
+            "e2",
+            "e3",
+        ]
+
+        assert [item["price"] for item in requests] == [
+            "110.8",
+            "100.5",
+        ]
+
+        assert calls.index("/v5/order/realtime") < calls.index("/v5/order/create-batch")
 
     finally:
         executor.close()

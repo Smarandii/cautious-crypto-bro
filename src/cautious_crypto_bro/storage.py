@@ -16,15 +16,16 @@ from .domain import (
     ClosedPnlRecord,
     ExecutionPlan,
     ExecutionPolicy,
-    ExitPolicy,
     IntentStatus,
     PositionActionIntent,
     PositionActionType,
+    PositionStrategy,
     SourceMessage,
+    StrategyStatus,
     TradingIntent,
 )
 
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 7
 
 LATEST_SCHEMA_SQL = """
 CREATE TABLE source_messages (
@@ -78,21 +79,7 @@ WHERE scope = 'channel';
 
 CREATE TABLE execution_policy (
     id INTEGER PRIMARY KEY CHECK(id = 1),
-    trading_capital_usdt TEXT NOT NULL,
     risk_per_trade_pct TEXT NOT NULL,
-    range_order_count INTEGER NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE execution_exit_policy (
-    id INTEGER PRIMARY KEY CHECK(id = 1),
-    minimum_reward_bps TEXT NOT NULL,
-    basic_r_multiple TEXT NOT NULL,
-    basic_close_pct TEXT NOT NULL,
-    medium_r_multiple TEXT NOT NULL,
-    medium_close_pct TEXT NOT NULL,
-    high_r_multiple TEXT NOT NULL,
-    high_close_pct TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -102,6 +89,30 @@ CREATE TABLE execution_plans (
     bybit_order_ids_json TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE position_strategies (
+    strategy_id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    status TEXT NOT NULL,
+    entry_frozen INTEGER NOT NULL DEFAULT 0,
+    base_position_qty TEXT,
+    last_position_qty TEXT,
+    last_avg_price TEXT,
+    tp1_done INTEGER NOT NULL DEFAULT 0,
+    tp2_done INTEGER NOT NULL DEFAULT 0,
+    tp3_done INTEGER NOT NULL DEFAULT 0,
+    trailing_active INTEGER NOT NULL DEFAULT 0,
+    protected_stop_loss TEXT,
+    trailing_distance TEXT,
+    exit_revision INTEGER NOT NULL DEFAULT 0,
+    rebalance_needed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX ix_position_strategies_active
+ON position_strategies(status, symbol);
 
 CREATE TABLE position_actions (
     action_id TEXT PRIMARY KEY,
@@ -148,23 +159,65 @@ CREATE TABLE account_pnl_sync (
 
 INSERT INTO execution_policy(
     id,
-    trading_capital_usdt,
-    risk_per_trade_pct,
-    range_order_count
+    risk_per_trade_pct
 )
-VALUES (1, '6800', '1', 3);
+VALUES (1, '1');
+"""
 
-INSERT INTO execution_exit_policy(
+MIGRATION_4_TO_5_SQL = """
+CREATE TABLE IF NOT EXISTS position_strategies (
+    strategy_id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    status TEXT NOT NULL,
+    entry_frozen INTEGER NOT NULL DEFAULT 0,
+    base_position_qty TEXT,
+    last_position_qty TEXT,
+    last_avg_price TEXT,
+    tp1_done INTEGER NOT NULL DEFAULT 0,
+    tp2_done INTEGER NOT NULL DEFAULT 0,
+    tp3_done INTEGER NOT NULL DEFAULT 0,
+    trailing_active INTEGER NOT NULL DEFAULT 0,
+    exit_revision INTEGER NOT NULL DEFAULT 0,
+    rebalance_needed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_position_strategies_active
+ON position_strategies(status, symbol);
+"""
+MIGRATION_5_TO_6_SQL = """
+ALTER TABLE position_strategies
+ADD COLUMN protected_stop_loss TEXT;
+
+ALTER TABLE position_strategies
+ADD COLUMN trailing_distance TEXT;
+"""
+
+MIGRATION_6_TO_7_SQL = """
+ALTER TABLE execution_policy
+RENAME TO execution_policy_v1;
+
+CREATE TABLE execution_policy (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    risk_per_trade_pct TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO execution_policy(
     id,
-    minimum_reward_bps,
-    basic_r_multiple,
-    basic_close_pct,
-    medium_r_multiple,
-    medium_close_pct,
-    high_r_multiple,
-    high_close_pct
+    risk_per_trade_pct,
+    updated_at
 )
-VALUES (1, '20', '0.5', '25', '1', '35', '2', '40');
+SELECT
+    id,
+    risk_per_trade_pct,
+    updated_at
+FROM execution_policy_v1;
+
+DROP TABLE execution_policy_v1;
+DROP TABLE IF EXISTS execution_exit_policy;
 """
 
 
@@ -220,10 +273,36 @@ class IntentStore:
             if version == LATEST_SCHEMA_VERSION:
                 return
 
+            if version in {4, 5, 6}:
+                try:
+                    migration_sql = ""
+
+                    if version == 4:
+                        migration_sql += MIGRATION_4_TO_5_SQL + "\n"
+
+                    if version in {4, 5}:
+                        migration_sql += MIGRATION_5_TO_6_SQL + "\n"
+
+                    migration_sql += MIGRATION_6_TO_7_SQL
+
+                    await db.executescript(
+                        "BEGIN IMMEDIATE;\n"
+                        + migration_sql
+                        + "\nPRAGMA user_version = 7;\n"
+                        + "COMMIT;"
+                    )
+
+                except Exception:
+                    await db.rollback()
+                    raise
+
+                return
+
             if version != 0:
                 raise RuntimeError(
                     "Unsupported database schema version: "
-                    f"{version}; expected 0 or {LATEST_SCHEMA_VERSION}"
+                    f"{version}; expected 0, 4, 5, 6, "
+                    f"or {LATEST_SCHEMA_VERSION}"
                 )
 
             cursor = await db.execute(
@@ -620,6 +699,30 @@ class IntentStore:
             return None
 
         return ExecutionPlan.model_validate_json(row[0])
+
+    async def update_execution_plan(
+        self,
+        plan: ExecutionPlan,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE execution_plans
+                SET payload_json = ?
+                WHERE intent_id = ?
+                """,
+                (
+                    plan.model_dump_json(),
+                    str(plan.intent_id),
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                await db.rollback()
+
+                raise RuntimeError("Execution plan no longer exists")
+
+            await db.commit()
 
     async def _transition_pending(
         self,
@@ -1199,56 +1302,19 @@ class IntentStore:
     async def get_execution_policy(
         self,
     ) -> ExecutionPolicy:
-        async with aiosqlite.connect(self._database_path) as db:
-            cursor = await db.execute(
-                """
-                SELECT
-                    trading_capital_usdt,
-                    risk_per_trade_pct,
-                    range_order_count
-                FROM execution_policy
-                WHERE id = 1
-                """
-            )
+        row = await self._fetch(
+            """
+            SELECT risk_per_trade_pct
+            FROM execution_policy
+            WHERE id = 1
+            """
+        )
 
-            policy_row = await cursor.fetchone()
-
-            cursor = await db.execute(
-                """
-                SELECT
-                    minimum_reward_bps,
-                    basic_r_multiple,
-                    basic_close_pct,
-                    medium_r_multiple,
-                    medium_close_pct,
-                    high_r_multiple,
-                    high_close_pct
-                FROM execution_exit_policy
-                WHERE id = 1
-                """
-            )
-
-            exit_row = await cursor.fetchone()
-
-        if policy_row is None:
+        if row is None:
             raise RuntimeError("Execution policy is not initialized")
 
-        if exit_row is None:
-            raise RuntimeError("Execution exit policy is not initialized")
-
         return ExecutionPolicy(
-            trading_capital_usdt=(policy_row[0]),
-            risk_per_trade_pct=(policy_row[1]),
-            range_order_count=(policy_row[2]),
-            exit_policy=ExitPolicy(
-                minimum_reward_bps=(exit_row[0]),
-                basic_r_multiple=(exit_row[1]),
-                basic_close_pct=(exit_row[2]),
-                medium_r_multiple=(exit_row[3]),
-                medium_close_pct=(exit_row[4]),
-                high_r_multiple=(exit_row[5]),
-                high_close_pct=(exit_row[6]),
-            ),
+            risk_per_trade_pct=row[0],
         )
 
     async def set_execution_policy(
@@ -1260,88 +1326,22 @@ class IntentStore:
                 """
                 INSERT INTO execution_policy(
                     id,
-                    trading_capital_usdt,
                     risk_per_trade_pct,
-                    range_order_count,
                     updated_at
                 )
                 VALUES (
                     1,
                     ?,
-                    ?,
-                    ?,
                     CURRENT_TIMESTAMP
                 )
-                ON CONFLICT(id) DO UPDATE SET
-                    trading_capital_usdt =
-                        excluded.trading_capital_usdt,
+                ON CONFLICT(id)
+                DO UPDATE SET
                     risk_per_trade_pct =
                         excluded.risk_per_trade_pct,
-                    range_order_count =
-                        excluded.range_order_count,
                     updated_at =
                         CURRENT_TIMESTAMP
                 """,
-                (
-                    str(policy.trading_capital_usdt),
-                    str(policy.risk_per_trade_pct),
-                    policy.range_order_count,
-                ),
-            )
-
-            exit_policy = policy.exit_policy
-
-            await db.execute(
-                """
-                INSERT INTO execution_exit_policy(
-                    id,
-                    minimum_reward_bps,
-                    basic_r_multiple,
-                    basic_close_pct,
-                    medium_r_multiple,
-                    medium_close_pct,
-                    high_r_multiple,
-                    high_close_pct,
-                    updated_at
-                )
-                VALUES (
-                    1,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    CURRENT_TIMESTAMP
-                )
-                ON CONFLICT(id) DO UPDATE SET
-                    minimum_reward_bps =
-                        excluded.minimum_reward_bps,
-                    basic_r_multiple =
-                        excluded.basic_r_multiple,
-                    basic_close_pct =
-                        excluded.basic_close_pct,
-                    medium_r_multiple =
-                        excluded.medium_r_multiple,
-                    medium_close_pct =
-                        excluded.medium_close_pct,
-                    high_r_multiple =
-                        excluded.high_r_multiple,
-                    high_close_pct =
-                        excluded.high_close_pct,
-                    updated_at =
-                        CURRENT_TIMESTAMP
-                """,
-                (
-                    str(exit_policy.minimum_reward_bps),
-                    str(exit_policy.basic_r_multiple),
-                    str(exit_policy.basic_close_pct),
-                    str(exit_policy.medium_r_multiple),
-                    str(exit_policy.medium_close_pct),
-                    str(exit_policy.high_r_multiple),
-                    str(exit_policy.high_close_pct),
-                ),
+                (str(policy.risk_per_trade_pct),),
             )
 
             await db.commit()
@@ -1382,6 +1382,34 @@ class IntentStore:
             record_id=action_id,
             error=error,
         )
+
+    async def mark_position_action_uncertain(
+        self,
+        action_id: UUID,
+        order_id: str,
+        error: str,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                UPDATE position_actions
+                SET
+                    status = ?,
+                    bybit_order_id = ?,
+                    error = ?,
+                    updated_at =
+                        CURRENT_TIMESTAMP
+                WHERE action_id = ?
+                """,
+                (
+                    IntentStatus.UNCERTAIN.value,
+                    order_id,
+                    error[:2000],
+                    str(action_id),
+                ),
+            )
+
+            await db.commit()
 
     async def mark_executed(
         self,
@@ -1455,4 +1483,271 @@ class IntentStore:
                     str(record_id),
                 ),
             )
+            await db.commit()
+
+    async def ensure_position_strategy(
+        self,
+        plan: ExecutionPlan,
+    ) -> None:
+        if plan.strategy_version < 2:
+            return
+
+        state = PositionStrategy(
+            strategy_id=plan.intent_id,
+            symbol=plan.symbol,
+            side=plan.side,
+        )
+
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO position_strategies(
+                    strategy_id,
+                    symbol,
+                    side,
+                    status,
+                    entry_frozen,
+                    base_position_qty,
+                    last_position_qty,
+                    last_avg_price,
+                    tp1_done,
+                    tp2_done,
+                    tp3_done,
+                    trailing_active,
+                    exit_revision,
+                    rebalance_needed,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    ?, ?, ?, ?, 0,
+                    NULL, NULL, NULL,
+                    0, 0, 0, 0, 0, 0,
+                    ?, ?
+                )
+                """,
+                (
+                    str(state.strategy_id),
+                    state.symbol,
+                    state.side.value,
+                    state.status.value,
+                    state.created_at.isoformat(),
+                    state.updated_at.isoformat(),
+                ),
+            )
+
+            await db.commit()
+
+    @staticmethod
+    def _position_strategy_from_row(
+        row: aiosqlite.Row,
+    ) -> PositionStrategy:
+        def optional_decimal(
+            name: str,
+        ) -> Decimal | None:
+            value = row[name]
+
+            return Decimal(value) if value is not None else None
+
+        return PositionStrategy(
+            strategy_id=UUID(row["strategy_id"]),
+            symbol=row["symbol"],
+            side=row["side"],
+            status=row["status"],
+            entry_frozen=bool(row["entry_frozen"]),
+            base_position_qty=(optional_decimal("base_position_qty")),
+            last_position_qty=(optional_decimal("last_position_qty")),
+            last_avg_price=(optional_decimal("last_avg_price")),
+            tp1_done=bool(row["tp1_done"]),
+            tp2_done=bool(row["tp2_done"]),
+            tp3_done=bool(row["tp3_done"]),
+            trailing_active=bool(row["trailing_active"]),
+            protected_stop_loss=(optional_decimal("protected_stop_loss")),
+            trailing_distance=(optional_decimal("trailing_distance")),
+            exit_revision=int(row["exit_revision"]),
+            rebalance_needed=bool(row["rebalance_needed"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    async def get_active_position_strategies(
+        self,
+    ) -> tuple[
+        tuple[
+            PositionStrategy,
+            ExecutionPlan,
+        ],
+        ...,
+    ]:
+        rows = await self._fetch(
+            """
+            SELECT
+                s.*,
+                p.payload_json AS plan_json
+            FROM position_strategies AS s
+            JOIN execution_plans AS p
+              ON p.intent_id = s.strategy_id
+            WHERE s.status IN (?, ?, ?, ?, ?)
+            ORDER BY s.created_at ASC
+            """,
+            (
+                StrategyStatus.ENTERING.value,
+                StrategyStatus.OPEN_RISK.value,
+                StrategyStatus.PROFIT_PROTECTED.value,
+                StrategyStatus.CLOSING.value,
+                StrategyStatus.UNCERTAIN.value,
+            ),
+            many=True,
+            row_factory=True,
+        )
+
+        return tuple(
+            (
+                self._position_strategy_from_row(row),
+                ExecutionPlan.model_validate_json(row["plan_json"]),
+            )
+            for row in rows
+        )
+
+    async def save_position_strategy(
+        self,
+        state: PositionStrategy,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE position_strategies
+                SET
+                    status = ?,
+                    entry_frozen = ?,
+                    base_position_qty = ?,
+                    last_position_qty = ?,
+                    last_avg_price = ?,
+                    tp1_done = ?,
+                    tp2_done = ?,
+                    tp3_done = ?,
+                    trailing_active = ?,
+                    protected_stop_loss = ?,
+                    trailing_distance = ?,
+                    exit_revision = ?,
+                    rebalance_needed = ?,
+                    updated_at = ?
+                WHERE strategy_id = ?
+                """,
+                (
+                    state.status.value,
+                    int(state.entry_frozen),
+                    (
+                        str(state.base_position_qty)
+                        if (state.base_position_qty is not None)
+                        else None
+                    ),
+                    (
+                        str(state.last_position_qty)
+                        if (state.last_position_qty is not None)
+                        else None
+                    ),
+                    (
+                        str(state.last_avg_price)
+                        if (state.last_avg_price is not None)
+                        else None
+                    ),
+                    int(state.tp1_done),
+                    int(state.tp2_done),
+                    int(state.tp3_done),
+                    int(state.trailing_active),
+                    (
+                        str(state.protected_stop_loss)
+                        if (state.protected_stop_loss is not None)
+                        else None
+                    ),
+                    (
+                        str(state.trailing_distance)
+                        if (state.trailing_distance is not None)
+                        else None
+                    ),
+                    state.exit_revision,
+                    int(state.rebalance_needed),
+                    state.updated_at.isoformat(),
+                    str(state.strategy_id),
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                raise RuntimeError("Position strategy no longer exists")
+
+            await db.commit()
+
+    async def set_position_strategy_status(
+        self,
+        strategy_id: UUID,
+        status: StrategyStatus,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                UPDATE position_strategies
+                SET
+                    status = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE strategy_id = ?
+                """,
+                (
+                    status.value,
+                    str(strategy_id),
+                ),
+            )
+
+            await db.commit()
+
+    async def request_strategy_rebalance(
+        self,
+        symbol: str,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                UPDATE position_strategies
+                SET
+                    entry_frozen = 1,
+                    rebalance_needed = 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE
+                    symbol = ?
+                    AND status NOT IN (?, ?)
+                """,
+                (
+                    symbol.upper(),
+                    StrategyStatus.CLOSED.value,
+                    StrategyStatus.MANUAL_OVERRIDE.value,
+                ),
+            )
+
+            await db.commit()
+
+    async def request_strategy_close(
+        self,
+        symbol: str,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                UPDATE position_strategies
+                SET
+                    status = ?,
+                    entry_frozen = 1,
+                    rebalance_needed = 0,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE
+                    symbol = ?
+                    AND status NOT IN (?, ?)
+                """,
+                (
+                    StrategyStatus.CLOSING.value,
+                    symbol.upper(),
+                    StrategyStatus.CLOSED.value,
+                    StrategyStatus.MANUAL_OVERRIDE.value,
+                ),
+            )
+
             await db.commit()

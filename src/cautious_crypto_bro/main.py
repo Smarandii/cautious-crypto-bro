@@ -9,6 +9,7 @@ from .config import get_settings
 from .execution import ExecutionPlanner
 from .execution_coordinator import ExecutionCoordinator
 from .llm_factory import build_intent_extractor
+from .position_supervisor import PositionSupervisor
 from .runtime_store import RedisRuntimeStore
 from .service import SignalService
 from .signal_context import SignalContextProvider
@@ -51,10 +52,19 @@ async def async_main() -> None:
         api_secret=(settings.bybit_api_secret),
     )
 
+    account_mutation_lock = asyncio.Lock()
+
     coordinator = ExecutionCoordinator(
         store=store,
         executor=executor,
         max_age_seconds=(settings.intent_max_age_seconds),
+        execution_lock=(account_mutation_lock),
+    )
+
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=(account_mutation_lock),
     )
 
     bot = ApprovalBot(
@@ -64,8 +74,6 @@ async def async_main() -> None:
         store=store,
         coordinator=coordinator,
     )
-
-    await bot.start()
 
     context_provider = SignalContextProvider(
         store=store,
@@ -84,8 +92,6 @@ async def async_main() -> None:
         source_processing_lease_seconds=(settings.source_processing_lease_seconds),
     )
 
-    await service.recover_auto_execution()
-
     source = TelegramSource(
         api_id=settings.telegram_api_id,
         api_hash=(settings.telegram_api_hash),
@@ -96,10 +102,20 @@ async def async_main() -> None:
     )
 
     try:
+        await bot.start()
+
+        # Neither AUTO recovery nor Telegram lookback may execute against
+        # stale strategy state. Fail startup if reconciliation fails.
+        await supervisor.reconcile_once()
+        await service.recover_auto_execution()
+        # AUTO recovery may open new positions; protect them before ingestion.
+        await supervisor.reconcile_once()
+
         async with asyncio.TaskGroup() as tg:
             # Approval callbacks must already be active
             # while startup lookback is creating cards.
             tg.create_task(bot.run())
+            tg.create_task(supervisor.run())
 
             await source.start()
 

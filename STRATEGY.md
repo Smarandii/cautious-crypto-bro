@@ -1,155 +1,262 @@
 # Strategy V2
 
-Strategy V2 manages entries, exits, and profit protection independently. The goal is to reduce loss frequency and prevent profitable trades from becoming losing trades while keeping a runner for larger moves.
+Strategy V2 manages entries, exits, and protection deterministically on Bybit
+Demo. The LLM interprets trader intent; deterministic code owns risk sizing,
+entry geometry, exits, lifecycle actions, and reconciliation.
 
 ## Objectives
 
 Apply these priorities in order:
 
 1. Limit the maximum planned loss.
-2. Prevent profitable trades from becoming losing trades.
-3. Realize small net profits after fees and funding.
-4. Keep part of each winning position open for larger moves.
-5. Follow trader guidance when it does not conflict with the risk rules above.
-
-The LLM extracts trader intent. Deterministic code manages risk and execution.
+2. Prevent profitable trades from becoming losing trades where practical.
+3. Realize partial profits while retaining a runner.
+4. Preserve exchange-side protection through crashes, restarts, and lifecycle
+   changes.
+5. Follow trader guidance when it does not conflict with deterministic risk
+   controls.
 
 ## Capital and risk
 
-Use Bybit Unified Account `totalWalletBalance` as the capital base. Do not use a hardcoded capital value.
+Use Bybit Unified Account `totalWalletBalance` as the capital base.
 
-Snapshot the capital base when you create a strategy. Do not resize an open strategy when the account balance changes.
-
-Calculate the strategy risk budget as:
-
-```text
-risk_budget = capital_base_usd * risk_per_trade_pct / 100
-```
-
-Use 1% risk per strategy unless the execution policy specifies another value.
-
-Do not use `totalEquity` for sizing because it includes unrealized derivatives PnL.
-
-## Entry ladder
-
-Create up to three entry legs for every new strategy.
-
-Default MARKET candidate:
-
-- E1: 65% of risk at market.
-- E2: 20% of risk at 0.25R toward the original stop.
-- E3: 15% of risk at 0.50R toward the original stop.
-
-For LIMIT signals, use the trader limit as E1 and place E2 and E3 deeper toward the original stop.
-
-For RANGE signals, use the near edge, midpoint, and far edge in execution order.
-
-Size each leg by risk, not by equal quantity:
+Capital is read when a new execution plan is created and frozen into that plan.
+An existing strategy does not resize when the wallet balance later changes.
 
 ```text
-leg_quantity = leg_risk_budget / abs(entry_price - original_stop)
-```
+risk_budget = capital_base_usdt * risk_per_trade_pct / 100
 
-Round quantities down to the Bybit quantity step. The combined worst-case loss at the original stop must not exceed the strategy risk budget.
+The default policy is 1% risk per strategy unless configured otherwise.
 
-Cancel all unfilled entry legs when any of these events occurs:
+Do not use totalEquity as the sizing base because it includes unrealized
+derivatives PnL.
 
-- TP1 fills.
-- Price reaches the profit-protection threshold.
-- A REDUCE signal executes.
-- A CLOSE signal executes.
-- Profit trailing activates.
+Entry ladder
 
-After entry freeze, the strategy must not increase exposure automatically.
+Every Strategy V2 plan has three entry legs:
 
-## Exit ladder
+E1 = 60% of risk
+E2 = 25% of risk
+E3 = 15% of risk
+MARKET
 
-Manage exits independently from entries.
+For MARKET signals:
 
-Default candidate:
+Plan E1 from the current market snapshot.
+Execute E1 first.
+Confirm the actual Bybit fill price and filled quantity.
+Persist a new effective execution plan using the actual E1 fill.
+Derive E2 at 0.33R toward the original stop.
+Derive E3 at 0.66R toward the original stop.
+Submit E2/E3 only after the fill-derived plan is durable.
 
-- TP1: close 25% at +0.50R.
-- TP2: close 25% at +1.00R.
-- TP3: close 25% at +1.50R.
-- Runner: keep the remaining 25% under trailing protection.
+If adverse E1 slippage consumes more than the nominal E1 risk allocation,
+remaining E2/E3 risk is scaled down so the total worst-case loss still cannot
+exceed the frozen strategy risk budget.
 
-A trader-provided TP does not disable partial exits. Use it as a later target or runner reference.
+LIMIT
 
-If the trader TP is below +0.50R, keep the trade manual until policy says otherwise.
+Use the trader limit as E1.
 
-## Profit protection
+Derive E2 and E3 at 0.33R and 0.66R toward the original stop.
 
-Keep the original stop as catastrophe protection.
+RANGE
 
-When price reaches the configured protection threshold, freeze entries and activate a position-level trailing stop.
+Use the three range levels in execution order:
 
-Initial candidate:
+near edge;
+midpoint;
+far edge.
+Sizing
 
-```text
+Each leg is sized by risk rather than equal quantity:
+
+leg_quantity =
+    leg_risk_budget / abs(entry_price - original_stop)
+
+Round quantities down to the Bybit quantity step.
+
+The combined worst-case loss at the original stop must remain within the frozen
+strategy risk budget after tick and quantity rounding.
+
+Reject automatic planning if the primary position is too small to support at
+least one valid partial exit while preserving a runner.
+
+Entry freeze
+
+Cancel all remaining entry legs when any of these events occurs:
+
+a fixed TP fills;
+price reaches the profit-protection activation threshold;
+REDUCE executes;
+CLOSE executes;
+trailing protection activates.
+
+After entry freeze, Strategy V2 must never increase exposure automatically.
+
+Exit ladder
+
+Entries and exits are independent.
+
+Default fixed exits:
+
+TP1: 25% at +0.50R
+TP2: 25% at +1.00R
+TP3: 25% at +1.50R
+Runner: 25%
+
+Fixed exits are reduce-only and are rebuilt from the actual live position
+quantity.
+
+Quantity rounding residue remains in the runner.
+
+A trader-provided take-profit does not disable partial exits. When compatible
+with the V2 risk geometry it can constrain the later fixed targets.
+
+A trader TP at or below the first +0.50R target is rejected for automatic V2
+execution.
+
+Initial protection
+
+Each V2 entry submitted to Bybit carries the original stop.
+
+For a filled MARKET E1, Bybit may represent that protection as a
+PartialStopLoss conditional order rather than position.stopLoss.
+
+The supervisor performs a verified protection handoff:
+
+observe the live filled position;
+establish one position-level catastrophe stop;
+verify that stop from live Bybit state;
+remove superseded per-entry partial stop orders.
+
+The strategy therefore keeps loss protection during the handoff instead of
+cancelling the old protection first.
+
+Profit protection
+
+The original catastrophe stop is the minimum protection floor.
+
+At:
+
 activation = +0.50R
-trail_distance = 0.45R
-nominal_initial_floor = +0.05R
-```
 
-The actual protected floor must cover expected closing fees, funding, slippage reserve, and a positive profit buffer.
+Strategy V2 freezes remaining entries and enables native Bybit trailing
+protection:
 
-Never move profit protection backward automatically.
+trail_distance = 0.30R
+minimum_locked_profit = +0.05R
 
-## REDUCE and CLOSE
+The protection anchor uses Bybit breakEvenPrice when available, otherwise the
+live average entry.
 
-REDUCE must:
+Protection must never move backward automatically.
 
-1. Freeze and cancel pending entries.
-2. Re-read the live position.
-3. Execute the requested reduction.
-4. Confirm the fill.
-5. Re-read the remaining position.
-6. Rebuild remaining exit quantities.
-7. Reconcile static and trailing protection.
+The current +0.05R floor is a V2.0 Demo policy. Full realized
+fee/funding/slippage accounting remains future work; it should not be described
+as a guaranteed net-profit floor.
 
-CLOSE must cancel CCB entry and exit orders, close the full remaining position with a reduce-only order, and verify that the position is zero.
+REDUCE
 
-Trader CLOSE always overrides the strategy.
+REDUCE performs:
 
-## Runtime states
+validate the live position and expected side;
+cancel pending CCB entry legs;
+cancel current V2 fixed exits;
+re-read live exposure;
+submit the reduce-only market reduction;
+wait until Bybit confirms the reduced live quantity;
+freeze future entries;
+mark the strategy for rebalance;
+rebuild exits from the actual remaining quantity;
+reconcile protection.
 
-Use these strategy states:
+If Bybit accepts the order but the resulting position cannot be confirmed, the
+action and strategy enter UNCERTAIN rather than being retried blindly.
 
-- `PLANNED`
-- `ENTERING`
-- `OPEN_RISK`
-- `PROFIT_PROTECTED`
-- `CLOSING`
-- `CLOSED`
-- `MANUAL_OVERRIDE`
-- `UNCERTAIN`
+CLOSE
 
-Treat successful order submission separately from successful position entry.
+CLOSE performs:
 
-If live Bybit state differs from persisted strategy state because of an unexplained manual change, enter `MANUAL_OVERRIDE` and stop automatic mutations for that strategy.
+cancel CCB entry legs;
+cancel V2 fixed exits;
+re-read the position;
+submit a reduce-only full close;
+wait until Bybit reports zero exposure;
+persist CLOSING;
+allow the supervisor to transition the durable strategy to CLOSED.
 
-## Reconciliation rules
+Trader CLOSE overrides runner and trailing behavior.
 
-Use Bybit as the source of truth for live positions and orders.
+Runtime states
 
-For every destructive mutation:
+Strategy V2 uses:
 
-```text
+ENTERING
+OPEN_RISK
+PROFIT_PROTECTED
+CLOSING
+CLOSED
+MANUAL_OVERRIDE
+UNCERTAIN
+
+IntentStatus and StrategyStatus are separate concepts.
+
+Successful order submission is not treated as proof of a successful position
+mutation.
+
+Reconciliation
+
+Bybit is the source of truth for live exposure and orders.
+
+For destructive mutations use the pattern:
+
 read -> validate -> mutate -> read -> verify
-```
 
-Never remove the last effective loss protection before replacement protection is confirmed.
+Important invariants:
 
-Never allow exit quantities to exceed the live remaining position.
+never remove the last effective loss protection before replacement
+protection is confirmed;
+never move profit protection backward;
+never let planned V2 exits exceed the live remaining position;
+never rebuild exposure after entry freeze;
+do not blindly replay destructive actions after a crash;
+quarantine uncertain execution instead of guessing.
 
-On restart, reconcile live state before taking action. Do not replay destructive actions blindly.
+The durable execution plan is also the anti-tamper reference for V2-owned entry
+orders.
 
-## Rollout
+Restart behavior
 
-Before Strategy V2 manages new positions automatically:
+The runtime persists Strategy V2 state in SQLite and reconciles it against live
+Bybit state through PositionSupervisor.
 
-1. Replay candidate parameters against the forensic history.
-2. Select parameters by loss prevention first, not maximum historical PnL.
-3. Add deterministic tests for risk, fill, protection, and restart behavior.
-4. Run only on Bybit Demo.
-5. Review live results before changing any parameter or enabling real funds.
+Confirmed Demo testing covers:
+
+active-strategy process restart with no unnecessary mutations;
+REDUCE followed by restart-safe exit rebuilding;
+confirmed CLOSE and durable CLOSED state;
+staged MARKET E1 actual-fill rebasing;
+initial PartialStopLoss to full-position stop handoff.
+V2.0 defaults
+
+The frozen initial Demo defaults are:
+
+Entry risk:        60% / 25% / 15%
+Entry depths:      0R / 0.33R / 0.66R
+Fixed exits:       25% / 25% / 25%
+Runner:            25%
+TP levels:         0.50R / 1.00R / 1.50R
+Trail activation:  0.50R
+Trail distance:    0.30R
+Minimum floor:     +0.05R
+
+These are V2.0 Demo defaults derived from limited forensic history. They are not
+universal optima and should only change after replay and Demo evidence support
+the change.
+
+Environment
+
+Strategy V2 is currently restricted to Bybit Demo.
+
+Do not use production API credentials.

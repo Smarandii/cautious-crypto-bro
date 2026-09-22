@@ -2,58 +2,54 @@
 
 Run commands from the repository root.
 
-## Quality checks
+## Local quality gate
+
+Static analysis and unit tests run locally with `uv`:
 
 ```bash
 uv run ruff format --check .
 uv run ruff check .
 uv run pyright
-uv run pytest
+uv run pytest -q
+uv lock --check
 uv run pre-commit run --all-files
 git diff --check
-```
 
-Docker test equivalent:
+Do not use Docker as the normal unit-test/static-check environment.
 
-```bash
-docker compose --profile test run --rm --build test
-```
+Docker Compose is for runtime and integration checks that require application
+configuration, Redis, Telegram, Bybit Demo, or an LLM provider.
 
-For scripts that should run inside the app container, this helper is useful:
+App-container helper
 
-```bash
+For scripts that need the application environment:
+
 pyapp() {
   docker compose run --rm -T \
     --entrypoint /app/.venv/bin/python \
     app "$@"
 }
-```
 
-## Replay a Telegram post
+Use -T for heredoc-driven Docker commands.
 
-Replay uses the original Telegram text/images, reconstructs albums, applies
-current guidance, and runs the production extractor.
+Replay a Telegram post
 
-```bash
+Replay reconstructs the Telegram text/images/albums, loads current guidance, and
+runs the production extractor.
+
 pyapp scripts/replay_telegram_post.py '<telegram-post-url>'
 pyapp scripts/replay_telegram_post.py '<telegram-post-url>' --intent-only
 pyapp scripts/replay_telegram_post.py '<telegram-post-url>' --send-approval
-```
 
-Replay does not mark the source as seen. Historical MARKET signals may fail
-planning because planning uses current Bybit market data.
+Replay does not mark the source post as processed.
 
-Lifecycle replay output is split into OPEN trading intents and position actions.
-REDUCE/CLOSE are executable only when the current Telegram text/caption contains
-explicit destructive-action evidence. Vague reductions without a deterministic
-amount remain non-actionable.
+Historical MARKET signals can fail planning when current Bybit market geometry
+is no longer compatible with the historical signal.
 
-## Audit recent signals
+REDUCE/CLOSE are executable only when current Telegram text/caption contains
+explicit destructive-action evidence.
 
-Review all configured Telegram sources over a recent window without creating
-intents or executing trades:
-
-```bash
+Audit recent signals
 rm -rf audit-output
 mkdir -p audit-output
 
@@ -64,53 +60,124 @@ docker compose run --rm -T \
   /app/scripts/audit_recent_signals.py \
   --hours 5 \
   --output-dir /audit-output
-```
 
-Use `--cache-only` to avoid fresh OpenRouter calls.
+Use --cache-only to avoid fresh model calls.
 
-The audit bundle includes both raw model extraction and derived executable
-outputs, including `derived_open_intents` and `derived_position_actions`.
+Strategy replay
 
-## Configuration
+Strategy V2 replay/forensic tools should remain offline and deterministic.
 
-Execution policy:
+Use them to compare candidate parameter sets by loss prevention rather than only
+gross historical PnL.
 
-```bash
+The frozen V2.0 defaults are documented in
+STRATEGY.md.
+
+Execution policy
+
+Show the current execution policy:
+
 pyapp scripts/set_execution_policy.py
-pyapp scripts/set_execution_policy.py --help
-```
 
-Global guidance:
+Update risk per strategy:
 
-```bash
+pyapp scripts/set_execution_policy.py --risk-pct 1
+
+Capital is not configured here. New plans read live Bybit
+totalWalletBalance and freeze it into the execution plan.
+
+Guidance
+
+Global:
+
 cat guidance.txt | pyapp scripts/set_guidance.py --global
-```
 
-Channel guidance:
+Per channel:
 
-```bash
 cat guidance.txt | pyapp scripts/set_guidance.py --channel <channel-id>
-```
+Bybit Demo smoke tests
 
-## Smoke tests
+The repository must use Bybit Demo credentials only.
 
-Bybit Demo dry run:
+Basic trade smoke:
 
-```bash
 pyapp scripts/smoke_bybit_trade.py \
   --entry-type RANGE \
   --side LONG \
   --omit-tp
-```
 
-Adding `--execute` submits orders to **Bybit Demo**.
+Adding --execute submits real orders to the Bybit Demo account.
 
-## App lifecycle
+Before any targeted lifecycle smoke:
 
-```bash
+stop the normal app;
+choose a symbol with no existing position/orders;
+use an isolated SQLite database under /state;
+keep risk deliberately small while satisfying Bybit minimum quantity and
+notional constraints;
+verify cleanup from live Bybit state afterward.
+
+Example:
+
+docker compose stop app
+
+docker compose run --rm -T \
+  -e DATABASE_PATH=/state/ccb-v2-smoke.sqlite3 \
+  app /app/.venv/bin/python - <<'PY'
+# runtime smoke code
+PY
+V2 runtime scenarios validated for v2.0.0
+
+The release validation exercised these scenarios on Bybit Demo:
+
+MARKET E1 executes before E2/E3;
+actual E1 fill price/quantity are persisted into the effective plan;
+E2/E3 are derived from the confirmed E1 fill;
+adverse-fill risk cannot exceed the frozen budget;
+E1 has immediate catastrophe protection through Bybit PartialStopLoss;
+supervisor installs and verifies the position-level stop before removing the
+partial stop;
+fixed TP1/TP2/TP3 exits are installed from live position quantity;
+fresh-process reconciliation leaves an unchanged active strategy untouched;
+REDUCE cancels stale entries/exits and waits for the live reduced quantity;
+exits rebuild from the actual REDUCE remainder;
+unchanged stop protection does not produce a fatal reconciliation error;
+CLOSE waits until Bybit reports zero position;
+supervisor persists the strategy as CLOSED;
+final cleanup leaves zero position and zero stale V2 orders.
+Failure semantics
+
+Historical V1 execution plans remain readable but are rejected before new
+exchange mutations, including through stale manual approval or AUTO recovery.
+
+Startup reconciles before pending AUTO recovery and again after recovery to
+protect any recovered exposure before approval polling or Telegram lookback.
+A reconciliation failure aborts startup rather than enabling ingestion.
+
+A submitted destructive lifecycle order is not considered successful merely
+because Bybit returned an order ID.
+
+If the resulting live position cannot be confirmed, the action becomes
+UNCERTAIN.
+
+UNCERTAIN strategies are quarantined from automatic supervisor mutations.
+
+Manual/unexplained changes can move supported strategies to
+MANUAL_OVERRIDE.
+
+App lifecycle
+
+Start/recreate:
+
 docker compose up -d --build --force-recreate app
 docker compose logs -f app
-```
 
-Do not run `docker compose down -v` unless you intentionally want to erase
-Telegram/SQLite and Redis state.
+Stop only the app:
+
+docker compose stop app
+
+Do not run:
+
+docker compose down -v
+
+unless the intention is to erase persistent SQLite/Telegram/Redis state.

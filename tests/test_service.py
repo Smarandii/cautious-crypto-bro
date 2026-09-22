@@ -3,6 +3,7 @@ from datetime import (
     UTC,
     datetime,
 )
+from decimal import Decimal
 
 from cautious_crypto_bro.domain import (
     IncomingPost,
@@ -192,6 +193,7 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
     from cautious_crypto_bro.domain import (
         Entry,
         EntryType,
+        ExecutionPolicy,
         Side,
         TradingIntent,
     )
@@ -215,7 +217,11 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
             return None, None
 
         async def get_execution_policy(self):
-            return object()
+            return ExecutionPolicy(
+                trading_capital_usdt=Decimal("6800"),
+                risk_per_trade_pct=Decimal("1"),
+                range_order_count=3,
+            )
 
         async def create_signal_batch_and_complete_source(
             self,
@@ -248,12 +254,17 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
             return SignalExtraction(open_intents=tuple(self.intents))
 
     class Planner:
+        def __init__(self) -> None:
+            self.capital_snapshots = []
+
         def plan(
             self,
             intent,
             policy,
             context,
         ):
+            self.capital_snapshots.append(policy.trading_capital_usdt)
+
             return SimpleNamespace(
                 intent_id=intent.intent_id,
                 orders=(object(),),
@@ -269,6 +280,11 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
     class Executor:
         def __init__(self) -> None:
             self.market_context_calls = []
+            self.wallet_balance_calls = 0
+
+        async def wallet_balance_usdt(self):
+            self.wallet_balance_calls += 1
+            return Decimal("7400")
 
         async def market_context(
             self,
@@ -328,6 +344,7 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
 
         store = Store()
         executor = Executor()
+        planner = Planner()
         bot = Bot()
 
         service = SignalService(
@@ -338,7 +355,7 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
                     second,
                 )
             ),
-            planner=Planner(),
+            planner=planner,
             executor=executor,
             approval_bot=bot,
             coordinator=MustNotBeCalled(),
@@ -348,10 +365,18 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
         await service.on_message(source_post)
 
         assert len(store.persisted) == 2
+        assert executor.wallet_balance_calls == 1
+
         assert executor.market_context_calls == [
             "BTCUSDT",
             "ETHUSDT",
         ]
+
+        assert planner.capital_snapshots == [
+            Decimal("7400"),
+            Decimal("7400"),
+        ]
+
         assert len(bot.calls) == 2
 
         assert bot.calls[0][2]["send_account_state"] is True

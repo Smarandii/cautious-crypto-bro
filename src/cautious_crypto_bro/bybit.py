@@ -56,6 +56,14 @@ class PositionActionExecutionResult:
     position_size_before: Decimal
     submitted_quantity: Decimal | None
     cancelled_entry_orders: int
+    cancelled_exit_orders: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class MarketPrimaryExecutionResult:
+    order_id: str
+    average_fill_price: Decimal
+    filled_quantity: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +99,8 @@ class AccountPosition:
     status: str
     take_profit: Decimal | None
     stop_loss: Decimal | None
+    break_even_price: Decimal | None = None
+    trailing_stop: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +251,9 @@ class BybitDemoExecutor:
     ) -> AccountStateSummary:
         return await asyncio.to_thread(self._account_state_sync)
 
+    async def wallet_balance_usdt(self) -> Decimal:
+        return await asyncio.to_thread(self._wallet_balance_usdt_sync)
+
     async def closed_pnl_history(
         self,
         start: datetime,
@@ -261,6 +274,24 @@ class BybitDemoExecutor:
             plan,
         )
 
+    async def execute_market_primary(
+        self,
+        plan: ExecutionPlan,
+    ) -> MarketPrimaryExecutionResult:
+        return await asyncio.to_thread(
+            self._execute_market_primary_sync,
+            plan,
+        )
+
+    async def execute_remaining_entries(
+        self,
+        plan: ExecutionPlan,
+    ) -> tuple[str, ...]:
+        return await asyncio.to_thread(
+            self._execute_remaining_entries_sync,
+            plan,
+        )
+
     async def execute_position_action(
         self,
         action: PositionActionIntent,
@@ -270,8 +301,190 @@ class BybitDemoExecutor:
             action,
         )
 
+    async def cancel_pending_entries(
+        self,
+        symbol: str,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._cancel_ccb_entry_orders_sync,
+            symbol,
+        )
+
+    async def cancel_strategy_exits(
+        self,
+        symbol: str,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._cancel_ccb_exit_orders_sync,
+            symbol,
+        )
+
+    async def cancel_order(
+        self,
+        symbol: str,
+        order_id: str,
+    ) -> None:
+        await asyncio.to_thread(
+            self._cancel_order_sync,
+            symbol,
+            order_id,
+        )
+
+    async def set_position_protection(
+        self,
+        symbol: str,
+        stop_loss: Decimal,
+        *,
+        trailing_distance: Decimal | None = None,
+    ) -> None:
+        await asyncio.to_thread(
+            self._set_position_protection_sync,
+            symbol,
+            stop_loss,
+            trailing_distance,
+        )
+
+    async def place_reduce_only_exit(
+        self,
+        *,
+        symbol: str,
+        position_side: Side,
+        quantity: Decimal,
+        price: Decimal,
+        order_link_id: str,
+    ) -> str:
+        return await asyncio.to_thread(
+            self._place_reduce_only_exit_sync,
+            symbol,
+            position_side,
+            quantity,
+            price,
+            order_link_id,
+        )
+
     def close(self) -> None:
         self._client.close()
+
+    def _cancel_order_sync(
+        self,
+        symbol: str,
+        order_id: str,
+    ) -> None:
+        self._sync_clock()
+
+        response = self._private_post(
+            "/v5/order/cancel",
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "orderId": order_id,
+            },
+        )
+
+        if not response.get(
+            "result",
+            {},
+        ).get("orderId"):
+            raise TradeExecutionError(
+                "Bybit accepted no order ID while cancelling order"
+            )
+
+    def _set_position_protection_sync(
+        self,
+        symbol: str,
+        stop_loss: Decimal,
+        trailing_distance: Decimal | None,
+    ) -> None:
+        self._sync_clock()
+
+        body: dict[str, object] = {
+            "category": "linear",
+            "symbol": symbol,
+            "tpslMode": "Full",
+            "positionIdx": 0,
+            "stopLoss": self._fmt(stop_loss),
+            "slTriggerBy": "LastPrice",
+        }
+
+        if trailing_distance is not None:
+            if trailing_distance <= 0:
+                raise TradeExecutionError("Trailing distance must be positive")
+
+            body["trailingStop"] = self._fmt(trailing_distance)
+
+        self._private_post(
+            "/v5/position/trading-stop",
+            body,
+        )
+
+    def _place_reduce_only_exit_sync(
+        self,
+        symbol: str,
+        position_side: Side,
+        quantity: Decimal,
+        price: Decimal,
+        order_link_id: str,
+    ) -> str:
+        if quantity <= 0 or price <= 0:
+            raise TradeExecutionError("Exit quantity and price must be positive")
+
+        self._sync_clock()
+
+        side = "Sell" if position_side is Side.LONG else "Buy"
+
+        response = self._private_post(
+            "/v5/order/create",
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "side": side,
+                "orderType": "Limit",
+                "qty": self._fmt(quantity),
+                "price": self._fmt(price),
+                "timeInForce": "GTC",
+                "positionIdx": 0,
+                "reduceOnly": True,
+                "orderLinkId": order_link_id,
+            },
+        )
+
+        order_id = response.get(
+            "result",
+            {},
+        ).get("orderId")
+
+        if not order_id:
+            raise TradeExecutionError("Bybit returned success without exit orderId")
+
+        return str(order_id)
+
+    def _wallet_balance_usdt_sync(
+        self,
+    ) -> Decimal:
+        response = self._private_get(
+            "/v5/account/wallet-balance",
+            {
+                "accountType": "UNIFIED",
+            },
+        )
+
+        accounts = response.get("result", {}).get("list", [])
+
+        if (
+            not isinstance(accounts, list)
+            or len(accounts) != 1
+            or not isinstance(accounts[0], dict)
+        ):
+            raise TradeExecutionError(
+                "Bybit wallet balance response did not contain exactly one account"
+            )
+
+        balance = self._decimal(accounts[0].get("totalWalletBalance"))
+
+        if balance <= 0:
+            raise TradeExecutionError("Bybit totalWalletBalance must be positive")
+
+        return balance
 
     def _account_state_sync(
         self,
@@ -321,6 +534,10 @@ class BybitDemoExecutor:
                     status=str(item.get("positionStatus") or "Unknown"),
                     take_profit=(self._optional_decimal(item.get("takeProfit"))),
                     stop_loss=(self._optional_decimal(item.get("stopLoss"))),
+                    break_even_price=(
+                        self._optional_decimal(item.get("breakEvenPrice"))
+                    ),
+                    trailing_stop=(self._optional_decimal(item.get("trailingStop"))),
                 )
             )
 
@@ -707,6 +924,10 @@ class BybitDemoExecutor:
         # immediately after a REDUCE/CLOSE.
         cancelled_entries = self._cancel_ccb_entry_orders_sync(action.symbol)
 
+        # Existing V2 reduce-only exits must not race
+        # a trader-authorized REDUCE/CLOSE.
+        cancelled_exits = self._cancel_ccb_exit_orders_sync(action.symbol)
+
         # Resolve position size again after cancellation.
         # An entry could have filled concurrently while
         # cancellations were being processed.
@@ -771,6 +992,7 @@ class BybitDemoExecutor:
             position_size_before=position.size,
             submitted_quantity=(submitted_quantity),
             cancelled_entry_orders=(cancelled_entries),
+            cancelled_exit_orders=(cancelled_exits),
         )
 
     @staticmethod
@@ -853,6 +1075,50 @@ class BybitDemoExecutor:
 
         return quantity
 
+    def _cancel_ccb_exit_orders_sync(
+        self,
+        symbol: str,
+    ) -> int:
+        cancelled: set[str] = set()
+
+        items = self._paginate_private_list(
+            "/v5/order/realtime",
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "openOnly": 0,
+                "limit": 50,
+            },
+        )
+
+        for item in items:
+            link_id = str(item.get("orderLinkId") or "")
+
+            if not link_id.startswith("ccb-v2-") or "-t" not in link_id:
+                continue
+
+            reduce_only = item.get("reduceOnly")
+
+            if not (reduce_only is True or str(reduce_only).casefold() == "true"):
+                continue
+
+            if self._decimal(item.get("leavesQty")) <= 0:
+                continue
+
+            order_id = str(item.get("orderId") or "")
+
+            if not order_id:
+                continue
+
+            self._cancel_order_sync(
+                symbol,
+                order_id,
+            )
+
+            cancelled.add(order_id)
+
+        return len(cancelled)
+
     def _cancel_ccb_entry_orders_sync(
         self,
         symbol: str,
@@ -931,56 +1197,202 @@ class BybitDemoExecutor:
             ),
         )
 
-    def _execute_sync(
+    @staticmethod
+    def _require_v2(plan: ExecutionPlan) -> None:
+        if plan.strategy_version != 2:
+            raise TradeExecutionError(
+                f"Strategy V{plan.strategy_version} is read-only; only V2 executes"
+            )
+
+    @classmethod
+    def _validate_staged_market_plan(
+        cls,
+        plan: ExecutionPlan,
+    ) -> None:
+        cls._require_v2(plan)
+
+        if len(plan.orders) != 3:
+            raise TradeExecutionError("Strategy V2 requires three entry legs")
+
+        if plan.orders[0].order_type is not ExecutionOrderType.MARKET:
+            raise TradeExecutionError("Staged V2 execution requires MARKET E1")
+
+        if any(
+            order.order_type is not ExecutionOrderType.LIMIT
+            for order in plan.orders[1:]
+        ):
+            raise TradeExecutionError("Staged V2 E2/E3 must be LIMIT orders")
+
+    def _wait_for_market_fill_sync(
+        self,
+        symbol: str,
+        order_id: str,
+    ) -> MarketPrimaryExecutionResult:
+        terminal_without_fill = {
+            "Rejected",
+            "Cancelled",
+            "Deactivated",
+            "PartiallyFilledCanceled",
+        }
+
+        params: dict[str, object] = {
+            "category": "linear",
+            "symbol": symbol,
+            "orderId": order_id,
+        }
+
+        for attempt in range(20):
+            record = None
+
+            for path in (
+                "/v5/order/realtime",
+                "/v5/order/history",
+            ):
+                response = self._private_get(
+                    path,
+                    params,
+                )
+
+                items = response.get(
+                    "result",
+                    {},
+                ).get(
+                    "list",
+                    [],
+                )
+
+                record = next(
+                    (
+                        item
+                        for item in items
+                        if str(item.get("orderId") or "") == order_id
+                    ),
+                    None,
+                )
+
+                if record is not None:
+                    break
+
+            if record is not None:
+                status = str(record.get("orderStatus") or "")
+
+                filled_quantity = self._decimal(record.get("cumExecQty"))
+
+                average_price = self._decimal(record.get("avgPrice"))
+
+                remaining = self._decimal(record.get("leavesQty"))
+
+                if (
+                    filled_quantity > 0
+                    and average_price > 0
+                    and (status == "Filled" or remaining <= 0)
+                ):
+                    return MarketPrimaryExecutionResult(
+                        order_id=order_id,
+                        average_fill_price=(average_price),
+                        filled_quantity=(filled_quantity),
+                    )
+
+                if filled_quantity <= 0 and status in terminal_without_fill:
+                    raise TradeExecutionError(
+                        f"V2 MARKET E1 ended without a fill: {status}"
+                    )
+
+            if attempt < 19:
+                time.sleep(0.25)
+
+        raise TradeExecutionError("Timed out confirming V2 MARKET E1 fill")
+
+    def _execute_market_primary_sync(
+        self,
+        plan: ExecutionPlan,
+    ) -> MarketPrimaryExecutionResult:
+        self._validate_staged_market_plan(plan)
+
+        self._sync_clock()
+
+        market_price = self._last_price(plan.symbol)
+
+        self._validate_market_plan(
+            plan,
+            market_price,
+        )
+
+        request = self._order_params(
+            plan,
+            0,
+        )
+
+        response = self._private_post(
+            "/v5/order/create",
+            {
+                "category": "linear",
+                **request,
+            },
+        )
+
+        order_id = response.get(
+            "result",
+            {},
+        ).get("orderId")
+
+        if not order_id:
+            raise TradeExecutionError("Bybit returned success without E1 orderId")
+
+        return self._wait_for_market_fill_sync(
+            plan.symbol,
+            str(order_id),
+        )
+
+    def _execute_remaining_entries_sync(
         self,
         plan: ExecutionPlan,
     ) -> tuple[str, ...]:
+        self._validate_staged_market_plan(plan)
+
         self._sync_clock()
-
-        market_orders = [
-            order
-            for order in plan.orders
-            if (order.order_type is ExecutionOrderType.MARKET)
-        ]
-
-        if market_orders:
-            if len(market_orders) != len(plan.orders):
-                raise TradeExecutionError(
-                    "Execution plan cannot mix MARKET and LIMIT orders"
-                )
-
-            market_price = self._last_price(plan.symbol)
-
-            self._validate_market_plan(
-                plan,
-                market_price,
-            )
 
         requests = [
             self._order_params(
                 plan,
                 index,
             )
-            for index in range(len(plan.orders))
+            for index in (
+                1,
+                2,
+            )
         ]
 
-        if len(requests) == 1:
-            body = {
+        response = self._private_post(
+            "/v5/order/create-batch",
+            {
                 "category": "linear",
-                **requests[0],
-            }
+                "request": requests,
+            },
+        )
 
-            response = self._private_post(
-                "/v5/order/create",
-                body,
+        return self._parse_batch_result(
+            plan.symbol,
+            requests,
+            response,
+        )
+
+    def _execute_sync(
+        self,
+        plan: ExecutionPlan,
+    ) -> tuple[str, ...]:
+        self._require_v2(plan)
+
+        if any(order.order_type is ExecutionOrderType.MARKET for order in plan.orders):
+            raise TradeExecutionError(
+                "Strategy V2 MARKET plans require staged E1 execution"
             )
 
-            order_id = response.get("result", {}).get("orderId")
+        self._sync_clock()
 
-            if not order_id:
-                raise TradeExecutionError("Bybit returned success without orderId")
-
-            return (str(order_id),)
+        requests = [
+            self._order_params(plan, index) for index in range(len(plan.orders))
+        ]
 
         response = self._private_post(
             "/v5/order/create-batch",
@@ -1001,37 +1413,30 @@ class BybitDemoExecutor:
         plan: ExecutionPlan,
         index: int,
     ) -> dict[str, object]:
+        self._require_v2(plan)
+
         order = plan.orders[index]
 
-        take_profit = (
-            order.take_profit if order.take_profit is not None else plan.take_profit
-        )
-
-        params: dict[
-            str,
-            object,
-        ] = {
+        params: dict[str, object] = {
             "symbol": plan.symbol,
             "side": ("Buy" if plan.side is Side.LONG else "Sell"),
             "orderType": (
                 "Market" if order.order_type is ExecutionOrderType.MARKET else "Limit"
             ),
             "qty": self._fmt(order.quantity),
-            "takeProfit": self._fmt(take_profit),
             "stopLoss": self._fmt(plan.stop_loss),
             "tpslMode": "Partial",
-            "tpOrderType": "Market",
             "slOrderType": "Market",
             "timeInForce": (
                 "IOC" if order.order_type is ExecutionOrderType.MARKET else "GTC"
             ),
             "positionIdx": 0,
-            "orderLinkId": (f"ccb-{plan.intent_id.hex[:24]}-{index + 1}"),
+            "reduceOnly": False,
+            "orderLinkId": (f"ccb-v2-{plan.intent_id.hex[:20]}-{order.name.lower()}"),
         }
 
         if order.order_type is ExecutionOrderType.LIMIT:
             assert order.price is not None
-
             params["price"] = self._fmt(order.price)
 
         return params
@@ -1141,37 +1546,28 @@ class BybitDemoExecutor:
         plan: ExecutionPlan,
         market_price: Decimal,
     ) -> None:
+        self._require_v2(plan)
+
+        current_risk = Decimal("0")
+
         for order in plan.orders:
-            take_profit = (
-                order.take_profit if order.take_profit is not None else plan.take_profit
-            )
+            if order.order_type is ExecutionOrderType.MARKET:
+                entry_price = market_price
+            else:
+                entry_price = order.reference_price
 
-            if plan.side is Side.LONG and not (
-                plan.stop_loss < market_price < take_profit
-            ):
-                raise TradeExecutionError(
-                    "Market price is outside LONG stop/target geometry"
-                )
+            if plan.side is Side.LONG and not (plan.stop_loss < entry_price):
+                raise TradeExecutionError("Market moved outside LONG V2 stop geometry")
 
-            if plan.side is Side.SHORT and not (
-                take_profit < market_price < plan.stop_loss
-            ):
-                raise TradeExecutionError(
-                    "Market price is outside SHORT stop/target geometry"
-                )
+            if plan.side is Side.SHORT and not (entry_price < plan.stop_loss):
+                raise TradeExecutionError("Market moved outside SHORT V2 stop geometry")
 
-        total_quantity = sum(
-            (order.quantity for order in plan.orders),
-            Decimal("0"),
-        )
-
-        current_risk = total_quantity * abs(market_price - plan.stop_loss)
+            current_risk += order.quantity * abs(entry_price - plan.stop_loss)
 
         if current_risk > plan.policy.risk_budget_usdt:
             raise TradeExecutionError(
-                "Market moved enough that "
-                "execution would exceed "
-                "the configured risk budget"
+                "Market moved enough that Strategy V2 execution "
+                "would exceed the risk budget"
             )
 
     def _last_price(
