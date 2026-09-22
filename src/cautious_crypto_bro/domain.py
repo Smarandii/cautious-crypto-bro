@@ -761,30 +761,46 @@ class StrategyV2Policy(BaseModel):
 class ExecutionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    trading_capital_usdt: Decimal = Field(gt=0)
+    # Runtime configuration does not persist capital.
+    # SignalService freezes live Bybit wallet balance
+    # into each ExecutionPlan before planning.
+    trading_capital_usdt: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+
     risk_per_trade_pct: Decimal = Field(
+        default=Decimal("1"),
         gt=0,
         le=10,
     )
+
+    # Historical V1 compatibility only. Keep accepting
+    # these fields when old execution plans are loaded,
+    # but never serialize them into new V2 plans.
     range_order_count: int = Field(
+        default=3,
         ge=1,
         le=10,
+        exclude=True,
     )
     exit_policy: ExitPolicy = Field(
         default_factory=ExitPolicy,
+        exclude=True,
     )
 
-    # V1 execution still uses exit_policy.
-    # Strategy V2 switches to this policy
-    # only when the V2 planner/executor
-    # transition is complete.
     strategy_v2: StrategyV2Policy = Field(
         default_factory=StrategyV2Policy,
     )
 
     @property
     def risk_budget_usdt(self) -> Decimal:
-        return self.trading_capital_usdt * self.risk_per_trade_pct / Decimal("100")
+        capital = self.trading_capital_usdt
+
+        if capital is None:
+            raise ValueError("Execution policy has no frozen live-capital snapshot")
+
+        return capital * self.risk_per_trade_pct / Decimal("100")
 
 
 class PlannedTakeProfit(BaseModel):

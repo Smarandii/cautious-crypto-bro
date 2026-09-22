@@ -850,6 +850,12 @@ class ApprovalBot:
 
         total_qty_text = ApprovalBot._fmt_decimal(total_qty)
 
+        capital = plan.policy.trading_capital_usdt
+
+        capital_text = (
+            ApprovalBot._fmt_decimal(capital) if capital is not None else "unavailable"
+        )
+
         return (
             f"<b>{html.escape(intent.side.value)} "
             f"{html.escape(intent.symbol)}</b>\n\n"
@@ -861,8 +867,7 @@ class ApprovalBot:
             f"total {total_qty_text}</b>\n"
             f"{orders_text}\n\n"
             "Capital: <b>"
-            f"{ApprovalBot._fmt_decimal(plan.policy.trading_capital_usdt)} "
-            "USDT</b>\n"
+            f"{capital_text} USDT</b>\n"
             f"Risk: <b>≤ {planned_loss} USDT</b> "
             f"({risk_pct}% policy)\n"
             f"{rr_label}: <b>{float(rr):.2f}</b>\n\n"
