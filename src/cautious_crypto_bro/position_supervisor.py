@@ -734,6 +734,7 @@ class PositionSupervisor:
             return account
 
         expected_stop = state.protected_stop_loss or plan.stop_loss
+        live_position = position
         # Refuse to cancel any order if protection changed unexpectedly.
         if position.stop_loss != expected_stop:
             if position.stop_loss is not None:
