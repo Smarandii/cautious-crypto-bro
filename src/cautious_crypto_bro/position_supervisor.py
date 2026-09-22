@@ -234,6 +234,16 @@ class PositionSupervisor:
 
             return account
 
+        # Complete interrupted protection handoffs even when the exit
+        # revision was persisted on a previous reconciliation.
+        if self._partial_stops(state, plan, account):
+            account = await self._handoff_partial_stops(
+                state, plan, position, account,
+            )
+            position = self._position(state, account)
+            if position is None:
+                return account
+
         live_r = self._live_r(
             position,
             plan.stop_loss,
@@ -570,32 +580,27 @@ class PositionSupervisor:
             else (state.protected_stop_loss or plan.stop_loss)
         )
 
-        partial_sl_ids = tuple(
-            order.order_id
-            for order in account.open_orders
-            if (
-                order.symbol == state.symbol
-                and order.stop_order_type == "PartialStopLoss"
-            )
-        )
-
-        protection_matches = (
-            position.stop_loss == protected_stop
-            and position.trailing_stop == trailing_distance
-        )
-
-        if not protection_matches:
+        if (
+            position.stop_loss != protected_stop
+            or position.trailing_stop != trailing_distance
+        ):
             await self._executor.set_position_protection(
                 state.symbol,
                 protected_stop,
-                trailing_distance=(trailing_distance),
+                trailing_distance=trailing_distance,
             )
 
-        for order_id in partial_sl_ids:
-            await self._executor.cancel_order(
-                state.symbol,
-                order_id,
-            )
+        # Never cancel partial protection until Bybit confirms the full stop.
+        verified = await self._executor.account_state()
+        live_position = self._position(state, verified)
+        if live_position is None:
+            raise RuntimeError("Position disappeared during protection handoff")
+        self._verify_protection(
+            live_position, protected_stop, trailing_distance,
+        )
+        account = await self._handoff_partial_stops(
+            state, plan, live_position, verified,
+        )
 
         done = (
             state.tp1_done,
@@ -671,24 +676,88 @@ class PositionSupervisor:
                 )
 
         verified = await self._executor.account_state()
-
-        verified_position = self._position(
-            state,
-            verified,
+        verified_position = self._position(state, verified)
+        if verified_position is None:
+            raise RuntimeError("Position disappeared while installing exits")
+        self._verify_protection(
+            verified_position, protected_stop, trailing_distance,
         )
 
-        if verified_position is not None:
-            self._verify_protection(
-                verified_position,
-                protected_stop,
-                trailing_distance,
+        return (verified, protected_stop, trailing_distance)
+
+    @staticmethod
+    def _partial_stops(
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+    ) -> tuple[str, ...]:
+        """Identify only matching legacy entry stops, not manual protection."""
+        expected_side = Side.SHORT if state.side is Side.LONG else Side.LONG
+        return tuple(
+            order.order_id
+            for order in account.open_orders
+            if (
+                order.symbol == state.symbol
+                and order.side is expected_side
+                and order.stop_order_type == "PartialStopLoss"
+                and order.trigger_price == plan.stop_loss
+                and order.order_id
+                and order.remaining_quantity > 0
             )
-
-        return (
-            verified,
-            protected_stop,
-            trailing_distance,
         )
+
+    async def _handoff_partial_stops(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        position: AccountPosition,
+        account: AccountStateSummary,
+    ) -> AccountStateSummary:
+        partial_ids = self._partial_stops(state, plan, account)
+        if not partial_ids:
+            return account
+
+        expected_stop = state.protected_stop_loss or plan.stop_loss
+        # Refuse to cancel any order if protection changed unexpectedly.
+        if position.stop_loss != expected_stop:
+            if position.stop_loss is not None:
+                raise RuntimeError(
+                    f"Cannot hand off {state.symbol}: full stop "
+                    f"{position.stop_loss} differs from expected {expected_stop}"
+                )
+            await self._executor.set_position_protection(
+                state.symbol,
+                expected_stop,
+                trailing_distance=(
+                    state.trailing_distance if state.trailing_active else None
+                ),
+            )
+            account = await self._executor.account_state()
+            position = self._position(state, account)
+            if position is None:
+                raise RuntimeError("Position disappeared during protection handoff")
+
+        self._verify_protection(
+            position,
+            expected_stop,
+            state.trailing_distance if state.trailing_active else None,
+        )
+        # Re-read immediately before cancelling. A stop may have triggered
+        # between the original snapshot and the protection confirmation.
+        account = await self._executor.account_state()
+        position = self._position(state, account)
+        if position is None:
+            return account
+        self._verify_protection(
+            position,
+            expected_stop,
+            state.trailing_distance if state.trailing_active else None,
+        )
+        remaining_ids = set(self._partial_stops(state, plan, account))
+        for order_id in partial_ids:
+            if order_id in remaining_ids:
+                await self._executor.cancel_order(state.symbol, order_id)
+        return await self._executor.account_state()
 
     def _detect_fixed_exit_fills(
         self,
