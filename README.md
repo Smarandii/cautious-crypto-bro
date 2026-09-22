@@ -1,4 +1,4 @@
-\# Cautious Crypto Bro
+# Cautious Crypto Bro
 
 
 
@@ -35,7 +35,7 @@ Bybit Demo
 &#x20;       ↓
 
 durable PositionSupervisor reconciliation
-
+```
 
 
 The LLM interprets trader posts. It does not control position size, order
