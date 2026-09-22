@@ -336,15 +336,10 @@ def test_supervisor_installs_exits_before_profit_threshold() -> None:
         Decimal("1.020"),
     ]
 
-    # Catastrophe stop remains active,
-    # but trailing protection has not started.
-    assert executor.protection == [
-        (
-            "BTCUSDT",
-            Decimal("90.0"),
-            None,
-        )
-    ]
+    # Catastrophe stop is already correct on
+    # Bybit, so reconciliation must not submit
+    # an identical trading-stop mutation.
+    assert executor.protection == []
 
     assert store.state.entry_frozen is False
     assert store.state.trailing_active is False
@@ -392,3 +387,73 @@ def test_uncertain_strategy_is_quarantined() -> None:
     assert executor.exits == []
 
     assert store.state.status is StrategyStatus.UNCERTAIN
+
+
+def test_reduce_rebalance_skips_unchanged_protection() -> None:
+    strategy_plan = plan()
+
+    state = PositionStrategy(
+        strategy_id=(strategy_plan.intent_id),
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        status=StrategyStatus.OPEN_RISK,
+        entry_frozen=True,
+        base_position_qty=Decimal("4.08"),
+        last_position_qty=Decimal("4.08"),
+        last_avg_price=Decimal("100"),
+        protected_stop_loss=Decimal("90"),
+        exit_revision=1,
+        rebalance_needed=True,
+    )
+
+    store = Store(
+        state,
+        strategy_plan,
+    )
+
+    executor = Executor()
+
+    position = executor.state.positions[0]
+
+    executor.state = AccountStateSummary(
+        as_of=datetime.now(UTC),
+        positions=(
+            replace(
+                position,
+                size=Decimal("3.06"),
+                mark_price=Decimal("102"),
+                stop_loss=Decimal("90"),
+                trailing_stop=None,
+            ),
+        ),
+        open_orders=(),
+    )
+
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+        poll_interval_seconds=1,
+    )
+
+    asyncio.run(supervisor.reconcile_once())
+
+    assert executor.protection == []
+
+    assert len(executor.exits) == 3
+
+    assert [item["quantity"] for item in executor.exits] == [
+        Decimal("0.765"),
+        Decimal("0.765"),
+        Decimal("0.765"),
+    ]
+
+    assert store.state.entry_frozen is True
+    assert store.state.rebalance_needed is False
+    assert store.state.exit_revision == 2
+
+    assert store.state.last_position_qty == Decimal("3.06")
+
+    assert store.state.protected_stop_loss == Decimal("90")
+
+    assert store.state.status is StrategyStatus.OPEN_RISK

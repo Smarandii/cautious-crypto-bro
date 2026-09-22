@@ -565,11 +565,17 @@ class PositionSupervisor:
             )
         )
 
-        await self._executor.set_position_protection(
-            state.symbol,
-            protected_stop,
-            trailing_distance=(trailing_distance),
+        protection_matches = (
+            position.stop_loss == protected_stop
+            and position.trailing_stop == trailing_distance
         )
+
+        if not protection_matches:
+            await self._executor.set_position_protection(
+                state.symbol,
+                protected_stop,
+                trailing_distance=(trailing_distance),
+            )
 
         for order_id in partial_sl_ids:
             await self._executor.cancel_order(
