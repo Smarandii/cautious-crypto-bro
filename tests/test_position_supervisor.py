@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import (
     UTC,
     datetime,
@@ -124,6 +125,8 @@ class Executor:
                     status="Normal",
                     take_profit=None,
                     stop_loss=Decimal("90"),
+                    break_even_price=(Decimal("100.2")),
+                    trailing_stop=None,
                 ),
             ),
             open_orders=(),
@@ -180,6 +183,20 @@ class Executor:
                 stop_loss,
                 trailing_distance,
             )
+        )
+
+        position = self.state.positions[0]
+
+        self.state = AccountStateSummary(
+            as_of=datetime.now(UTC),
+            positions=(
+                replace(
+                    position,
+                    stop_loss=stop_loss,
+                    trailing_stop=(trailing_distance),
+                ),
+            ),
+            open_orders=(self.state.open_orders),
         )
 
     async def cancel_order(
@@ -242,13 +259,16 @@ def test_supervisor_freezes_entries_and_protects_profit() -> None:
     assert executor.protection == [
         (
             "BTCUSDT",
-            Decimal("90.0"),
+            Decimal("100.7"),
             Decimal("3.0"),
         )
     ]
 
     assert store.state.entry_frozen is True
     assert store.state.trailing_active is True
+
+    assert store.state.protected_stop_loss == Decimal("100.7")
+    assert store.state.trailing_distance == Decimal("3.0")
 
     assert store.state.status is StrategyStatus.PROFIT_PROTECTED
 

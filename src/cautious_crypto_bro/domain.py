@@ -967,6 +967,16 @@ class PositionStrategy(BaseModel):
 
     trailing_active: bool = False
 
+    # Exact protection last verified on Bybit.
+    protected_stop_loss: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+    trailing_distance: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+
     # Increment whenever exits are rebuilt after REDUCE.
     exit_revision: int = Field(
         default=0,

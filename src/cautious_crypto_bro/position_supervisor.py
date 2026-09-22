@@ -4,7 +4,9 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from decimal import (
+    ROUND_CEILING,
     ROUND_DOWN,
+    ROUND_FLOOR,
     ROUND_HALF_UP,
     Decimal,
 )
@@ -184,6 +186,31 @@ class PositionSupervisor:
 
             return account
 
+        override_reason = self._manual_override_reason(
+            state,
+            plan,
+            account,
+            position,
+        )
+
+        if override_reason is not None:
+            logger.warning(
+                "Strategy %s %s -> MANUAL_OVERRIDE: %s",
+                state.strategy_id,
+                state.symbol,
+                override_reason,
+            )
+
+            await self._save(
+                state.model_copy(
+                    update={
+                        "status": (StrategyStatus.MANUAL_OVERRIDE),
+                    }
+                )
+            )
+
+            return account
+
         live_r = self._live_r(
             position,
             plan.stop_loss,
@@ -250,7 +277,11 @@ class PositionSupervisor:
 
             await self._executor.cancel_strategy_exits(state.symbol)
 
-            account = await self._install_structure(
+            (
+                account,
+                installed_stop,
+                installed_trail,
+            ) = await self._install_structure(
                 state,
                 plan,
                 position,
@@ -266,6 +297,8 @@ class PositionSupervisor:
                         else StrategyStatus.OPEN_RISK
                     ),
                     "trailing_active": (live_r >= strategy.trailing_activation_r),
+                    "protected_stop_loss": (installed_stop),
+                    "trailing_distance": (installed_trail),
                 }
             )
 
@@ -313,7 +346,11 @@ class PositionSupervisor:
                 live_r >= strategy.trailing_activation_r
             )
 
-            account = await self._install_structure(
+            (
+                account,
+                installed_stop,
+                installed_trail,
+            ) = await self._install_structure(
                 state,
                 plan,
                 position,
@@ -324,6 +361,8 @@ class PositionSupervisor:
             state = state.model_copy(
                 update={
                     "trailing_active": trailing,
+                    "protected_stop_loss": (installed_stop),
+                    "trailing_distance": (installed_trail),
                     "status": (
                         StrategyStatus.PROFIT_PROTECTED
                         if trailing
@@ -353,15 +392,50 @@ class PositionSupervisor:
                 context,
             )
 
+            protected_stop = self._protected_stop(
+                plan,
+                position,
+                context,
+                previous=(state.protected_stop_loss),
+            )
+
             await self._executor.set_position_protection(
                 state.symbol,
-                plan.stop_loss,
+                protected_stop,
                 trailing_distance=(trailing_distance),
             )
+
+            account = await self._executor.account_state()
+
+            verified_position = self._position(
+                state,
+                account,
+            )
+
+            if verified_position is None:
+                await self._save(
+                    state.model_copy(
+                        update={
+                            "status": (StrategyStatus.CLOSED),
+                        }
+                    )
+                )
+
+                return account
+
+            self._verify_protection(
+                verified_position,
+                protected_stop,
+                trailing_distance,
+            )
+
+            position = verified_position
 
             state = state.model_copy(
                 update={
                     "trailing_active": True,
+                    "protected_stop_loss": (protected_stop),
+                    "trailing_distance": (trailing_distance),
                     "status": (StrategyStatus.PROFIT_PROTECTED),
                 }
             )
@@ -385,7 +459,11 @@ class PositionSupervisor:
         account: AccountStateSummary,
         *,
         enable_trailing: bool,
-    ) -> AccountStateSummary:
+    ) -> tuple[
+        AccountStateSummary,
+        Decimal,
+        Decimal | None,
+    ]:
         context = await self._executor.market_context(state.symbol)
 
         trailing_distance = (
@@ -398,8 +476,17 @@ class PositionSupervisor:
             else None
         )
 
-        # Capture only the entry-attached partial
-        # SL orders before installing the Full stop.
+        protected_stop = (
+            self._protected_stop(
+                plan,
+                position,
+                context,
+                previous=(state.protected_stop_loss),
+            )
+            if enable_trailing
+            else (state.protected_stop_loss or plan.stop_loss)
+        )
+
         partial_sl_ids = tuple(
             order.order_id
             for order in account.open_orders
@@ -411,12 +498,10 @@ class PositionSupervisor:
 
         await self._executor.set_position_protection(
             state.symbol,
-            plan.stop_loss,
-            trailing_distance=trailing_distance,
+            protected_stop,
+            trailing_distance=(trailing_distance),
         )
 
-        # The Full stop is already live before old
-        # entry-attached partial stops are removed.
         for order_id in partial_sl_ids:
             await self._executor.cancel_order(
                 state.symbol,
@@ -438,67 +523,83 @@ class PositionSupervisor:
             Decimal("0"),
         )
 
-        if remaining_weight <= 0:
-            return await self._executor.account_state()
-
         risk_distance = abs(position.avg_price - plan.stop_loss)
 
-        for index, target in enumerate(
-            plan.take_profit_targets,
-            start=1,
-        ):
-            if done[index - 1]:
-                continue
+        if remaining_weight > 0:
+            for index, target in enumerate(
+                plan.take_profit_targets,
+                start=1,
+            ):
+                if done[index - 1]:
+                    continue
 
-            quantity = self._round_down(
-                (position.size * target.close_pct / remaining_weight),
-                context.qty_step,
-            )
-
-            if quantity < context.min_qty or quantity <= 0:
-                logger.warning(
-                    "%s TP%s rounds below "
-                    "minimum quantity; leaving "
-                    "that share in the runner",
-                    state.symbol,
-                    index,
+                quantity = self._round_down(
+                    (position.size * target.close_pct / remaining_weight),
+                    context.qty_step,
                 )
-                continue
 
-            if position.side is Side.LONG:
-                raw_price = position.avg_price + (target.r_multiple * risk_distance)
-            else:
-                raw_price = position.avg_price - (target.r_multiple * risk_distance)
-
-            price = self._round_price(
-                raw_price,
-                context.tick_size,
-            )
-
-            if context.min_notional and (quantity * price < context.min_notional):
-                logger.warning(
-                    "%s TP%s rounds below "
-                    "minimum notional; leaving "
-                    "that share in the runner",
-                    state.symbol,
-                    index,
-                )
-                continue
-
-            await self._executor.place_reduce_only_exit(
-                symbol=state.symbol,
-                position_side=position.side,
-                quantity=quantity,
-                price=price,
-                order_link_id=(
-                    self._exit_link_id(
-                        state,
+                if quantity <= 0 or quantity < context.min_qty:
+                    logger.warning(
+                        "%s TP%s rounds below "
+                        "minimum quantity; leaving "
+                        "that share in the runner",
+                        state.symbol,
                         index,
                     )
-                ),
+                    continue
+
+                if position.side is Side.LONG:
+                    raw_price = position.avg_price + (target.r_multiple * risk_distance)
+                else:
+                    raw_price = position.avg_price - (target.r_multiple * risk_distance)
+
+                price = self._round_price(
+                    raw_price,
+                    context.tick_size,
+                )
+
+                if context.min_notional and (quantity * price < context.min_notional):
+                    logger.warning(
+                        "%s TP%s rounds below "
+                        "minimum notional; leaving "
+                        "that share in the runner",
+                        state.symbol,
+                        index,
+                    )
+                    continue
+
+                await self._executor.place_reduce_only_exit(
+                    symbol=state.symbol,
+                    position_side=position.side,
+                    quantity=quantity,
+                    price=price,
+                    order_link_id=(
+                        self._exit_link_id(
+                            state,
+                            index,
+                        )
+                    ),
+                )
+
+        verified = await self._executor.account_state()
+
+        verified_position = self._position(
+            state,
+            verified,
+        )
+
+        if verified_position is not None:
+            self._verify_protection(
+                verified_position,
+                protected_stop,
+                trailing_distance,
             )
 
-        return await self._executor.account_state()
+        return (
+            verified,
+            protected_stop,
+            trailing_distance,
+        )
 
     def _detect_fixed_exit_fills(
         self,
@@ -551,6 +652,181 @@ class PositionSupervisor:
                 "tp3_done": done[2],
             }
         )
+
+    @staticmethod
+    def _entry_link_id(
+        state: PositionStrategy,
+        name: str,
+    ) -> str:
+        return f"ccb-v2-{state.strategy_id.hex[:20]}-{name.lower()}"
+
+    @classmethod
+    def _manual_override_reason(
+        cls,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+        position: AccountPosition,
+    ) -> str | None:
+        if not state.entry_frozen:
+            expected = {
+                cls._entry_link_id(
+                    state,
+                    planned.name,
+                ): planned
+                for planned in plan.orders
+            }
+
+            prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-e"
+
+            for order in account.open_orders:
+                if (
+                    order.symbol != state.symbol
+                    or order.kind != "ENTRY"
+                    or not order.order_link_id.startswith(prefix)
+                ):
+                    continue
+
+                planned = expected.get(order.order_link_id)
+
+                if planned is None:
+                    return f"unexpected owned V2 entry {order.order_link_id}"
+
+                if order.side is not state.side:
+                    return f"owned entry side changed for {order.order_link_id}"
+
+                if order.quantity != planned.quantity:
+                    return f"owned entry quantity changed for {order.order_link_id}"
+
+                if planned.price is not None and order.price != planned.price:
+                    return (
+                        "owned entry price changed "
+                        f"for {order.order_link_id}: "
+                        f"expected={planned.price}, "
+                        f"live={order.price}"
+                    )
+
+            return None
+
+        if (
+            not state.rebalance_needed
+            and state.last_position_qty is not None
+            and position.size > state.last_position_qty
+        ):
+            return "position size increased after entry freeze"
+
+        if (
+            not state.rebalance_needed
+            and state.last_avg_price is not None
+            and position.avg_price != state.last_avg_price
+        ):
+            return "average entry changed after entry freeze"
+
+        if (
+            state.protected_stop_loss is not None
+            and position.stop_loss != state.protected_stop_loss
+        ):
+            return (
+                "position stop changed outside "
+                "Strategy V2: "
+                f"expected="
+                f"{state.protected_stop_loss}, "
+                f"live={position.stop_loss}"
+            )
+
+        if state.trailing_active:
+            if state.trailing_distance is None:
+                return "persisted trailing state is inconsistent"
+
+            if position.trailing_stop != state.trailing_distance:
+                return (
+                    "position trailing stop changed "
+                    "outside Strategy V2: "
+                    f"expected="
+                    f"{state.trailing_distance}, "
+                    f"live={position.trailing_stop}"
+                )
+
+        return None
+
+    @staticmethod
+    def _verify_protection(
+        position: AccountPosition,
+        stop_loss: Decimal,
+        trailing_distance: Decimal | None,
+    ) -> None:
+        if position.stop_loss != stop_loss:
+            raise RuntimeError(
+                "Bybit did not confirm expected "
+                "position stop: "
+                f"expected={stop_loss}, "
+                f"live={position.stop_loss}"
+            )
+
+        if (
+            trailing_distance is not None
+            and position.trailing_stop != trailing_distance
+        ):
+            raise RuntimeError(
+                "Bybit did not confirm expected "
+                "trailing distance: "
+                f"expected={trailing_distance}, "
+                f"live={position.trailing_stop}"
+            )
+
+    @staticmethod
+    def _protected_stop(
+        plan: ExecutionPlan,
+        position: AccountPosition,
+        context: InstrumentContext,
+        *,
+        previous: Decimal | None,
+    ) -> Decimal:
+        risk_distance = abs(position.avg_price - plan.stop_loss)
+
+        anchor = position.break_even_price or position.avg_price
+
+        buffer = risk_distance * plan.policy.strategy_v2.minimum_locked_profit_r
+
+        if position.side is Side.LONG:
+            raw = max(
+                plan.stop_loss,
+                anchor + buffer,
+            )
+
+            if previous is not None:
+                raw = max(
+                    raw,
+                    previous,
+                )
+
+            result = (raw / context.tick_size).to_integral_value(
+                rounding=ROUND_CEILING
+            ) * context.tick_size
+
+            if result >= position.mark_price:
+                raise RuntimeError("Protected LONG stop would not be below live price")
+
+        else:
+            raw = min(
+                plan.stop_loss,
+                anchor - buffer,
+            )
+
+            if previous is not None:
+                raw = min(
+                    raw,
+                    previous,
+                )
+
+            result = (raw / context.tick_size).to_integral_value(
+                rounding=ROUND_FLOOR
+            ) * context.tick_size
+
+            if result <= 0 or result <= position.mark_price:
+                raise RuntimeError("Protected SHORT stop would not be above live price")
+
+        return result
 
     @staticmethod
     def _position(

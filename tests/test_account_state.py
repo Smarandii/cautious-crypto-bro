@@ -47,6 +47,8 @@ def test_account_state_reads_bybit_snapshot() -> None:
                                 "positionStatus": "Normal",
                                 "takeProfit": "",
                                 "stopLoss": "2.221",
+                                "breakEvenPrice": "2.305",
+                                "trailingStop": "0.015",
                             }
                         ],
                         "nextPageCursor": "",
@@ -146,6 +148,11 @@ def test_account_state_reads_bybit_snapshot() -> None:
         assert state.unrealised_pnl == Decimal("4.9152")
 
         assert len(state.positions) == 1
+
+        position = state.positions[0]
+
+        assert position.break_even_price == Decimal("2.305")
+        assert position.trailing_stop == Decimal("0.015")
 
         assert len(state.open_orders) == 1
 

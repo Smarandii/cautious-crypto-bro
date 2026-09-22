@@ -26,7 +26,7 @@ from .domain import (
     TradingIntent,
 )
 
-LATEST_SCHEMA_VERSION = 5
+LATEST_SCHEMA_VERSION = 6
 
 LATEST_SCHEMA_SQL = """
 CREATE TABLE source_messages (
@@ -118,6 +118,8 @@ CREATE TABLE position_strategies (
     tp2_done INTEGER NOT NULL DEFAULT 0,
     tp3_done INTEGER NOT NULL DEFAULT 0,
     trailing_active INTEGER NOT NULL DEFAULT 0,
+    protected_stop_loss TEXT,
+    trailing_distance TEXT,
     exit_revision INTEGER NOT NULL DEFAULT 0,
     rebalance_needed INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -214,6 +216,13 @@ CREATE TABLE IF NOT EXISTS position_strategies (
 CREATE INDEX IF NOT EXISTS ix_position_strategies_active
 ON position_strategies(status, symbol);
 """
+MIGRATION_5_TO_6_SQL = """
+ALTER TABLE position_strategies
+ADD COLUMN protected_stop_loss TEXT;
+
+ALTER TABLE position_strategies
+ADD COLUMN trailing_distance TEXT;
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,14 +277,22 @@ class IntentStore:
             if version == LATEST_SCHEMA_VERSION:
                 return
 
-            if version == 4:
+            if version in {4, 5}:
                 try:
+                    migration_sql = ""
+
+                    if version == 4:
+                        migration_sql += MIGRATION_4_TO_5_SQL + "\n"
+
+                    migration_sql += MIGRATION_5_TO_6_SQL
+
                     await db.executescript(
                         "BEGIN IMMEDIATE;\n"
-                        + MIGRATION_4_TO_5_SQL
-                        + "\nPRAGMA user_version = 5;\n"
+                        + migration_sql
+                        + "\nPRAGMA user_version = 6;\n"
                         + "COMMIT;"
                     )
+
                 except Exception:
                     await db.rollback()
                     raise
@@ -285,7 +302,7 @@ class IntentStore:
             if version != 0:
                 raise RuntimeError(
                     "Unsupported database schema version: "
-                    f"{version}; expected 0, 4, "
+                    f"{version}; expected 0, 4, 5, "
                     f"or {LATEST_SCHEMA_VERSION}"
                 )
 
@@ -1597,6 +1614,8 @@ class IntentStore:
             tp2_done=bool(row["tp2_done"]),
             tp3_done=bool(row["tp3_done"]),
             trailing_active=bool(row["trailing_active"]),
+            protected_stop_loss=(optional_decimal("protected_stop_loss")),
+            trailing_distance=(optional_decimal("trailing_distance")),
             exit_revision=int(row["exit_revision"]),
             rebalance_needed=bool(row["rebalance_needed"]),
             created_at=datetime.fromisoformat(row["created_at"]),
@@ -1660,6 +1679,8 @@ class IntentStore:
                     tp2_done = ?,
                     tp3_done = ?,
                     trailing_active = ?,
+                    protected_stop_loss = ?,
+                    trailing_distance = ?,
                     exit_revision = ?,
                     rebalance_needed = ?,
                     updated_at = ?
@@ -1687,6 +1708,16 @@ class IntentStore:
                     int(state.tp2_done),
                     int(state.tp3_done),
                     int(state.trailing_active),
+                    (
+                        str(state.protected_stop_loss)
+                        if (state.protected_stop_loss is not None)
+                        else None
+                    ),
+                    (
+                        str(state.trailing_distance)
+                        if (state.trailing_distance is not None)
+                        else None
+                    ),
                     state.exit_revision,
                     int(state.rebalance_needed),
                     state.updated_at.isoformat(),

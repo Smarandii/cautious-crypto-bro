@@ -92,6 +92,8 @@ class AccountPosition:
     status: str
     take_profit: Decimal | None
     stop_loss: Decimal | None
+    break_even_price: Decimal | None = None
+    trailing_stop: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -507,6 +509,10 @@ class BybitDemoExecutor:
                     status=str(item.get("positionStatus") or "Unknown"),
                     take_profit=(self._optional_decimal(item.get("takeProfit"))),
                     stop_loss=(self._optional_decimal(item.get("stopLoss"))),
+                    break_even_price=(
+                        self._optional_decimal(item.get("breakEvenPrice"))
+                    ),
+                    trailing_stop=(self._optional_decimal(item.get("trailingStop"))),
                 )
             )
 
