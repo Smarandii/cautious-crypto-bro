@@ -748,8 +748,12 @@ class PositionSupervisor:
         plan: ExecutionPlan,
         account: AccountStateSummary,
     ) -> tuple[str, ...]:
-        """Identify only matching legacy entry stops, not manual protection."""
+        """Select attached stops by their verified parent entry link."""
         expected_side = Side.SHORT if state.side is Side.LONG else Side.LONG
+        expected_parents = {
+            PositionSupervisor._entry_link_id(state, order.name)
+            for order in plan.orders
+        }
         return tuple(
             order.order_id
             for order in account.open_orders
@@ -758,6 +762,7 @@ class PositionSupervisor:
                 and order.side is expected_side
                 and order.stop_order_type == "PartialStopLoss"
                 and order.trigger_price == plan.stop_loss
+                and order.parent_order_link_id in expected_parents
                 and order.order_id
                 and order.remaining_quantity > 0
             )
@@ -884,6 +889,20 @@ class PositionSupervisor:
         account: AccountStateSummary,
         position: AccountPosition,
     ) -> str | None:
+        # Bybit carries the originating entry's orderLinkId on attached
+        # TP/SL orders. Stop price and side alone cannot prove ownership.
+        expected_parents = {
+            cls._entry_link_id(state, order.name) for order in plan.orders
+        }
+        if any(
+            order.symbol == state.symbol
+            and order.stop_order_type == "PartialStopLoss"
+            and order.trigger_price == plan.stop_loss
+            and order.parent_order_link_id not in expected_parents
+            for order in account.open_orders
+        ):
+            return "unattributed partial stop-loss at the strategy stop; manual review required"
+
         if not state.entry_frozen:
             expected = {
                 cls._entry_link_id(
