@@ -422,6 +422,11 @@ def test_active_strategy_replaces_legacy_partial_stops_once() -> None:
                 avg_price=None,
                 order_id=f"partial-{index}",
                 order_link_id="",
+                parent_order_link_id=(
+                    f"ccb-v2-{strategy_plan.intent_id.hex[:20]}-e{index}"
+                    if index <= 3
+                    else ""
+                ),
                 reduce_only=False,
                 updated_at=datetime.now(UTC),
                 stop_order_type="PartialStopLoss",
@@ -474,6 +479,9 @@ def test_failed_full_stop_verification_does_not_cancel_partials() -> None:
                 avg_price=None,
                 order_id="legacy-sl",
                 order_link_id="",
+                parent_order_link_id=(
+                    f"ccb-v2-{strategy_plan.intent_id.hex[:20]}-e1"
+                ),
                 reduce_only=False,
                 updated_at=datetime.now(UTC),
                 stop_order_type="PartialStopLoss",
@@ -499,6 +507,54 @@ def test_failed_full_stop_verification_does_not_cancel_partials() -> None:
 
     assert executor.cancelled_orders == []
     assert executor.state.open_orders[0].order_id == "legacy-sl"
+
+
+def test_unattributed_partial_stop_requires_manual_review() -> None:
+    strategy_plan = plan()
+    state = PositionStrategy(
+        strategy_id=strategy_plan.intent_id,
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        status=StrategyStatus.OPEN_RISK,
+        entry_frozen=True,
+        exit_revision=1,
+    )
+    store = Store(state, strategy_plan)
+    executor = Executor()
+    executor.state = replace(
+        executor.state,
+        open_orders=(
+            AccountOrder(
+                symbol="BTCUSDT",
+                side=Side.SHORT,
+                order_type="Market",
+                status="Untriggered",
+                quantity=Decimal("4.08"),
+                remaining_quantity=Decimal("4.08"),
+                price=None,
+                avg_price=None,
+                order_id="manual-stop",
+                order_link_id="",
+                reduce_only=False,
+                updated_at=datetime.now(UTC),
+                stop_order_type="PartialStopLoss",
+                trigger_price=Decimal("90"),
+            ),
+        ),
+    )
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+    )
+    asyncio.run(supervisor.reconcile_once())
+
+    assert store.state.status is StrategyStatus.MANUAL_OVERRIDE
+    assert executor.protection == []
+    assert executor.cancelled_orders == []
+    assert [order.order_id for order in executor.state.open_orders] == [
+        "manual-stop"
+    ]
 
 
 def test_interrupted_exit_install_reuses_matching_order() -> None:
