@@ -222,6 +222,30 @@ class Executor:
         **kwargs,
     ):
         self.exits.append(kwargs)
+        self.state = replace(
+            self.state,
+            open_orders=(
+                *self.state.open_orders,
+                AccountOrder(
+                    symbol=kwargs["symbol"],
+                    side=(
+                        Side.SHORT
+                        if kwargs["position_side"] is Side.LONG
+                        else Side.LONG
+                    ),
+                    order_type="Limit",
+                    status="New",
+                    quantity=kwargs["quantity"],
+                    remaining_quantity=kwargs["quantity"],
+                    price=kwargs["price"],
+                    avg_price=None,
+                    order_id=f"exit-{len(self.exits)}",
+                    order_link_id=kwargs["order_link_id"],
+                    reduce_only=True,
+                    updated_at=datetime.now(UTC),
+                ),
+            ),
+        )
         return f"exit-{len(self.exits)}"
 
 
@@ -475,6 +499,49 @@ def test_failed_full_stop_verification_does_not_cancel_partials() -> None:
 
     assert executor.cancelled_orders == []
     assert executor.state.open_orders[0].order_id == "legacy-sl"
+
+
+
+def test_interrupted_exit_install_reuses_matching_order() -> None:
+    strategy_plan = plan()
+    store = Store(
+        PositionStrategy(
+            strategy_id=strategy_plan.intent_id,
+            symbol="BTCUSDT",
+            side=Side.LONG,
+        ),
+        strategy_plan,
+    )
+    executor = Executor()
+    executor.state = replace(
+        executor.state,
+        positions=(replace(executor.state.positions[0], mark_price=Decimal("102")),),
+    )
+    original_place = executor.place_reduce_only_exit
+    failed_once = False
+
+    async def fail_second_exit(**kwargs):
+        nonlocal failed_once
+        if kwargs["order_link_id"].endswith("-t2r1") and not failed_once:
+            failed_once = True
+            raise RuntimeError("Temporary exchange failure")
+        return await original_place(**kwargs)
+
+    executor.place_reduce_only_exit = fail_second_exit
+    supervisor = PositionSupervisor(
+        store=store, executor=executor, mutation_lock=asyncio.Lock(),
+    )
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="Temporary exchange failure"):
+        asyncio.run(supervisor.reconcile_once())
+
+    assert len(executor.exits) == 1
+    asyncio.run(supervisor.reconcile_once())
+    assert len(executor.exits) == 3
+    assert store.state.exit_revision == 1
+    assert len({item.order_link_id for item in executor.state.open_orders}) == 3
 
 
 def test_uncertain_strategy_is_quarantined(caplog) -> None:
