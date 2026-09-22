@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from uuid import UUID
-
 from decimal import (
     ROUND_CEILING,
     ROUND_DOWN,
@@ -12,6 +10,7 @@ from decimal import (
     ROUND_HALF_UP,
     Decimal,
 )
+from uuid import UUID
 
 from .bybit import (
     AccountPosition,
