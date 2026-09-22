@@ -501,7 +501,6 @@ def test_failed_full_stop_verification_does_not_cancel_partials() -> None:
     assert executor.state.open_orders[0].order_id == "legacy-sl"
 
 
-
 def test_interrupted_exit_install_reuses_matching_order() -> None:
     strategy_plan = plan()
     store = Store(
@@ -529,7 +528,9 @@ def test_interrupted_exit_install_reuses_matching_order() -> None:
 
     executor.place_reduce_only_exit = fail_second_exit
     supervisor = PositionSupervisor(
-        store=store, executor=executor, mutation_lock=asyncio.Lock(),
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
     )
 
     import pytest
