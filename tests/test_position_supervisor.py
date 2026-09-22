@@ -8,6 +8,7 @@ from datetime import (
 from decimal import Decimal
 
 from cautious_crypto_bro.bybit import (
+    AccountOrder,
     AccountPosition,
     AccountStateSummary,
 )
@@ -136,6 +137,7 @@ class Executor:
         self.account_state_calls = 0
         self.cancelled_entries = 0
         self.cancelled_exits = 0
+        self.cancelled_orders = []
         self.protection = []
         self.exits = []
 
@@ -207,7 +209,14 @@ class Executor:
         symbol,
         order_id,
     ):
-        raise AssertionError("No partial SL exists in this fixture")
+        self.cancelled_orders.append(order_id)
+        self.state = replace(
+            self.state,
+            open_orders=tuple(
+                order for order in self.state.open_orders
+                if order.order_id != order_id
+            ),
+        )
 
     async def place_reduce_only_exit(
         self,
@@ -353,6 +362,118 @@ def test_supervisor_installs_exits_before_profit_threshold() -> None:
     assert store.state.status is StrategyStatus.OPEN_RISK
 
     assert store.state.exit_revision == 1
+
+
+
+def test_active_strategy_replaces_legacy_partial_stops_once() -> None:
+    strategy_plan = plan()
+    state = PositionStrategy(
+        strategy_id=strategy_plan.intent_id,
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        status=StrategyStatus.OPEN_RISK,
+        entry_frozen=True,
+        last_position_qty=Decimal("4.08"),
+        last_avg_price=Decimal("100"),
+        exit_revision=1,
+    )
+    store = Store(state, strategy_plan)
+    executor = Executor()
+    executor.state = replace(
+        executor.state,
+        positions=(replace(
+            executor.state.positions[0],
+            stop_loss=None,
+            mark_price=Decimal("102"),
+        ),),
+        open_orders=tuple(
+            AccountOrder(
+                symbol="BTCUSDT",
+                side=Side.SHORT,
+                order_type="Market",
+                status="Untriggered",
+                quantity=Decimal("1.36"),
+                remaining_quantity=Decimal("1.36"),
+                price=None,
+                avg_price=None,
+                order_id=f"partial-{index}",
+                order_link_id="",
+                reduce_only=False,
+                updated_at=datetime.now(UTC),
+                stop_order_type="PartialStopLoss",
+                trigger_price=price,
+            )
+            for index, price in enumerate(
+                (Decimal("90"), Decimal("90"), Decimal("90"), Decimal("85")),
+                start=1,
+            )
+        ),
+    )
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+    )
+    asyncio.run(supervisor.reconcile_once())
+    asyncio.run(supervisor.reconcile_once())
+
+    assert executor.protection == [("BTCUSDT", Decimal("90"), None)]
+    assert executor.cancelled_orders == ["partial-1", "partial-2", "partial-3"]
+    assert [o.order_id for o in executor.state.open_orders] == ["partial-4"]
+    assert store.state.status is StrategyStatus.OPEN_RISK
+
+
+def test_failed_full_stop_verification_does_not_cancel_partials() -> None:
+    strategy_plan = plan()
+    state = PositionStrategy(
+        strategy_id=strategy_plan.intent_id,
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        status=StrategyStatus.OPEN_RISK,
+        entry_frozen=True,
+        exit_revision=1,
+    )
+    store = Store(state, strategy_plan)
+    executor = Executor()
+    executor.state = replace(
+        executor.state,
+        positions=(replace(executor.state.positions[0], stop_loss=None),),
+        open_orders=(
+            AccountOrder(
+                symbol="BTCUSDT",
+                side=Side.SHORT,
+                order_type="Market",
+                status="Untriggered",
+                quantity=Decimal("4.08"),
+                remaining_quantity=Decimal("4.08"),
+                price=None,
+                avg_price=None,
+                order_id="legacy-sl",
+                order_link_id="",
+                reduce_only=False,
+                updated_at=datetime.now(UTC),
+                stop_order_type="PartialStopLoss",
+                trigger_price=Decimal("90"),
+            ),
+        ),
+    )
+
+    async def no_confirmation(*args, **kwargs):
+        return None
+
+    executor.set_position_protection = no_confirmation
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+    )
+
+    import pytest
+    with pytest.raises(RuntimeError, match="did not confirm expected"):
+        asyncio.run(supervisor.reconcile_once())
+
+    assert executor.cancelled_orders == []
+    assert executor.state.open_orders[0].order_id == "legacy-sl"
 
 
 def test_uncertain_strategy_is_quarantined(caplog) -> None:
