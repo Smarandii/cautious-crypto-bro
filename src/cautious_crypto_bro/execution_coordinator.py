@@ -17,6 +17,8 @@ from .domain import (
     IntentStatus,
     OpenRelation,
     PositionActionIntent,
+    PositionActionType,
+    StrategyStatus,
     TradingIntent,
 )
 from .storage import IntentStore
@@ -52,6 +54,7 @@ class ExecutionCoordinator:
         store: IntentStore,
         executor: BybitDemoExecutor,
         max_age_seconds: int,
+        execution_lock: asyncio.Lock | None = None,
     ) -> None:
         if max_age_seconds <= 0:
             raise ValueError("max_age_seconds must be positive")
@@ -60,10 +63,11 @@ class ExecutionCoordinator:
         self._executor = executor
         self._max_age_seconds = max_age_seconds
 
-        # Serialize account mutations. This closes the
-        # race where two concurrent NEW signals could
-        # both inspect an empty account and then execute.
-        self._execution_lock = asyncio.Lock()
+        # Serialize every account mutation, including
+        # supervisor reconciliation.
+        self._execution_lock = (
+            execution_lock if execution_lock is not None else asyncio.Lock()
+        )
 
     @staticmethod
     def auto_open_safety_reason(
@@ -213,7 +217,10 @@ class ExecutionCoordinator:
                     )
 
                     if safety_reason is not None:
-                        raise (AutoExecutionSafetyError(safety_reason))
+                        raise AutoExecutionSafetyError(safety_reason)
+
+                if plan.strategy_version >= 2:
+                    await self._store.ensure_position_strategy(plan)
 
                 order_ids = await self._executor.execute(plan)
 
@@ -229,6 +236,12 @@ class ExecutionCoordinator:
                 intent_id,
                 message,
             )
+
+            if plan.strategy_version >= 2:
+                await self._store.set_position_strategy_status(
+                    intent_id,
+                    StrategyStatus.UNCERTAIN,
+                )
 
             return IntentExecutionOutcome(
                 status=IntentStatus.FAILED,
@@ -329,6 +342,11 @@ class ExecutionCoordinator:
                 message,
             )
 
+            # Execution may already have cancelled
+            # V2 exits before the final market action
+            # failed. Ask the supervisor to rebuild.
+            await self._store.request_strategy_rebalance(action.symbol)
+
             return PositionActionExecutionOutcome(
                 status=IntentStatus.FAILED,
                 message=message,
@@ -339,6 +357,12 @@ class ExecutionCoordinator:
             action_id,
             result.order_id,
         )
+
+        if action.action is PositionActionType.REDUCE:
+            await self._store.request_strategy_rebalance(action.symbol)
+
+        elif action.action is PositionActionType.CLOSE:
+            await self._store.request_strategy_close(action.symbol)
 
         return PositionActionExecutionOutcome(
             status=IntentStatus.EXECUTED,

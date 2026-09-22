@@ -9,6 +9,7 @@ from .config import get_settings
 from .execution import ExecutionPlanner
 from .execution_coordinator import ExecutionCoordinator
 from .llm_factory import build_intent_extractor
+from .position_supervisor import PositionSupervisor
 from .runtime_store import RedisRuntimeStore
 from .service import SignalService
 from .signal_context import SignalContextProvider
@@ -51,10 +52,19 @@ async def async_main() -> None:
         api_secret=(settings.bybit_api_secret),
     )
 
+    account_mutation_lock = asyncio.Lock()
+
     coordinator = ExecutionCoordinator(
         store=store,
         executor=executor,
         max_age_seconds=(settings.intent_max_age_seconds),
+        execution_lock=(account_mutation_lock),
+    )
+
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=(account_mutation_lock),
     )
 
     bot = ApprovalBot(
@@ -100,6 +110,7 @@ async def async_main() -> None:
             # Approval callbacks must already be active
             # while startup lookback is creating cards.
             tg.create_task(bot.run())
+            tg.create_task(supervisor.run())
 
             await source.start()
 

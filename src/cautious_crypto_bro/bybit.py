@@ -56,6 +56,7 @@ class PositionActionExecutionResult:
     position_size_before: Decimal
     submitted_quantity: Decimal | None
     cancelled_entry_orders: int
+    cancelled_exit_orders: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,8 +274,162 @@ class BybitDemoExecutor:
             action,
         )
 
+    async def cancel_pending_entries(
+        self,
+        symbol: str,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._cancel_ccb_entry_orders_sync,
+            symbol,
+        )
+
+    async def cancel_strategy_exits(
+        self,
+        symbol: str,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._cancel_ccb_exit_orders_sync,
+            symbol,
+        )
+
+    async def cancel_order(
+        self,
+        symbol: str,
+        order_id: str,
+    ) -> None:
+        await asyncio.to_thread(
+            self._cancel_order_sync,
+            symbol,
+            order_id,
+        )
+
+    async def set_position_protection(
+        self,
+        symbol: str,
+        stop_loss: Decimal,
+        *,
+        trailing_distance: Decimal | None = None,
+    ) -> None:
+        await asyncio.to_thread(
+            self._set_position_protection_sync,
+            symbol,
+            stop_loss,
+            trailing_distance,
+        )
+
+    async def place_reduce_only_exit(
+        self,
+        *,
+        symbol: str,
+        position_side: Side,
+        quantity: Decimal,
+        price: Decimal,
+        order_link_id: str,
+    ) -> str:
+        return await asyncio.to_thread(
+            self._place_reduce_only_exit_sync,
+            symbol,
+            position_side,
+            quantity,
+            price,
+            order_link_id,
+        )
+
     def close(self) -> None:
         self._client.close()
+
+    def _cancel_order_sync(
+        self,
+        symbol: str,
+        order_id: str,
+    ) -> None:
+        self._sync_clock()
+
+        response = self._private_post(
+            "/v5/order/cancel",
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "orderId": order_id,
+            },
+        )
+
+        if not response.get(
+            "result",
+            {},
+        ).get("orderId"):
+            raise TradeExecutionError(
+                "Bybit accepted no order ID while cancelling order"
+            )
+
+    def _set_position_protection_sync(
+        self,
+        symbol: str,
+        stop_loss: Decimal,
+        trailing_distance: Decimal | None,
+    ) -> None:
+        self._sync_clock()
+
+        body: dict[str, object] = {
+            "category": "linear",
+            "symbol": symbol,
+            "tpslMode": "Full",
+            "positionIdx": 0,
+            "stopLoss": self._fmt(stop_loss),
+            "slTriggerBy": "LastPrice",
+        }
+
+        if trailing_distance is not None:
+            if trailing_distance <= 0:
+                raise TradeExecutionError("Trailing distance must be positive")
+
+            body["trailingStop"] = self._fmt(trailing_distance)
+
+        self._private_post(
+            "/v5/position/trading-stop",
+            body,
+        )
+
+    def _place_reduce_only_exit_sync(
+        self,
+        symbol: str,
+        position_side: Side,
+        quantity: Decimal,
+        price: Decimal,
+        order_link_id: str,
+    ) -> str:
+        if quantity <= 0 or price <= 0:
+            raise TradeExecutionError("Exit quantity and price must be positive")
+
+        self._sync_clock()
+
+        side = "Sell" if position_side is Side.LONG else "Buy"
+
+        response = self._private_post(
+            "/v5/order/create",
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "side": side,
+                "orderType": "Limit",
+                "qty": self._fmt(quantity),
+                "price": self._fmt(price),
+                "timeInForce": "GTC",
+                "positionIdx": 0,
+                "reduceOnly": True,
+                "orderLinkId": order_link_id,
+            },
+        )
+
+        order_id = response.get(
+            "result",
+            {},
+        ).get("orderId")
+
+        if not order_id:
+            raise TradeExecutionError("Bybit returned success without exit orderId")
+
+        return str(order_id)
 
     def _wallet_balance_usdt_sync(
         self,
@@ -738,6 +893,10 @@ class BybitDemoExecutor:
         # immediately after a REDUCE/CLOSE.
         cancelled_entries = self._cancel_ccb_entry_orders_sync(action.symbol)
 
+        # Existing V2 reduce-only exits must not race
+        # a trader-authorized REDUCE/CLOSE.
+        cancelled_exits = self._cancel_ccb_exit_orders_sync(action.symbol)
+
         # Resolve position size again after cancellation.
         # An entry could have filled concurrently while
         # cancellations were being processed.
@@ -802,6 +961,7 @@ class BybitDemoExecutor:
             position_size_before=position.size,
             submitted_quantity=(submitted_quantity),
             cancelled_entry_orders=(cancelled_entries),
+            cancelled_exit_orders=(cancelled_exits),
         )
 
     @staticmethod
@@ -883,6 +1043,50 @@ class BybitDemoExecutor:
             )
 
         return quantity
+
+    def _cancel_ccb_exit_orders_sync(
+        self,
+        symbol: str,
+    ) -> int:
+        cancelled: set[str] = set()
+
+        items = self._paginate_private_list(
+            "/v5/order/realtime",
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "openOnly": 0,
+                "limit": 50,
+            },
+        )
+
+        for item in items:
+            link_id = str(item.get("orderLinkId") or "")
+
+            if not link_id.startswith("ccb-v2-") or "-t" not in link_id:
+                continue
+
+            reduce_only = item.get("reduceOnly")
+
+            if not (reduce_only is True or str(reduce_only).casefold() == "true"):
+                continue
+
+            if self._decimal(item.get("leavesQty")) <= 0:
+                continue
+
+            order_id = str(item.get("orderId") or "")
+
+            if not order_id:
+                continue
+
+            self._cancel_order_sync(
+                symbol,
+                order_id,
+            )
+
+            cancelled.add(order_id)
+
+        return len(cancelled)
 
     def _cancel_ccb_entry_orders_sync(
         self,

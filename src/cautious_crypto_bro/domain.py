@@ -75,6 +75,16 @@ class IntentStatus(StrEnum):
     UNCERTAIN = "UNCERTAIN"
 
 
+class StrategyStatus(StrEnum):
+    ENTERING = "ENTERING"
+    OPEN_RISK = "OPEN_RISK"
+    PROFIT_PROTECTED = "PROFIT_PROTECTED"
+    CLOSING = "CLOSING"
+    CLOSED = "CLOSED"
+    MANUAL_OVERRIDE = "MANUAL_OVERRIDE"
+    UNCERTAIN = "UNCERTAIN"
+
+
 def _normalize_usdt_symbol(
     symbol: str,
 ) -> str:
@@ -919,5 +929,59 @@ class ExecutionPlan(BaseModel):
 
             if total_close_pct != Decimal("100"):
                 raise ValueError("Planned TP close percentages must total 100")
+
+        return self
+
+
+class PositionStrategy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_id: UUID
+    symbol: str
+    side: Side
+    status: StrategyStatus = StrategyStatus.ENTERING
+
+    entry_frozen: bool = False
+
+    # Highest/frozen live quantity observed by the
+    # supervisor. Once entry_frozen=True, this is the
+    # quantity against which the V2 exit buckets were
+    # constructed.
+    base_position_qty: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+
+    last_position_qty: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+    last_avg_price: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+
+    tp1_done: bool = False
+    tp2_done: bool = False
+    tp3_done: bool = False
+
+    trailing_active: bool = False
+
+    # Increment whenever exits are rebuilt after REDUCE.
+    exit_revision: int = Field(
+        default=0,
+        ge=0,
+    )
+
+    rebalance_needed: bool = False
+
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def validate_strategy(
+        self,
+    ) -> PositionStrategy:
+        self.symbol = _normalize_usdt_symbol(self.symbol)
 
         return self
