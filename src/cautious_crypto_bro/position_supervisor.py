@@ -13,6 +13,7 @@ from decimal import (
 from uuid import UUID
 
 from .bybit import (
+    AccountOrder,
     AccountPosition,
     AccountStateSummary,
     BybitDemoExecutor,
@@ -233,6 +234,19 @@ class PositionSupervisor:
             )
 
             return account
+
+        # Complete interrupted protection handoffs even when the exit
+        # revision was persisted on a previous reconciliation.
+        if self._partial_stops(state, plan, account):
+            account = await self._handoff_partial_stops(
+                state,
+                plan,
+                position,
+                account,
+            )
+            position = self._position(state, account)
+            if position is None:
+                return account
 
         live_r = self._live_r(
             position,
@@ -570,32 +584,38 @@ class PositionSupervisor:
             else (state.protected_stop_loss or plan.stop_loss)
         )
 
-        partial_sl_ids = tuple(
-            order.order_id
-            for order in account.open_orders
-            if (
-                order.symbol == state.symbol
-                and order.stop_order_type == "PartialStopLoss"
-            )
-        )
-
-        protection_matches = (
-            position.stop_loss == protected_stop
-            and position.trailing_stop == trailing_distance
-        )
-
-        if not protection_matches:
+        if (
+            position.stop_loss != protected_stop
+            or position.trailing_stop != trailing_distance
+        ):
             await self._executor.set_position_protection(
                 state.symbol,
                 protected_stop,
-                trailing_distance=(trailing_distance),
+                trailing_distance=trailing_distance,
             )
 
-        for order_id in partial_sl_ids:
-            await self._executor.cancel_order(
-                state.symbol,
-                order_id,
-            )
+        # Never cancel partial protection until Bybit confirms the full stop.
+        verified = await self._executor.account_state()
+        live_position = self._position(state, verified)
+        if live_position is None:
+            raise RuntimeError("Position disappeared during protection handoff")
+        self._verify_protection(
+            live_position,
+            protected_stop,
+            trailing_distance,
+        )
+        await self._handoff_partial_stops(
+            state.model_copy(
+                update={
+                    "protected_stop_loss": protected_stop,
+                    "trailing_active": enable_trailing,
+                    "trailing_distance": trailing_distance,
+                }
+            ),
+            plan,
+            live_position,
+            verified,
+        )
 
         done = (
             state.tp1_done,
@@ -613,6 +633,7 @@ class PositionSupervisor:
         )
 
         risk_distance = abs(position.avg_price - plan.stop_loss)
+        expected_exits: dict[str, tuple[Decimal, Decimal]] = {}
 
         if remaining_weight > 0:
             for index, target in enumerate(
@@ -657,38 +678,149 @@ class PositionSupervisor:
                     )
                     continue
 
+                link_id = self._exit_link_id(state, index)
+                expected_exits[link_id] = (quantity, price)
+                existing = [
+                    order
+                    for order in account.open_orders
+                    if order.symbol == state.symbol and order.order_link_id == link_id
+                ]
+                if existing:
+                    if len(existing) != 1 or not self._matching_exit(
+                        existing[0], position.side, quantity, price
+                    ):
+                        raise RuntimeError(
+                            f"Existing exit {link_id} conflicts with the planned policy"
+                        )
+                    continue
+
                 await self._executor.place_reduce_only_exit(
                     symbol=state.symbol,
                     position_side=position.side,
                     quantity=quantity,
                     price=price,
-                    order_link_id=(
-                        self._exit_link_id(
-                            state,
-                            index,
-                        )
-                    ),
+                    order_link_id=link_id,
                 )
 
         verified = await self._executor.account_state()
-
-        verified_position = self._position(
-            state,
-            verified,
-        )
-
-        if verified_position is not None:
-            self._verify_protection(
-                verified_position,
-                protected_stop,
-                trailing_distance,
-            )
-
-        return (
-            verified,
+        verified_position = self._position(state, verified)
+        if verified_position is None:
+            raise RuntimeError("Position disappeared while installing exits")
+        self._verify_protection(
+            verified_position,
             protected_stop,
             trailing_distance,
         )
+        for link_id, (quantity, price) in expected_exits.items():
+            matches = [
+                order
+                for order in verified.open_orders
+                if order.symbol == state.symbol and order.order_link_id == link_id
+            ]
+            if len(matches) != 1 or not self._matching_exit(
+                matches[0], position.side, quantity, price
+            ):
+                raise RuntimeError(
+                    f"Bybit did not confirm expected Strategy V2 exit {link_id}"
+                )
+
+        return (verified, protected_stop, trailing_distance)
+
+    @staticmethod
+    def _matching_exit(
+        order: AccountOrder,
+        position_side: Side,
+        quantity: Decimal,
+        price: Decimal,
+    ) -> bool:
+        expected_side = Side.SHORT if position_side is Side.LONG else Side.LONG
+        return (
+            order.side is expected_side
+            and order.reduce_only
+            and order.order_type == "Limit"
+            and order.remaining_quantity == quantity
+            and order.price == price
+        )
+
+    @staticmethod
+    def _partial_stops(
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+    ) -> tuple[str, ...]:
+        """Select attached stops by their verified parent entry link."""
+        expected_side = Side.SHORT if state.side is Side.LONG else Side.LONG
+        expected_parents = {
+            PositionSupervisor._entry_link_id(state, order.name)
+            for order in plan.orders
+        }
+        return tuple(
+            order.order_id
+            for order in account.open_orders
+            if (
+                order.symbol == state.symbol
+                and order.side is expected_side
+                and order.stop_order_type == "PartialStopLoss"
+                and order.trigger_price == plan.stop_loss
+                and order.parent_order_link_id in expected_parents
+                and order.order_id
+                and order.remaining_quantity > 0
+            )
+        )
+
+    async def _handoff_partial_stops(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        position: AccountPosition,
+        account: AccountStateSummary,
+    ) -> AccountStateSummary:
+        partial_ids = self._partial_stops(state, plan, account)
+        if not partial_ids:
+            return account
+
+        expected_stop = state.protected_stop_loss or plan.stop_loss
+        live_position = position
+        # Refuse to cancel any order if protection changed unexpectedly.
+        if position.stop_loss != expected_stop:
+            if position.stop_loss is not None:
+                raise RuntimeError(
+                    f"Cannot hand off {state.symbol}: full stop "
+                    f"{position.stop_loss} differs from expected {expected_stop}"
+                )
+            await self._executor.set_position_protection(
+                state.symbol,
+                expected_stop,
+                trailing_distance=(
+                    state.trailing_distance if state.trailing_active else None
+                ),
+            )
+            account = await self._executor.account_state()
+            live_position = self._position(state, account)
+            if live_position is None:
+                raise RuntimeError("Position disappeared during protection handoff")
+
+        self._verify_protection(
+            live_position,
+            expected_stop,
+            state.trailing_distance if state.trailing_active else None,
+        )
+        # Re-read immediately before cancelling. A stop may have triggered
+        # between the original snapshot and the protection confirmation.
+        account = await self._executor.account_state()
+        live_position = self._position(state, account)
+        if live_position is None:
+            return account
+        self._verify_protection(
+            live_position,
+            expected_stop,
+            state.trailing_distance if state.trailing_active else None,
+        )
+        remaining_ids = set(self._partial_stops(state, plan, account))
+        for order_id in partial_ids:
+            if order_id in remaining_ids:
+                await self._executor.cancel_order(state.symbol, order_id)
+        return await self._executor.account_state()
 
     def _detect_fixed_exit_fills(
         self,
@@ -757,6 +889,20 @@ class PositionSupervisor:
         account: AccountStateSummary,
         position: AccountPosition,
     ) -> str | None:
+        # Bybit carries the originating entry's orderLinkId on attached
+        # TP/SL orders. Stop price and side alone cannot prove ownership.
+        expected_parents = {
+            cls._entry_link_id(state, order.name) for order in plan.orders
+        }
+        if any(
+            order.symbol == state.symbol
+            and order.stop_order_type == "PartialStopLoss"
+            and order.trigger_price == plan.stop_loss
+            and order.parent_order_link_id not in expected_parents
+            for order in account.open_orders
+        ):
+            return "unattributed partial stop-loss at the strategy stop; manual review required"
+
         if not state.entry_frozen:
             expected = {
                 cls._entry_link_id(
@@ -814,6 +960,9 @@ class PositionSupervisor:
         if (
             state.protected_stop_loss is not None
             and position.stop_loss != state.protected_stop_loss
+            and not (
+                position.stop_loss is None and cls._partial_stops(state, plan, account)
+            )
         ):
             return (
                 "position stop changed outside "

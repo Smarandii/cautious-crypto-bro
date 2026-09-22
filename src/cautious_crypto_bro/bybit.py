@@ -121,6 +121,7 @@ class AccountOrder:
     create_type: str = ""
     trigger_price: Decimal | None = None
     close_on_trigger: bool = False
+    parent_order_link_id: str = ""
 
     @property
     def kind(self) -> str:
@@ -554,7 +555,14 @@ class BybitDemoExecutor:
         open_orders = tuple(
             self._account_order_from_item(item)
             for item in open_items
-            if self._decimal(item.get("leavesQty")) > 0
+            if (
+                self._decimal(item.get("leavesQty")) > 0
+                or (
+                    item.get("stopOrderType") == "PartialStopLoss"
+                    and str(item.get("orderStatus")) == "Untriggered"
+                    and self._decimal(item.get("qty")) > 0
+                )
+            )
         )
 
         return AccountStateSummary(
@@ -750,7 +758,17 @@ class BybitDemoExecutor:
             order_type=str(item.get("orderType") or "Unknown"),
             status=str(item.get("orderStatus") or "Unknown"),
             quantity=self._decimal(item.get("qty")),
-            remaining_quantity=(self._decimal(item.get("leavesQty"))),
+            remaining_quantity=(
+                self._decimal(item.get("leavesQty"))
+                or (
+                    self._decimal(item.get("qty"))
+                    if (
+                        item.get("stopOrderType") == "PartialStopLoss"
+                        and item.get("orderStatus") == "Untriggered"
+                    )
+                    else Decimal("0")
+                )
+            ),
             price=self._optional_decimal(item.get("price")),
             avg_price=(self._optional_decimal(item.get("avgPrice"))),
             order_id=str(item.get("orderId") or ""),
@@ -770,6 +788,7 @@ class BybitDemoExecutor:
                 item.get("closeOnTrigger") is True
                 or str(item.get("closeOnTrigger")).casefold() == "true"
             ),
+            parent_order_link_id=str(item.get("parentOrderLinkId") or ""),
         )
 
     def _exposure_sync(
