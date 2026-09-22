@@ -7,6 +7,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 from cautious_crypto_bro.bybit import (
     BybitDemoExecutor,
@@ -70,6 +71,68 @@ def range_plan() -> ExecutionPlan:
     )
 
 
+def v2_range_plan() -> ExecutionPlan:
+    now = datetime.now(UTC)
+    return ExecutionPlanner().plan(
+        TradingIntent(
+            source=SourceMessage(
+                channel_id=1,
+                channel_title="Test",
+                message_id=1,
+                published_at=now,
+                received_at=now,
+                text="test",
+            ),
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            entry=Entry(type=EntryType.RANGE, range_low=100, range_high=110),
+            stop_loss=90,
+            take_profit=None,
+            summary="test",
+            confidence=1,
+        ),
+        policy(),
+        InstrumentContext(
+            market_price=Decimal("120"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+
+def v2_market_plan() -> ExecutionPlan:
+    now = datetime.now(UTC)
+    return ExecutionPlanner().plan(
+        TradingIntent(
+            source=SourceMessage(
+                channel_id=1,
+                channel_title="Test",
+                message_id=2,
+                published_at=now,
+                received_at=now,
+                text="test",
+            ),
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            entry=Entry(type=EntryType.MARKET),
+            stop_loss=90,
+            take_profit=None,
+            summary="test",
+            confidence=1,
+        ),
+        policy(),
+        InstrumentContext(
+            market_price=Decimal("120"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+
 def test_clock_sync_compensates_for_local_drift() -> None:
     def handler(
         request: httpx.Request,
@@ -113,7 +176,7 @@ def test_clock_sync_compensates_for_local_drift() -> None:
         executor.close()
 
 
-def test_range_plan_uses_batch_partial_tpsl() -> None:
+def test_v2_range_plan_uses_batch_stop_only_entries() -> None:
     def handler(
         request: httpx.Request,
     ) -> httpx.Response:
@@ -122,6 +185,7 @@ def test_range_plan_uses_batch_partial_tpsl() -> None:
         body = request.read().decode()
 
         assert body.count('"tpslMode":"Partial"') == 3
+        assert '"takeProfit"' not in body
 
         return httpx.Response(
             200,
@@ -171,7 +235,7 @@ def test_range_plan_uses_batch_partial_tpsl() -> None:
             executor,
             "_sync_clock",
         ):
-            order_ids = executor._execute_sync(range_plan())
+            order_ids = executor._execute_sync(v2_range_plan())
 
         assert order_ids == (
             "a",
@@ -184,44 +248,39 @@ def test_range_plan_uses_batch_partial_tpsl() -> None:
 
 
 def test_market_execution_rejects_risk_above_budget() -> None:
-    plan = ExecutionPlan(
-        intent_id=("22222222-2222-2222-2222-222222222222"),
-        symbol="BTCUSDT",
-        side=Side.LONG,
-        orders=(
-            PlannedOrder(
-                order_type=(ExecutionOrderType.MARKET),
-                quantity=Decimal("1"),
-                reference_price=(Decimal("100")),
-            ),
-        ),
-        stop_loss=Decimal("50"),
-        take_profit=Decimal("200"),
-        policy=policy(),
-        planned_max_loss_usdt=(Decimal("50")),
-    )
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
 
-    executor = BybitDemoExecutor(
-        api_key="key",
-        api_secret="secret",
-    )
+    try:
+        with pytest.raises(TradeExecutionError, match="risk budget"):
+            executor._validate_market_plan(
+                v2_market_plan(),
+                Decimal("200"),
+            )
+    finally:
+        executor.close()
+
+
+def test_historical_v1_cannot_reach_order_submission() -> None:
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
+    legacy_plan = range_plan()
 
     try:
         with patch.object(
             executor,
-            "_last_price",
-            return_value=Decimal("130"),
+            "_sync_clock",
+            side_effect=AssertionError("V1 must not make exchange calls"),
         ):
-            try:
-                executor._validate_market_plan(
-                    plan,
-                    Decimal("130"),
-                )
-            except TradeExecutionError:
-                pass
-            else:
-                raise AssertionError("Expected market risk validation to fail")
+            with pytest.raises(TradeExecutionError, match="read-only"):
+                executor._execute_sync(legacy_plan)
 
+        with pytest.raises(TradeExecutionError, match="read-only"):
+            executor._order_params(legacy_plan, 0)
+
+        with pytest.raises(TradeExecutionError, match="read-only"):
+            executor._validate_market_plan(legacy_plan, Decimal("105"))
+
+        with pytest.raises(TradeExecutionError, match="read-only"):
+            executor._execute_market_primary_sync(legacy_plan)
     finally:
         executor.close()
 

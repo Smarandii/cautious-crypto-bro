@@ -1198,11 +1198,18 @@ class BybitDemoExecutor:
         )
 
     @staticmethod
+    def _require_v2(plan: ExecutionPlan) -> None:
+        if plan.strategy_version != 2:
+            raise TradeExecutionError(
+                f"Strategy V{plan.strategy_version} is read-only; only V2 executes"
+            )
+
+    @classmethod
     def _validate_staged_market_plan(
+        cls,
         plan: ExecutionPlan,
     ) -> None:
-        if plan.strategy_version < 2:
-            raise TradeExecutionError("Staged MARKET execution requires Strategy V2")
+        cls._require_v2(plan)
 
         if len(plan.orders) != 3:
             raise TradeExecutionError("Strategy V2 requires three entry legs")
@@ -1374,57 +1381,18 @@ class BybitDemoExecutor:
         self,
         plan: ExecutionPlan,
     ) -> tuple[str, ...]:
+        self._require_v2(plan)
+
+        if any(order.order_type is ExecutionOrderType.MARKET for order in plan.orders):
+            raise TradeExecutionError(
+                "Strategy V2 MARKET plans require staged E1 execution"
+            )
+
         self._sync_clock()
 
-        market_orders = [
-            order
-            for order in plan.orders
-            if (order.order_type is ExecutionOrderType.MARKET)
-        ]
-
-        if market_orders:
-            if plan.strategy_version >= 2 and len(market_orders) != len(plan.orders):
-                raise TradeExecutionError(
-                    "Strategy V2 MARKET plans require staged E1 execution"
-                )
-
-            if plan.strategy_version < 2 and len(market_orders) != len(plan.orders):
-                raise TradeExecutionError(
-                    "V1 execution plan cannot mix MARKET and LIMIT orders"
-                )
-
-            market_price = self._last_price(plan.symbol)
-
-            self._validate_market_plan(
-                plan,
-                market_price,
-            )
-
         requests = [
-            self._order_params(
-                plan,
-                index,
-            )
-            for index in range(len(plan.orders))
+            self._order_params(plan, index) for index in range(len(plan.orders))
         ]
-
-        if len(requests) == 1:
-            body = {
-                "category": "linear",
-                **requests[0],
-            }
-
-            response = self._private_post(
-                "/v5/order/create",
-                body,
-            )
-
-            order_id = response.get("result", {}).get("orderId")
-
-            if not order_id:
-                raise TradeExecutionError("Bybit returned success without orderId")
-
-            return (str(order_id),)
 
         response = self._private_post(
             "/v5/order/create-batch",
@@ -1445,67 +1413,30 @@ class BybitDemoExecutor:
         plan: ExecutionPlan,
         index: int,
     ) -> dict[str, object]:
+        self._require_v2(plan)
+
         order = plan.orders[index]
 
-        if plan.strategy_version >= 2:
-            params: dict[
-                str,
-                object,
-            ] = {
-                "symbol": plan.symbol,
-                "side": ("Buy" if plan.side is Side.LONG else "Sell"),
-                "orderType": (
-                    "Market"
-                    if (order.order_type is ExecutionOrderType.MARKET)
-                    else "Limit"
-                ),
-                "qty": self._fmt(order.quantity),
-                "stopLoss": self._fmt(plan.stop_loss),
-                "tpslMode": "Partial",
-                "slOrderType": "Market",
-                "timeInForce": (
-                    "IOC" if (order.order_type is ExecutionOrderType.MARKET) else "GTC"
-                ),
-                "positionIdx": 0,
-                "reduceOnly": False,
-                "orderLinkId": (
-                    f"ccb-v2-{plan.intent_id.hex[:20]}-{order.name.lower()}"
-                ),
-            }
-
-            if order.order_type is ExecutionOrderType.LIMIT:
-                assert order.price is not None
-
-                params["price"] = self._fmt(order.price)
-
-            return params
-
-        take_profit = (
-            order.take_profit if order.take_profit is not None else plan.take_profit
-        )
-
-        params = {
+        params: dict[str, object] = {
             "symbol": plan.symbol,
             "side": ("Buy" if plan.side is Side.LONG else "Sell"),
             "orderType": (
-                "Market" if (order.order_type is ExecutionOrderType.MARKET) else "Limit"
+                "Market" if order.order_type is ExecutionOrderType.MARKET else "Limit"
             ),
             "qty": self._fmt(order.quantity),
-            "takeProfit": self._fmt(take_profit),
             "stopLoss": self._fmt(plan.stop_loss),
             "tpslMode": "Partial",
-            "tpOrderType": "Market",
             "slOrderType": "Market",
             "timeInForce": (
-                "IOC" if (order.order_type is ExecutionOrderType.MARKET) else "GTC"
+                "IOC" if order.order_type is ExecutionOrderType.MARKET else "GTC"
             ),
             "positionIdx": 0,
-            "orderLinkId": (f"ccb-{plan.intent_id.hex[:24]}-{index + 1}"),
+            "reduceOnly": False,
+            "orderLinkId": (f"ccb-v2-{plan.intent_id.hex[:20]}-{order.name.lower()}"),
         }
 
         if order.order_type is ExecutionOrderType.LIMIT:
             assert order.price is not None
-
             params["price"] = self._fmt(order.price)
 
         return params
@@ -1615,67 +1546,28 @@ class BybitDemoExecutor:
         plan: ExecutionPlan,
         market_price: Decimal,
     ) -> None:
-        if plan.strategy_version >= 2:
-            current_risk = Decimal("0")
+        self._require_v2(plan)
 
-            for order in plan.orders:
-                if order.order_type is ExecutionOrderType.MARKET:
-                    entry_price = market_price
-                else:
-                    entry_price = order.reference_price
-
-                if plan.side is Side.LONG and not (plan.stop_loss < entry_price):
-                    raise TradeExecutionError(
-                        "Market moved outside LONG V2 stop geometry"
-                    )
-
-                if plan.side is Side.SHORT and not (entry_price < plan.stop_loss):
-                    raise TradeExecutionError(
-                        "Market moved outside SHORT V2 stop geometry"
-                    )
-
-                current_risk += order.quantity * abs(entry_price - plan.stop_loss)
-
-            if current_risk > plan.policy.risk_budget_usdt:
-                raise TradeExecutionError(
-                    "Market moved enough that "
-                    "Strategy V2 execution would "
-                    "exceed the risk budget"
-                )
-
-            return
+        current_risk = Decimal("0")
 
         for order in plan.orders:
-            take_profit = (
-                order.take_profit if order.take_profit is not None else plan.take_profit
-            )
+            if order.order_type is ExecutionOrderType.MARKET:
+                entry_price = market_price
+            else:
+                entry_price = order.reference_price
 
-            if plan.side is Side.LONG and not (
-                plan.stop_loss < market_price < take_profit
-            ):
-                raise TradeExecutionError(
-                    "Market price is outside LONG stop/target geometry"
-                )
+            if plan.side is Side.LONG and not (plan.stop_loss < entry_price):
+                raise TradeExecutionError("Market moved outside LONG V2 stop geometry")
 
-            if plan.side is Side.SHORT and not (
-                take_profit < market_price < plan.stop_loss
-            ):
-                raise TradeExecutionError(
-                    "Market price is outside SHORT stop/target geometry"
-                )
+            if plan.side is Side.SHORT and not (entry_price < plan.stop_loss):
+                raise TradeExecutionError("Market moved outside SHORT V2 stop geometry")
 
-        total_quantity = sum(
-            (order.quantity for order in plan.orders),
-            Decimal("0"),
-        )
-
-        current_risk = total_quantity * abs(market_price - plan.stop_loss)
+            current_risk += order.quantity * abs(entry_price - plan.stop_loss)
 
         if current_risk > plan.policy.risk_budget_usdt:
             raise TradeExecutionError(
-                "Market moved enough that "
-                "execution would exceed "
-                "the configured risk budget"
+                "Market moved enough that Strategy V2 execution "
+                "would exceed the risk budget"
             )
 
     def _last_price(

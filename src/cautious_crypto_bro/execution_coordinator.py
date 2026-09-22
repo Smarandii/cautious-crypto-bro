@@ -295,6 +295,20 @@ class ExecutionCoordinator:
                 plan=plan,
             )
 
+        if plan.strategy_version != 2:
+            message = (
+                f"Historical Strategy V{plan.strategy_version} plans are read-only; "
+                "only Strategy V2 can execute"
+            )
+            await self._store.mark_failed(intent_id, message)
+
+            return IntentExecutionOutcome(
+                status=IntentStatus.FAILED,
+                message=message,
+                intent=intent,
+                plan=plan,
+            )
+
         effective_plan = plan
 
         try:
@@ -310,13 +324,9 @@ class ExecutionCoordinator:
                     if safety_reason is not None:
                         raise AutoExecutionSafetyError(safety_reason)
 
-                if plan.strategy_version >= 2:
-                    await self._store.ensure_position_strategy(plan)
+                await self._store.ensure_position_strategy(plan)
 
-                staged_market = (
-                    plan.strategy_version >= 2
-                    and plan.orders[0].order_type is ExecutionOrderType.MARKET
-                )
+                staged_market = plan.orders[0].order_type is ExecutionOrderType.MARKET
 
                 if staged_market:
                     primary = await self._executor.execute_market_primary(plan)
@@ -362,11 +372,10 @@ class ExecutionCoordinator:
                 message,
             )
 
-            if plan.strategy_version >= 2:
-                await self._store.set_position_strategy_status(
-                    intent_id,
-                    StrategyStatus.UNCERTAIN,
-                )
+            await self._store.set_position_strategy_status(
+                intent_id,
+                StrategyStatus.UNCERTAIN,
+            )
 
             return IntentExecutionOutcome(
                 status=IntentStatus.FAILED,

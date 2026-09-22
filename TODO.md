@@ -122,8 +122,8 @@ See [STRATEGY.md](STRATEGY.md) for the current strategy contract.
 - [x] Preserve exchange-side protection while automation is paused.
 - [x] Extend the existing execution quarantine flow rather than adding a second
       recovery subsystem.
-- [ ] Guarantee that startup performs one complete strategy reconciliation
-      before startup-lookback processing can cause any V2 exchange mutation.
+- [x] Complete initial strategy reconciliation before pending AUTO recovery,
+      approval polling, or Telegram startup-lookback can cause exchange mutation.
 - [x] Never blindly replay REDUCE/CLOSE after a crash.
 - [x] Validate fresh-process restart of an active V2 strategy without
       unnecessary exchange mutations.
@@ -155,9 +155,9 @@ See [STRATEGY.md](STRATEGY.md) for the current strategy contract.
 
 - [x] Remove the legacy configurable `trading_capital_usdt` database field and
       `--capital-usdt` CLI option.
-- [ ] Audit and remove any unnecessary residual V1 runtime execution branches
+- [x] Reject historical V1 plans at coordinator and Bybit executor boundaries
       while preserving historical V1 plan readability.
-- [ ] Run a final code audit for duplicated V1/V2 execution logic.
+- [x] Remove residual V1 order-building and risk-validation execution branches.
 - [x] Update README and TESTING documentation for V2 behavior.
 - [x] Run production-like Demo OPEN/restart/REDUCE/CLOSE and MARKET
       actual-fill/protection-handoff smoke tests.

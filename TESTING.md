@@ -147,6 +147,13 @@ supervisor persists the strategy as CLOSED;
 final cleanup leaves zero position and zero stale V2 orders.
 Failure semantics
 
+Historical V1 execution plans remain readable but are rejected before new
+exchange mutations, including through stale manual approval or AUTO recovery.
+
+Startup reconciles before pending AUTO recovery and again after recovery to
+protect any recovered exposure before approval polling or Telegram lookback.
+A reconciliation failure aborts startup rather than enabling ingestion.
+
 A submitted destructive lifecycle order is not considered successful merely
 because Bybit returned an order ID.
 
