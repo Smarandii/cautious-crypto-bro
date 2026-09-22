@@ -390,6 +390,60 @@ def test_exposure_reads_position_and_pending_ccb_orders() -> None:
         executor.close()
 
 
+
+def test_account_state_keeps_active_partial_stops_with_zero_leaves_qty() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v5/position/list":
+            return httpx.Response(
+                200,
+                json={"retCode": 0, "result": {
+                    "list": [{
+                        "symbol": "BTCUSDT",
+                        "side": "Buy",
+                        "size": "4",
+                        "avgPrice": "100",
+                        "markPrice": "102",
+                    }],
+                    "nextPageCursor": "",
+                }},
+            )
+        if request.url.path == "/v5/order/realtime":
+            return httpx.Response(
+                200,
+                json={"retCode": 0, "result": {
+                    "list": [{
+                        "symbol": "BTCUSDT",
+                        "side": "Sell",
+                        "orderType": "Market",
+                        "orderStatus": "Untriggered",
+                        "orderId": "partial-sl",
+                        "orderLinkId": "",
+                        "qty": "4",
+                        "leavesQty": "0",
+                        "stopOrderType": "PartialStopLoss",
+                        "triggerPrice": "90",
+                    }],
+                    "nextPageCursor": "",
+                }},
+            )
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
+    executor._client.close()
+    executor._client = httpx.Client(
+        base_url="https://api-demo.bybit.com",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with patch.object(executor, "_sync_clock"):
+            state = executor._account_state_sync()
+        assert len(state.open_orders) == 1
+        assert state.open_orders[0].remaining_quantity == Decimal("4")
+        assert state.open_orders[0].stop_order_type == "PartialStopLoss"
+    finally:
+        executor.close()
+
+
 def test_v2_entries_use_stop_only_payloads() -> None:
     plan = ExecutionPlanner().plan(
         TradingIntent(
