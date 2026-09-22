@@ -425,6 +425,7 @@ def test_account_state_keeps_active_partial_stops_with_zero_leaves_qty() -> None
                                 "orderStatus": "Untriggered",
                                 "orderId": "partial-sl",
                                 "orderLinkId": "",
+                                "parentOrderLinkId": "ccb-v2-01234567890123456789-e1",
                                 "qty": "4",
                                 "leavesQty": "0",
                                 "stopOrderType": "PartialStopLoss",
@@ -449,6 +450,10 @@ def test_account_state_keeps_active_partial_stops_with_zero_leaves_qty() -> None
         assert len(state.open_orders) == 1
         assert state.open_orders[0].remaining_quantity == Decimal("4")
         assert state.open_orders[0].stop_order_type == "PartialStopLoss"
+        assert (
+            state.open_orders[0].parent_order_link_id
+            == "ccb-v2-01234567890123456789-e1"
+        )
     finally:
         executor.close()
 
