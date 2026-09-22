@@ -133,3 +133,25 @@ def test_missing_tp_builds_default_policy_ladder() -> None:
     assert len(plan.orders) == 9
 
     assert plan.planned_max_loss_usdt <= Decimal("68")
+
+
+def test_execution_plan_defaults_to_strategy_v1() -> None:
+    plan = ExecutionPlanner().plan(
+        intent(),
+        policy(3),
+        context(),
+    )
+
+    assert plan.strategy_version == 1
+
+    serialized = plan.model_dump(
+        mode="json",
+    )
+
+    serialized.pop(
+        "strategy_version",
+    )
+
+    restored = type(plan).model_validate(serialized)
+
+    assert restored.strategy_version == 1

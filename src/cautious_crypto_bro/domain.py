@@ -576,6 +576,178 @@ class ExitPolicy(BaseModel):
         )
 
 
+class StrategyV2Policy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    primary_entry_risk_pct: Decimal = Field(
+        default=Decimal("60"),
+        gt=0,
+        lt=100,
+    )
+    secondary_entry_risk_pct: Decimal = Field(
+        default=Decimal("25"),
+        gt=0,
+        lt=100,
+    )
+    tertiary_entry_risk_pct: Decimal = Field(
+        default=Decimal("15"),
+        gt=0,
+        lt=100,
+    )
+
+    secondary_entry_depth_r: Decimal = Field(
+        default=Decimal("0.33"),
+        gt=0,
+        lt=1,
+    )
+    tertiary_entry_depth_r: Decimal = Field(
+        default=Decimal("0.66"),
+        gt=0,
+        lt=1,
+    )
+
+    first_take_profit_r: Decimal = Field(
+        default=Decimal("0.5"),
+        gt=0,
+    )
+    second_take_profit_r: Decimal = Field(
+        default=Decimal("1"),
+        gt=0,
+    )
+    third_take_profit_r: Decimal = Field(
+        default=Decimal("1.5"),
+        gt=0,
+    )
+
+    first_take_profit_pct: Decimal = Field(
+        default=Decimal("25"),
+        gt=0,
+        lt=100,
+    )
+    second_take_profit_pct: Decimal = Field(
+        default=Decimal("25"),
+        gt=0,
+        lt=100,
+    )
+    third_take_profit_pct: Decimal = Field(
+        default=Decimal("25"),
+        gt=0,
+        lt=100,
+    )
+    runner_pct: Decimal = Field(
+        default=Decimal("25"),
+        gt=0,
+        lt=100,
+    )
+
+    trailing_activation_r: Decimal = Field(
+        default=Decimal("0.5"),
+        gt=0,
+    )
+    trailing_distance_r: Decimal = Field(
+        default=Decimal("0.3"),
+        gt=0,
+    )
+    minimum_locked_profit_r: Decimal = Field(
+        default=Decimal("0.05"),
+        ge=0,
+    )
+
+    @model_validator(mode="after")
+    def validate_v2_policy(
+        self,
+    ) -> StrategyV2Policy:
+        entry_total = (
+            self.primary_entry_risk_pct
+            + self.secondary_entry_risk_pct
+            + self.tertiary_entry_risk_pct
+        )
+
+        if entry_total != Decimal("100"):
+            raise ValueError("V2 entry risk percentages must total 100")
+
+        if not (self.secondary_entry_depth_r < self.tertiary_entry_depth_r):
+            raise ValueError("V2 entry depths must increase")
+
+        if not (
+            self.first_take_profit_r
+            < self.second_take_profit_r
+            < self.third_take_profit_r
+        ):
+            raise ValueError("V2 take-profit R multiples must increase")
+
+        exit_total = (
+            self.first_take_profit_pct
+            + self.second_take_profit_pct
+            + self.third_take_profit_pct
+            + self.runner_pct
+        )
+
+        if exit_total != Decimal("100"):
+            raise ValueError("V2 fixed exits and runner must total 100")
+
+        if self.trailing_distance_r >= self.trailing_activation_r:
+            raise ValueError("V2 trailing distance must be smaller than activation R")
+
+        nominal_floor = self.trailing_activation_r - self.trailing_distance_r
+
+        if self.minimum_locked_profit_r > nominal_floor:
+            raise ValueError(
+                "V2 minimum locked profit "
+                "cannot exceed the nominal "
+                "initial trailing floor"
+            )
+
+        return self
+
+    @property
+    def entry_rules(
+        self,
+    ) -> tuple[
+        tuple[Decimal, Decimal],
+        ...,
+    ]:
+        return (
+            (
+                Decimal("0"),
+                self.primary_entry_risk_pct,
+            ),
+            (
+                self.secondary_entry_depth_r,
+                self.secondary_entry_risk_pct,
+            ),
+            (
+                self.tertiary_entry_depth_r,
+                self.tertiary_entry_risk_pct,
+            ),
+        )
+
+    @property
+    def exit_rules(
+        self,
+    ) -> tuple[
+        tuple[str, Decimal, Decimal],
+        ...,
+    ]:
+        return (
+            (
+                "TP1",
+                self.first_take_profit_r,
+                self.first_take_profit_pct,
+            ),
+            (
+                "TP2",
+                self.second_take_profit_r,
+                self.second_take_profit_pct,
+            ),
+            (
+                "TP3",
+                self.third_take_profit_r,
+                self.third_take_profit_pct,
+            ),
+        )
+
+
 class ExecutionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -590,6 +762,14 @@ class ExecutionPolicy(BaseModel):
     )
     exit_policy: ExitPolicy = Field(
         default_factory=ExitPolicy,
+    )
+
+    # V1 execution still uses exit_policy.
+    # Strategy V2 switches to this policy
+    # only when the V2 planner/executor
+    # transition is complete.
+    strategy_v2: StrategyV2Policy = Field(
+        default_factory=StrategyV2Policy,
     )
 
     @property
@@ -639,6 +819,11 @@ class PlannedOrder(BaseModel):
 
 class ExecutionPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    strategy_version: int = Field(
+        default=1,
+        ge=1,
+    )
 
     intent_id: UUID
     symbol: str

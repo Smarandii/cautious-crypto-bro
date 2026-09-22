@@ -153,3 +153,17 @@ Before Strategy V2 manages new positions automatically:
 3. Add deterministic tests for risk, fill, protection, and restart behavior.
 4. Run only on Bybit Demo.
 5. Review live results before changing any parameter or enabling real funds.
+
+## V2.0 defaults
+
+Use these initial Demo parameters:
+
+- Allocate entry risk 60% / 25% / 15%.
+- Place follow-up entries at 0.33R and 0.66R toward the original stop.
+- Close 25% at 0.5R, 25% at 1R, and 25% at 1.5R.
+- Keep the remaining 25% as the runner.
+- Activate trailing protection at 0.5R with a 0.3R distance.
+- Protect at least 0.05R after expected fees and slippage.
+
+These values are V2.0 defaults, not universal optima. Change them only after
+replay and Demo evidence support the change.

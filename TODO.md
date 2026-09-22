@@ -3,24 +3,24 @@
 Strategy V2 is the release plan for `v2.0.0`. Keep `master` deployable while
 developing on `release/v2.0.0`. Run all automated execution only on Bybit Demo.
 
-See [STRATEGY_V2.md](STRATEGY_V2.md) for the strategy contract.
+See [STRATEGY.md](STRATEGY.md) for the strategy contract.
 
 ## v2.0.0 transition
 
 ### Foundation
 
-- [ ] Commit `STRATEGY_V2.md` and this roadmap.
-- [ ] Replace runtime hardcoded capital sizing with live Bybit
+- [x] Commit `STRATEGY_V2.md` and this roadmap.
+- [x] Replace runtime hardcoded capital sizing with live Bybit
       `totalWalletBalance`.
-- [ ] Snapshot live capital into each new execution plan so existing strategies
+- [x] Snapshot live capital into each new execution plan so existing strategies
       never resize when the account balance changes.
-- [ ] Fail closed for new OPEN planning when live wallet balance is unavailable.
-- [ ] Keep the existing database capital column only as temporary V1
+- [x] Fail closed for new OPEN planning when live wallet balance is unavailable.
+- [x] Keep the existing database capital column only as temporary V1
       compatibility state until the V2 schema migration removes it.
-- [ ] Add an offline Strategy V2 replay tool for the forensic dataset.
-- [ ] Benchmark entry weights, pullback depths, exit shares, TP3, trailing
+- [x] Add an offline Strategy V2 replay tool for the forensic dataset.
+- [x] Benchmark entry weights, pullback depths, exit shares, TP3, trailing
       activation, trail distance, and fee-aware profit floors.
-- [ ] Freeze V2.0 policy values from loss-prevention metrics, not maximum
+- [x] Freeze V2.0 policy values from loss-prevention metrics, not maximum
       historical PnL.
 
 ### Strategy model and planning
