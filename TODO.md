@@ -1,153 +1,169 @@
 # Roadmap
 
-Strategy V2 is the release plan for `v2.0.0`. Keep `master` deployable while
-developing on `release/v2.0.0`. Run all automated execution only on Bybit Demo.
+Strategy V2 is the release plan for `v2.0.0`.
 
-See [STRATEGY.md](STRATEGY.md) for the strategy contract.
+Development is on `release/v2.0.0`. Automated execution remains restricted to
+Bybit Demo.
+
+See [STRATEGY.md](STRATEGY.md) for the current strategy contract.
 
 ## v2.0.0 transition
 
 ### Foundation
 
-- [x] Commit `STRATEGY_V2.md` and this roadmap.
+- [x] Commit the Strategy V2 contract and roadmap.
 - [x] Replace runtime hardcoded capital sizing with live Bybit
       `totalWalletBalance`.
-- [x] Snapshot live capital into each new execution plan so existing strategies
-      never resize when the account balance changes.
-- [x] Fail closed for new OPEN planning when live wallet balance is unavailable.
-- [x] Keep the existing database capital column only as temporary V1
-      compatibility state until the V2 schema migration removes it.
-- [x] Add an offline Strategy V2 replay tool for the forensic dataset.
+- [x] Snapshot live capital into each new execution plan.
+- [x] Fail closed for OPEN planning when live wallet balance is unavailable.
+- [x] Remove persisted configurable trading capital from the active execution
+      policy.
+- [x] Add offline Strategy V2 replay tooling for the forensic dataset.
 - [x] Benchmark entry weights, pullback depths, exit shares, TP3, trailing
-      activation, trail distance, and fee-aware profit floors.
-- [x] Freeze V2.0 policy values from loss-prevention metrics, not maximum
-      historical PnL.
+      activation, trail distance, and profit-floor candidates.
+- [x] Freeze V2.0 defaults using loss-prevention criteria.
 
 ### Strategy model and planning
 
-- [ ] Extend the existing execution policy with the minimum V2 entry, exit, and
-      protection parameters. Do not add a generic strategy framework.
-- [ ] Replace the active `ExecutionPlan` contract with Strategy V2. Historical
-      persisted V1 plans only need to remain readable for reporting/recovery.
-- [ ] Separate entry legs from exit legs.
-- [ ] Add risk-weighted MARKET, LIMIT, and RANGE entry ladders.
-- [ ] Size every entry leg against the frozen risk budget and original stop.
-- [ ] Require all-entry-fill worst-case loss to remain within the risk budget
-      after tick and quantity rounding.
-- [ ] Use universal partial exits even when the trader supplies a take-profit.
-- [ ] Keep an explicit runner allocation.
-- [ ] Reject automatic execution when the position is too small to support at
-      least one partial exit plus a runner.
+- [x] Add the minimal Strategy V2 entry, exit, runner, trailing, and floor
+      parameters to the execution policy.
+- [x] Make new execution plans Strategy V2 while retaining historical V1 plan
+      parsing.
+- [x] Separate entry legs from exit legs.
+- [x] Add risk-weighted MARKET, LIMIT, and RANGE entry ladders.
+- [x] Size each entry leg against the frozen risk budget and original stop.
+- [x] Enforce total worst-case stop loss after tick/quantity rounding.
+- [x] Use partial exits even when the trader supplies a take-profit.
+- [x] Keep an explicit runner allocation.
+- [x] Reject V2 plans too small to support a partial exit plus runner.
+- [x] Rebase MARKET scale-ins from the actual E1 fill and conservatively
+      downsize E2/E3 when fill slippage consumes additional risk budget.
 
 ### Bybit execution primitives
 
-- [ ] Reuse `BybitDemoExecutor`; do not add an exchange abstraction.
-- [ ] Add concrete methods only for the V2 operations that are needed:
-      wallet balance, entry placement/cancellation, reduce-only exits,
-      position-level trading stop, and order/fill lookup.
-- [ ] Preserve clock synchronization and existing HTTP error handling.
-- [ ] Verify every destructive mutation by re-reading Bybit state.
-- [ ] Give every directly created V2 order a deterministic `orderLinkId`.
+- [x] Reuse `BybitDemoExecutor`.
+- [x] Add the V2 operations required for wallet balance, entry
+      placement/cancellation, reduce-only exits, position-level protection,
+      lifecycle actions, and fill confirmation.
+- [x] Preserve clock synchronization and HTTP error handling.
+- [x] Confirm destructive position actions from re-read live Bybit state.
+- [x] Give directly created V2 entry and fixed-exit orders deterministic
+      `orderLinkId` values.
+- [x] Treat unchanged position protection as idempotent reconciliation rather
+      than a fatal mutation.
 
 ### Durable position strategies
 
-- [ ] Add a `StrategyStatus` enum distinct from Telegram `IntentStatus`.
-- [ ] Add one durable `position_strategies` table for V2 runtime state.
-- [ ] Persist frozen capital, risk budget, original stop, entry freeze state,
-      expected live quantity, exit plan, protection state, and source intent IDs.
-- [ ] Add a sequential SQLite migration from the current production schema.
-- [ ] Migrate a copy of the production database in tests and verify that all V1
-      history remains readable.
-- [ ] Distinguish successful order submission from actual position entry.
+- [x] Add `StrategyStatus` distinct from Telegram `IntentStatus`.
+- [x] Add durable `position_strategies` runtime state.
+- [x] Keep frozen capital, risk budget, stop, entry/exit plan, and source intent
+      in the persisted execution plan while storing live lifecycle/protection
+      state in `position_strategies`.
+- [x] Add sequential SQLite migrations through schema v7.
+- [x] Preserve historical V1 `ExecutionPlan` parsing and cover v4/v5/v6 to v7
+      schema migrations in tests.
+- [x] Distinguish order acceptance from confirmed MARKET entry/lifecycle state.
+- [x] Persist the actual-fill-derived MARKET plan before E2/E3 are submitted.
 
 ### Entry execution
 
-- [ ] Persist the V2 strategy before the first exchange mutation.
-- [ ] Submit deterministic LIMIT/RANGE ladders without multiplying entries by
-      take-profit slices.
-- [ ] For MARKET signals, execute E1 first and use the actual fill price to
-      calculate E2 and E3.
-- [ ] Freeze and cancel unfilled entry legs on TP1, profit-protection threshold,
-      REDUCE, CLOSE, or trailing activation.
-- [ ] After entry freeze, never increase exposure automatically.
+- [x] Persist the V2 strategy before the first exchange mutation.
+- [x] Submit LIMIT/RANGE ladders without multiplying entries by TP slices.
+- [x] For MARKET, execute E1 first and derive E2/E3 from its confirmed actual
+      fill.
+- [x] Freeze/cancel unfilled entries on fixed-TP progress, protection
+      activation, REDUCE, or CLOSE.
+- [x] Prevent automatic exposure growth after entry freeze.
 
 ### Exit and protection execution
 
-- [ ] Build TP1/TP2/TP3 as independent reduce-only exits against the actual
-      frozen position quantity.
-- [ ] Assign rounding residue to the runner.
-- [ ] Establish one verified position-level catastrophe stop for live V2
-      positions.
-- [ ] Keep the original catastrophe stop when profit trailing activates.
-- [ ] Activate native Bybit trailing protection at the selected live-R threshold.
-- [ ] Calculate the minimum protected floor from realized costs, estimated close
-      fees, slippage reserve, and a positive profit buffer.
-- [ ] Never move profit protection backward automatically.
+- [x] Build TP1/TP2/TP3 as independent reduce-only exits from live position
+      quantity.
+- [x] Leave quantity-rounding residue in the runner.
+- [x] Establish and verify one position-level catastrophe stop.
+- [x] Verify the initial MARKET E1 `PartialStopLoss` before handing protection
+      to the position-level stop.
+- [x] Activate native Bybit trailing protection at the configured live-R
+      threshold.
+- [x] Never move profit protection backward automatically.
+- [ ] Extend the minimum protected floor to explicit realized fee, funding, and
+      slippage accounting rather than relying on Bybit break-even plus the V2.0
+      positive R buffer.
 
 ### Position supervisor
 
-- [ ] Add only one new runtime module: `position_supervisor.py`.
-- [ ] Run it from the existing `asyncio.TaskGroup`; do not add a scheduler
-      dependency.
-- [ ] Start with polling. Add WebSockets only if measured behavior proves polling
-      inadequate.
-- [ ] Reconcile persisted active strategies with live Bybit positions and orders.
-- [ ] Use Bybit as the source of truth for live exposure.
-- [ ] Never increase exposure except through persisted planned entry legs.
-- [ ] Leave exchange-side protection intact when polling or reconciliation fails.
+- [x] Add `position_supervisor.py` without a separate scheduler dependency.
+- [x] Run it from the existing `asyncio.TaskGroup`.
+- [x] Use polling as the initial implementation.
+- [x] Reconcile persisted active strategies with live Bybit positions/orders.
+- [x] Use Bybit as the live source of truth.
+- [x] Prevent unplanned exposure growth.
+- [x] Keep existing exchange protection intact when reconciliation cannot
+      safely proceed.
+- [x] Quarantine `UNCERTAIN` strategies from further automated mutation.
 
 ### REDUCE and CLOSE
 
-- [ ] Keep the current strict LLM evidence requirements for destructive actions.
-- [ ] REDUCE: freeze entries, cancel pending entries, re-read, reduce, verify,
-      re-read again, rebuild exits, and reconcile protection.
-- [ ] Remove the stale-quantity behavior observed after the historical NEAR
-      reduction.
-- [ ] CLOSE: cancel CCB entries and exits, re-read, reduce-only close the full
-      remainder, and verify zero position.
-- [ ] Explicit trader CLOSE always overrides runner and trailing behavior.
+- [x] Keep strict current-message evidence requirements for destructive actions.
+- [x] REDUCE freezes entries, cancels stale orders, re-reads, reduces, confirms
+      live quantity, and rebuilds against the actual remainder.
+- [x] Remove stale-quantity rebuilding after REDUCE.
+- [x] CLOSE cancels CCB orders, submits reduce-only close, and confirms zero
+      exposure.
+- [x] Explicit trader CLOSE overrides runner/trailing behavior.
+- [x] Treat submitted-but-unconfirmed lifecycle actions as `UNCERTAIN`.
 
 ### Manual changes and restart recovery
 
-- [ ] Detect unexplained live changes to V2-owned orders or positions.
-- [ ] Enter `MANUAL_OVERRIDE` instead of fighting a manual change such as the
-      historical ENA edit.
-- [ ] Preserve effective protection while automation is paused.
-- [ ] Extend the existing quarantine/recovery flow instead of creating a second
+- [ ] Complete manual-edit detection for every V2-owned order type, including
+      direct edits/cancellation of fixed TP orders.
+- [x] Enter `MANUAL_OVERRIDE` for supported unexplained entry/protection/position
+      changes instead of fighting the live account.
+- [x] Preserve exchange-side protection while automation is paused.
+- [x] Extend the existing execution quarantine flow rather than adding a second
       recovery subsystem.
-- [ ] On startup, reconcile live Bybit state before any V2 mutation.
-- [ ] Never blindly replay REDUCE, CLOSE, or protection changes after a crash.
+- [ ] Guarantee that startup performs one complete strategy reconciliation
+      before startup-lookback processing can cause any V2 exchange mutation.
+- [x] Never blindly replay REDUCE/CLOSE after a crash.
+- [x] Validate fresh-process restart of an active V2 strategy without
+      unnecessary exchange mutations.
 
 ### Telegram visibility
 
-- [ ] Show live wallet capital and frozen risk budget in approval cards.
-- [ ] Show E1/E2/E3, fixed exits, runner allocation, strategy state, and current
-      protection state.
-- [ ] Make manual approval display the exact maximum planned loss before
-      execution.
+- [x] Show frozen live wallet capital and exact planned maximum loss on OPEN
+      approval cards.
+- [x] Show E1/E2/E3, fixed exits, and runner allocation.
+- [ ] Add current durable strategy state and live protection state to relevant
+      Telegram runtime/status views.
+- [x] Manual approval displays the exact deterministic maximum planned loss.
 
 ### Demo rollout
 
-- [ ] Enable the complete Strategy V2 execution path on Bybit Demo:
-      entry ladder, independent exits, runner, trailing protection, lifecycle
-      reconciliation, and restart recovery.
-- [ ] Re-run the forensic exporter and compare V2 with V1 using:
-      profitable-to-losing round trips, full-stop losses, maximum drawdown,
-      peak-profit give-back, net realized R after costs, runner capture, fill
-      quality, and strategy-management failures.
-- [ ] Prefer the safer parameter set when performance differences are small.
+- [x] Exercise the complete V2 path on Bybit Demo: staged MARKET entry,
+      independent exits, runner, protection handoff, lifecycle reconciliation,
+      restart recovery, REDUCE, and CLOSE.
+- [x] Validate actual-fill MARKET rebasing against live Bybit Demo orders.
+- [x] Validate immediate catastrophe protection before supervisor handoff.
+- [ ] Re-run the forensic exporter against the final implementation and compare
+      V2 with V1 on profitable-to-losing round trips, full-stop losses,
+      drawdown, peak-profit give-back, realized R after costs, runner capture,
+      fill quality, and strategy-management failures.
+- [x] Keep the safer frozen parameter set when historical performance
+      differences are small.
 
 ### V2 cleanup and release
 
-- [ ] Remove the legacy configurable `trading_capital_usdt` database field and
+- [x] Remove the legacy configurable `trading_capital_usdt` database field and
       `--capital-usdt` CLI option.
-- [ ] Remove V1 TP-per-entry execution assumptions as part of the V2 planner
-      and executor replacement. Do not maintain parallel V1/V2 runtime paths.
-- [ ] Run a final Ponytail audit for duplicated V1/V2 logic.
-- [ ] Update README and TESTING documentation for V2 behavior.
-- [ ] Run the full local quality gate and production-like Demo smoke/restart
-      tests.
-- [ ] Merge `release/v2.0.0` to `master` and tag `v2.0.0`.
+- [ ] Audit and remove any unnecessary residual V1 runtime execution branches
+      while preserving historical V1 plan readability.
+- [ ] Run a final code audit for duplicated V1/V2 execution logic.
+- [x] Update README and TESTING documentation for V2 behavior.
+- [x] Run production-like Demo OPEN/restart/REDUCE/CLOSE and MARKET
+      actual-fill/protection-handoff smoke tests.
+- [ ] Run the final post-documentation local quality gate.
+- [ ] Merge `release/v2.0.0` to `master`.
+- [ ] Tag `v2.0.0`.
 
 ## Later work
 
@@ -156,6 +172,18 @@ See [STRATEGY.md](STRATEGY.md) for the strategy contract.
 Persist enough fill, exit, fee, funding, and strategy-transition data to
 reconstruct realized signal performance without assuming that a shared Bybit
 position belongs to one source channel.
+
+Use explicit realized execution costs when setting the protected-profit floor.
+
+### Manual mutation coverage
+
+Extend owned-order reconciliation to detect manual edits or cancellation of
+fixed V2 TP orders without confusing genuine fills with manual intervention.
+
+### Startup ordering
+
+Make startup reconciliation an explicit barrier before startup-lookback messages
+are allowed to trigger V2 exchange mutations.
 
 ### MENSA visual structure
 
