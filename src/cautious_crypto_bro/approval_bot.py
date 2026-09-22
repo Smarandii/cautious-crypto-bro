@@ -714,11 +714,18 @@ class ApprovalBot:
             signal_entry = f"{intent.entry.range_low:g} – {intent.entry.range_high:g}"
 
         if plan.take_profit_targets:
-            source_label = (
-                "Policy fallback"
-                if (plan.take_profit_source is TakeProfitSource.POLICY)
-                else "Trader"
-            )
+            if plan.strategy_version >= 2:
+                source_label = (
+                    "Strategy V2"
+                    if (plan.take_profit_source is TakeProfitSource.POLICY)
+                    else "Trader-guided V2"
+                )
+            else:
+                source_label = (
+                    "Policy fallback"
+                    if (plan.take_profit_source is TakeProfitSource.POLICY)
+                    else "Trader"
+                )
 
             tp_lines = []
 
@@ -729,6 +736,11 @@ class ApprovalBot:
                     f"{ApprovalBot._fmt_decimal(target.price)}"
                     f"</b> — "
                     f"{ApprovalBot._fmt_decimal(target.close_pct)}%"
+                )
+
+            if plan.strategy_version >= 2:
+                tp_lines.append(
+                    f"Runner: <b>{ApprovalBot._fmt_decimal(plan.runner_pct)}%</b>"
                 )
 
             tp_block = f"<b>TPs ({source_label})</b>\n" + "\n".join(tp_lines)
@@ -745,14 +757,27 @@ class ApprovalBot:
         ):
             qty = ApprovalBot._fmt_decimal(order.quantity)
 
+            if plan.strategy_version >= 2:
+                label = html.escape(order.name)
+
+                risk_allocation = (
+                    ApprovalBot._fmt_decimal(order.risk_pct)
+                    if order.risk_pct is not None
+                    else "?"
+                )
+
+                prefix = f"{label} · {risk_allocation}% risk"
+            else:
+                prefix = str(index)
+
             if order.order_type is ExecutionOrderType.MARKET:
-                order_lines.append(f"{index}. Market × {qty}")
+                order_lines.append(f"{prefix}: Market × {qty}")
             else:
                 assert order.price is not None
 
                 price = ApprovalBot._fmt_decimal(order.price)
 
-                order_lines.append(f"{index}. {price} × {qty}")
+                order_lines.append(f"{prefix}: {price} × {qty}")
 
         total_qty = sum(
             (order.quantity for order in plan.orders),

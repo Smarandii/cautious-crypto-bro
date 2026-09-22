@@ -12,11 +12,19 @@ from cautious_crypto_bro.bybit import (
     TradeExecutionError,
 )
 from cautious_crypto_bro.domain import (
+    Entry,
+    EntryType,
     ExecutionOrderType,
     ExecutionPlan,
     ExecutionPolicy,
     PlannedOrder,
     Side,
+    SourceMessage,
+    TradingIntent,
+)
+from cautious_crypto_bro.execution import (
+    ExecutionPlanner,
+    InstrumentContext,
 )
 
 
@@ -317,6 +325,79 @@ def test_exposure_reads_position_and_pending_ccb_orders() -> None:
         assert pending.side is Side.SHORT
         assert pending.remaining_quantity == Decimal("0.1")
         assert pending.order_id == "ccb-order"
+
+    finally:
+        executor.close()
+
+
+def test_v2_entries_use_stop_only_payloads() -> None:
+    plan = ExecutionPlanner().plan(
+        TradingIntent(
+            source=SourceMessage(
+                channel_id=1,
+                channel_title="Test",
+                message_id=1,
+                published_at=datetime.now(UTC),
+                received_at=datetime.now(UTC),
+                text="test",
+            ),
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            entry=Entry(
+                type=EntryType.MARKET,
+            ),
+            stop_loss=90,
+            take_profit=None,
+            summary="test",
+            confidence=1,
+        ),
+        policy(),
+        InstrumentContext(
+            market_price=Decimal("120"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+    executor = BybitDemoExecutor(
+        api_key="key",
+        api_secret="secret",
+    )
+
+    try:
+        requests = [
+            executor._order_params(
+                plan,
+                index,
+            )
+            for index in range(len(plan.orders))
+        ]
+
+        assert [request["orderType"] for request in requests] == [
+            "Market",
+            "Limit",
+            "Limit",
+        ]
+
+        assert all("takeProfit" not in request for request in requests)
+
+        assert all(request["stopLoss"] == "90" for request in requests)
+
+        assert all(request["tpslMode"] == "Partial" for request in requests)
+
+        assert [
+            request["orderLinkId"].rsplit(
+                "-",
+                1,
+            )[-1]
+            for request in requests
+        ] == [
+            "e1",
+            "e2",
+            "e3",
+        ]
 
     finally:
         executor.close()

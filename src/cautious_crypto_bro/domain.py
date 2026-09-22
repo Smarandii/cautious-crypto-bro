@@ -792,6 +792,18 @@ class PlannedTakeProfit(BaseModel):
 class PlannedOrder(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Defaults preserve historical V1 plan loading.
+    name: str = Field(
+        default="ENTRY",
+        min_length=1,
+        max_length=20,
+    )
+    risk_pct: Decimal | None = Field(
+        default=None,
+        gt=0,
+        le=100,
+    )
+
     order_type: ExecutionOrderType
     quantity: Decimal = Field(gt=0)
     price: Decimal | None = Field(
@@ -842,6 +854,14 @@ class ExecutionPlan(BaseModel):
         ...,
     ] = ()
     take_profit_source: TakeProfitSource = TakeProfitSource.TRADER
+
+    # V1 plans load as zero runner. New V2 plans set 25%.
+    runner_pct: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        lt=100,
+    )
+
     policy: ExecutionPolicy
     planned_max_loss_usdt: Decimal = Field(ge=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -852,6 +872,44 @@ class ExecutionPlan(BaseModel):
     ) -> ExecutionPlan:
         if self.planned_max_loss_usdt > self.policy.risk_budget_usdt:
             raise ValueError("Execution plan exceeds configured risk budget")
+
+        if self.strategy_version >= 2:
+            if len(self.orders) != 3:
+                raise ValueError("Strategy V2 requires exactly three entry legs")
+
+            if tuple(order.name for order in self.orders) != (
+                "E1",
+                "E2",
+                "E3",
+            ):
+                raise ValueError("Strategy V2 entries must be E1, E2, E3")
+
+            if any(order.risk_pct is None for order in self.orders):
+                raise ValueError("Strategy V2 entries require risk allocations")
+
+            entry_risk_total = sum(
+                (order.risk_pct for order in self.orders if order.risk_pct is not None),
+                Decimal("0"),
+            )
+
+            if entry_risk_total != Decimal("100"):
+                raise ValueError("Strategy V2 entry risk allocations must total 100")
+
+            if any(order.take_profit is not None for order in self.orders):
+                raise ValueError("Strategy V2 entry orders must not own take profits")
+
+            if len(self.take_profit_targets) != 3:
+                raise ValueError("Strategy V2 requires exactly three fixed exits")
+
+            total_close_pct = sum(
+                (target.close_pct for target in self.take_profit_targets),
+                Decimal("0"),
+            )
+
+            if total_close_pct + self.runner_pct != Decimal("100"):
+                raise ValueError("Strategy V2 fixed exits and runner must total 100")
+
+            return self
 
         if self.take_profit_targets:
             total_close_pct = sum(

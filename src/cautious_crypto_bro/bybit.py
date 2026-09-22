@@ -975,9 +975,9 @@ class BybitDemoExecutor:
         ]
 
         if market_orders:
-            if len(market_orders) != len(plan.orders):
+            if plan.strategy_version < 2 and len(market_orders) != len(plan.orders):
                 raise TradeExecutionError(
-                    "Execution plan cannot mix MARKET and LIMIT orders"
+                    "V1 execution plan cannot mix MARKET and LIMIT orders"
                 )
 
             market_price = self._last_price(plan.symbol)
@@ -1034,18 +1034,48 @@ class BybitDemoExecutor:
     ) -> dict[str, object]:
         order = plan.orders[index]
 
+        if plan.strategy_version >= 2:
+            params: dict[
+                str,
+                object,
+            ] = {
+                "symbol": plan.symbol,
+                "side": ("Buy" if plan.side is Side.LONG else "Sell"),
+                "orderType": (
+                    "Market"
+                    if (order.order_type is ExecutionOrderType.MARKET)
+                    else "Limit"
+                ),
+                "qty": self._fmt(order.quantity),
+                "stopLoss": self._fmt(plan.stop_loss),
+                "tpslMode": "Partial",
+                "slOrderType": "Market",
+                "timeInForce": (
+                    "IOC" if (order.order_type is ExecutionOrderType.MARKET) else "GTC"
+                ),
+                "positionIdx": 0,
+                "reduceOnly": False,
+                "orderLinkId": (
+                    f"ccb-v2-{plan.intent_id.hex[:20]}-{order.name.lower()}"
+                ),
+            }
+
+            if order.order_type is ExecutionOrderType.LIMIT:
+                assert order.price is not None
+
+                params["price"] = self._fmt(order.price)
+
+            return params
+
         take_profit = (
             order.take_profit if order.take_profit is not None else plan.take_profit
         )
 
-        params: dict[
-            str,
-            object,
-        ] = {
+        params = {
             "symbol": plan.symbol,
             "side": ("Buy" if plan.side is Side.LONG else "Sell"),
             "orderType": (
-                "Market" if order.order_type is ExecutionOrderType.MARKET else "Limit"
+                "Market" if (order.order_type is ExecutionOrderType.MARKET) else "Limit"
             ),
             "qty": self._fmt(order.quantity),
             "takeProfit": self._fmt(take_profit),
@@ -1054,7 +1084,7 @@ class BybitDemoExecutor:
             "tpOrderType": "Market",
             "slOrderType": "Market",
             "timeInForce": (
-                "IOC" if order.order_type is ExecutionOrderType.MARKET else "GTC"
+                "IOC" if (order.order_type is ExecutionOrderType.MARKET) else "GTC"
             ),
             "positionIdx": 0,
             "orderLinkId": (f"ccb-{plan.intent_id.hex[:24]}-{index + 1}"),
@@ -1172,6 +1202,36 @@ class BybitDemoExecutor:
         plan: ExecutionPlan,
         market_price: Decimal,
     ) -> None:
+        if plan.strategy_version >= 2:
+            current_risk = Decimal("0")
+
+            for order in plan.orders:
+                if order.order_type is ExecutionOrderType.MARKET:
+                    entry_price = market_price
+                else:
+                    entry_price = order.reference_price
+
+                if plan.side is Side.LONG and not (plan.stop_loss < entry_price):
+                    raise TradeExecutionError(
+                        "Market moved outside LONG V2 stop geometry"
+                    )
+
+                if plan.side is Side.SHORT and not (entry_price < plan.stop_loss):
+                    raise TradeExecutionError(
+                        "Market moved outside SHORT V2 stop geometry"
+                    )
+
+                current_risk += order.quantity * abs(entry_price - plan.stop_loss)
+
+            if current_risk > plan.policy.risk_budget_usdt:
+                raise TradeExecutionError(
+                    "Market moved enough that "
+                    "Strategy V2 execution would "
+                    "exceed the risk budget"
+                )
+
+            return
+
         for order in plan.orders:
             take_profit = (
                 order.take_profit if order.take_profit is not None else plan.take_profit
