@@ -603,7 +603,7 @@ class PositionSupervisor:
             protected_stop,
             trailing_distance,
         )
-        account = await self._handoff_partial_stops(
+        await self._handoff_partial_stops(
             state.model_copy(
                 update={
                     "protected_stop_loss": protected_stop,
@@ -899,6 +899,10 @@ class PositionSupervisor:
         if (
             state.protected_stop_loss is not None
             and position.stop_loss != state.protected_stop_loss
+            and not (
+                position.stop_loss is None
+                and cls._partial_stops(state, plan, account)
+            )
         ):
             return (
                 "position stop changed outside "
