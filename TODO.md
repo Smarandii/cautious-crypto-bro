@@ -27,8 +27,8 @@ See [STRATEGY.md](STRATEGY.md) for the strategy contract.
 
 - [ ] Extend the existing execution policy with the minimum V2 entry, exit, and
       protection parameters. Do not add a generic strategy framework.
-- [ ] Evolve `ExecutionPlan` with a strategy version and V2 fields while keeping
-      historical V1 plans readable.
+- [ ] Replace the active `ExecutionPlan` contract with Strategy V2. Historical
+      persisted V1 plans only need to remain readable for reporting/recovery.
 - [ ] Separate entry legs from exit legs.
 - [ ] Add risk-weighted MARKET, LIMIT, and RANGE entry ladders.
 - [ ] Size every entry leg against the frozen risk budget and original stop.
@@ -128,11 +128,9 @@ See [STRATEGY.md](STRATEGY.md) for the strategy contract.
 
 ### Demo rollout
 
-- [ ] Run V2 supervisor logic in observe-only mode against current Demo state.
-- [ ] Resolve every unexplained ownership mismatch before enabling mutations.
-- [ ] Roll out protection and independent exits before full entry laddering.
-- [ ] Enable deferred MARKET and deeper LIMIT/RANGE entries only after protection
-      behavior is stable.
+- [ ] Enable the complete Strategy V2 execution path on Bybit Demo:
+      entry ladder, independent exits, runner, trailing protection, lifecycle
+      reconciliation, and restart recovery.
 - [ ] Re-run the forensic exporter and compare V2 with V1 using:
       profitable-to-losing round trips, full-stop losses, maximum drawdown,
       peak-profit give-back, net realized R after costs, runner capture, fill
@@ -143,8 +141,8 @@ See [STRATEGY.md](STRATEGY.md) for the strategy contract.
 
 - [ ] Remove the legacy configurable `trading_capital_usdt` database field and
       `--capital-usdt` CLI option.
-- [ ] Remove V1 TP-per-entry execution assumptions and obsolete compatibility
-      branches after no active strategy requires them.
+- [ ] Remove V1 TP-per-entry execution assumptions as part of the V2 planner
+      and executor replacement. Do not maintain parallel V1/V2 runtime paths.
 - [ ] Run a final Ponytail audit for duplicated V1/V2 logic.
 - [ ] Update README and TESTING documentation for V2 behavior.
 - [ ] Run the full local quality gate and production-like Demo smoke/restart
