@@ -381,11 +381,19 @@ class SignalService:
             try:
                 policy = await self._store.get_execution_policy()
 
+                trading_capital_usdt = await self._executor.wallet_balance_usdt()
+
+                policy = policy.model_copy(
+                    update={"trading_capital_usdt": (trading_capital_usdt)}
+                )
+
             except Exception as exc:
-                planning_errors.append(f"Execution policy: {type(exc).__name__}: {exc}")
+                planning_errors.append(
+                    f"Execution policy/capital: {type(exc).__name__}: {exc}"
+                )
 
                 logger.exception(
-                    "Execution policy load failed for %s/%s",
+                    "Execution policy/capital load failed for %s/%s",
                     source.channel_id,
                     source.message_id,
                 )

@@ -241,6 +241,9 @@ class BybitDemoExecutor:
     ) -> AccountStateSummary:
         return await asyncio.to_thread(self._account_state_sync)
 
+    async def wallet_balance_usdt(self) -> Decimal:
+        return await asyncio.to_thread(self._wallet_balance_usdt_sync)
+
     async def closed_pnl_history(
         self,
         start: datetime,
@@ -272,6 +275,34 @@ class BybitDemoExecutor:
 
     def close(self) -> None:
         self._client.close()
+
+    def _wallet_balance_usdt_sync(
+        self,
+    ) -> Decimal:
+        response = self._private_get(
+            "/v5/account/wallet-balance",
+            {
+                "accountType": "UNIFIED",
+            },
+        )
+
+        accounts = response.get("result", {}).get("list", [])
+
+        if (
+            not isinstance(accounts, list)
+            or len(accounts) != 1
+            or not isinstance(accounts[0], dict)
+        ):
+            raise TradeExecutionError(
+                "Bybit wallet balance response did not contain exactly one account"
+            )
+
+        balance = self._decimal(accounts[0].get("totalWalletBalance"))
+
+        if balance <= 0:
+            raise TradeExecutionError("Bybit totalWalletBalance must be positive")
+
+        return balance
 
     def _account_state_sync(
         self,

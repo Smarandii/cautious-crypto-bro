@@ -155,3 +155,53 @@ def test_account_state_reads_bybit_snapshot() -> None:
 
     finally:
         executor.close()
+
+
+def test_wallet_balance_reads_total_wallet_balance() -> None:
+    def handler(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        assert request.url.path == "/v5/account/wallet-balance"
+        assert request.url.params["accountType"] == "UNIFIED"
+
+        return httpx.Response(
+            200,
+            json={
+                "retCode": 0,
+                "retMsg": "OK",
+                "result": {
+                    "list": [
+                        {
+                            "accountType": "UNIFIED",
+                            "totalWalletBalance": "7400",
+                            "totalEquity": "7425",
+                            "totalPerpUPL": "25",
+                        }
+                    ]
+                },
+            },
+        )
+
+    executor = BybitDemoExecutor(
+        api_key="key",
+        api_secret="secret",
+    )
+
+    executor._client.close()
+
+    executor._client = httpx.Client(
+        base_url="https://api-demo.bybit.com",
+        transport=httpx.MockTransport(handler),
+    )
+
+    try:
+        with patch.object(
+            executor,
+            "_sync_clock",
+        ):
+            balance = executor._wallet_balance_usdt_sync()
+
+        assert balance == Decimal("7400")
+
+    finally:
+        executor.close()

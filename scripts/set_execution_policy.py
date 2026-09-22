@@ -21,10 +21,6 @@ async def main() -> None:
     )
 
     parser.add_argument(
-        "--capital-usdt",
-        type=Decimal,
-    )
-    parser.add_argument(
         "--risk-pct",
         type=Decimal,
     )
@@ -82,7 +78,6 @@ async def main() -> None:
     supplied = any(
         value is not None
         for value in (
-            args.capital_usdt,
             args.risk_pct,
             args.range_orders,
             args.minimum_reward_bps,
@@ -136,11 +131,10 @@ async def main() -> None:
     )
 
     updated = ExecutionPolicy(
-        trading_capital_usdt=(
-            args.capital_usdt
-            if args.capital_usdt is not None
-            else current.trading_capital_usdt
-        ),
+        # Temporary V1 compatibility field.
+        # Runtime planning replaces this value
+        # with live Bybit totalWalletBalance.
+        trading_capital_usdt=(current.trading_capital_usdt),
         risk_per_trade_pct=(
             args.risk_pct if args.risk_pct is not None else current.risk_per_trade_pct
         ),
@@ -163,10 +157,10 @@ def print_policy(
 ) -> None:
     exit_policy = policy.exit_policy
 
-    print(f"capital_usdt={policy.trading_capital_usdt}")
+    print("capital_usdt=live Bybit totalWalletBalance at planning time")
     print(f"risk_pct={policy.risk_per_trade_pct}")
     print(f"range_orders={policy.range_order_count}")
-    print(f"risk_budget_usdt={policy.risk_budget_usdt}")
+    print("risk_budget_usdt=live capital * risk_pct / 100")
 
     print(f"minimum_reward_bps={exit_policy.minimum_reward_bps}")
 
