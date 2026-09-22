@@ -23,6 +23,8 @@ class Result:
     net_r: float
     mfe_r: float
     stopped: bool
+    lifecycle_actions: int = 0
+    funding_r: float = 0.0
 
     @property
     def roundtrip_loss(self) -> bool:
@@ -74,6 +76,34 @@ def load_cases(
             root,
             "bybit/executions.jsonl",
         )
+
+        position_actions = rows(
+            archive,
+            root,
+            "database/position_actions.jsonl",
+        )
+
+        transaction_log = rows(
+            archive,
+            root,
+            "bybit/transaction_log.jsonl",
+        )
+
+        executions_by_order = {}
+
+        for execution in executions:
+            if execution.get("execType") != "Trade":
+                continue
+
+            order_id = str(execution.get("orderId") or "")
+
+            if not order_id:
+                continue
+
+            executions_by_order.setdefault(
+                order_id,
+                [],
+            ).append(execution)
 
         fee_rates = [
             abs(float(item["feeRate"]))
@@ -199,6 +229,121 @@ def load_cases(
             if not candles:
                 continue
 
+            events = []
+
+            for action_row in position_actions:
+                if action_row.get("status") != "EXECUTED":
+                    continue
+
+                try:
+                    action = json.loads(action_row["payload_json"])
+                except (
+                    KeyError,
+                    TypeError,
+                    json.JSONDecodeError,
+                ):
+                    continue
+
+                if str(action.get("symbol") or "").upper() != symbol:
+                    continue
+
+                order_id = str(action_row.get("bybit_order_id") or "")
+
+                action_fills = [
+                    execution
+                    for execution in (
+                        executions_by_order.get(
+                            order_id,
+                            [],
+                        )
+                    )
+                    if (
+                        int(execution["execTime"]) > start
+                        and (end is None or int(execution["execTime"]) < end)
+                    )
+                ]
+
+                if not action_fills:
+                    continue
+
+                action_qty = sum(
+                    float(execution["execQty"]) for execution in action_fills
+                )
+
+                if action_qty <= 0:
+                    continue
+
+                action_price = (
+                    sum(
+                        float(execution["execQty"]) * float(execution["execPrice"])
+                        for execution in action_fills
+                    )
+                    / action_qty
+                )
+
+                events.append(
+                    {
+                        "time": min(
+                            int(execution["execTime"]) for execution in action_fills
+                        ),
+                        "kind": "LIFECYCLE",
+                        "action": action["action"],
+                        "close_pct": (
+                            float(action["close_pct"])
+                            if (action.get("close_pct") is not None)
+                            else None
+                        ),
+                        "price": action_price,
+                    }
+                )
+
+            for transaction in transaction_log:
+                if transaction.get("type") != "SETTLEMENT":
+                    continue
+
+                if str(transaction.get("symbol") or "").upper() != symbol:
+                    continue
+
+                event_time = int(transaction.get("transactionTime") or 0)
+
+                if event_time <= start or (end is not None and event_time >= end):
+                    continue
+
+                historical_qty = abs(
+                    float(transaction.get("qty") or transaction.get("size") or 0)
+                )
+
+                funding_price = float(transaction.get("tradePrice") or 0)
+
+                funding_cash = float(transaction.get("funding") or 0)
+
+                notional = historical_qty * funding_price
+
+                if notional <= 0 or funding_cash == 0:
+                    continue
+
+                events.append(
+                    {
+                        "time": event_time,
+                        "kind": "FUNDING",
+                        # Bybit funding is already
+                        # signed from the account
+                        # perspective. Convert the
+                        # historical cash value into
+                        # a rate so it scales to the
+                        # simulated V2 quantity.
+                        "rate": (funding_cash / notional),
+                        "price": funding_price,
+                    }
+                )
+
+            events.sort(
+                key=lambda event: (
+                    event["time"],
+                    event["kind"],
+                )
+            )
+
             cases.append(
                 {
                     "start": start,
@@ -212,6 +357,7 @@ def load_cases(
                         else None
                     ),
                     "candles": candles,
+                    "events": events,
                 }
             )
 
@@ -242,6 +388,8 @@ def replay(
     case,
     candidate: Candidate,
     fee_rate: float,
+    *,
+    use_events: bool,
 ) -> Result:
     sign = side_sign(case)
 
@@ -302,6 +450,10 @@ def replay(
     trail_peak = 0.0
 
     mfe = 0.0
+
+    event_index = 0
+    lifecycle_actions = 0
+    funding_r = 0.0
 
     def close(
         amount: float,
@@ -438,7 +590,77 @@ def replay(
                 net_r=realized,
                 mfe_r=mfe,
                 stopped=(reason == "STOP"),
+                lifecycle_actions=(lifecycle_actions),
+                funding_r=funding_r,
             )
+
+        # The candle does not reveal whether
+        # its high or low happened first.
+        # Protection therefore wins before
+        # lifecycle/favorable processing.
+        #
+        # This deliberately biases ambiguous
+        # candles against the strategy.
+        candle_end = candle["time"] + 60_000
+
+        if use_events:
+            while (
+                event_index < len(case["events"])
+                and case["events"][event_index]["time"] < candle_end
+            ):
+                event = case["events"][event_index]
+
+                event_index += 1
+
+                if qty <= 0:
+                    continue
+
+                if event["kind"] == "FUNDING":
+                    payment = event["rate"] * qty * event["price"]
+
+                    realized += payment
+                    funding_r += payment
+                    continue
+
+                freeze()
+
+                if event["action"] == "CLOSE":
+                    close(
+                        qty,
+                        event["price"],
+                    )
+
+                    lifecycle_actions += 1
+
+                    return Result(
+                        start=case["start"],
+                        net_r=realized,
+                        mfe_r=mfe,
+                        stopped=False,
+                        lifecycle_actions=(lifecycle_actions),
+                        funding_r=funding_r,
+                    )
+
+                if event["action"] == "REDUCE" and event["close_pct"] is not None:
+                    quantity_before = qty
+
+                    close(
+                        quantity_before * event["close_pct"] / 100,
+                        event["price"],
+                    )
+
+                    lifecycle_actions += 1
+
+                    # V2 rebuilds remaining
+                    # exit quantities after a
+                    # REDUCE. Preserve the
+                    # relative allocation of
+                    # every still-pending TP
+                    # and the runner.
+                    if quantity_before > 0 and qty > 0:
+                        scale = qty / quantity_before
+
+                        tp_qty = [amount * scale for amount in tp_qty]
 
         current_r = r_value(
             case,
@@ -487,6 +709,8 @@ def replay(
                 net_r=realized,
                 mfe_r=mfe,
                 stopped=False,
+                lifecycle_actions=(lifecycle_actions),
+                funding_r=funding_r,
             )
 
         if current_r >= candidate.trail_at:
@@ -555,6 +779,8 @@ def replay(
         net_r=realized,
         mfe_r=mfe,
         stopped=False,
+        lifecycle_actions=(lifecycle_actions),
+        funding_r=funding_r,
     )
 
 
@@ -663,6 +889,12 @@ def main() -> None:
         default=15,
     )
 
+    parser.add_argument(
+        "--autonomous",
+        action="store_true",
+        help=("Ignore historical REDUCE/CLOSE and funding events."),
+    )
+
     args = parser.parse_args()
 
     fee_rate, cases = load_cases(args.bundle)
@@ -675,6 +907,7 @@ def main() -> None:
                 case,
                 candidate,
                 fee_rate,
+                use_events=(not args.autonomous),
             )
             for case in cases
         ]
@@ -694,6 +927,10 @@ def main() -> None:
         )
 
         net_r = sum(result.net_r for result in results)
+
+        lifecycle_actions = sum(result.lifecycle_actions for result in results)
+
+        funding_r = sum(result.funding_r for result in results)
 
         # Loss prevention intentionally
         # dominates historical return.
@@ -715,15 +952,31 @@ def main() -> None:
                     "drawdown": drawdown,
                     "giveback": giveback,
                     "net_r": net_r,
+                    "lifecycle_actions": (lifecycle_actions),
+                    "funding_r": funding_r,
                 },
             )
         )
 
     ranked.sort(key=lambda item: item[0])
 
+    historical_lifecycle_actions = sum(
+        event["kind"] == "LIFECYCLE" for case in cases for event in case["events"]
+    )
+
+    funding_events = sum(
+        event["kind"] == "FUNDING" for case in cases for event in case["events"]
+    )
+
+    print("mode=" + ("autonomous" if args.autonomous else "historical-lifecycle"))
+
     print(f"filled_cases={len(cases)}")
 
     print(f"median_fee_rate={fee_rate:.8f}")
+
+    print(f"historical_lifecycle_actions={historical_lifecycle_actions}")
+
+    print(f"funding_events={funding_events}")
 
     print()
 
@@ -747,6 +1000,10 @@ def main() -> None:
             f"{result['giveback']:.3f}R "
             f"net="
             f"{result['net_r']:.3f}R "
+            f"actions="
+            f"{result['lifecycle_actions']} "
+            f"funding="
+            f"{result['funding_r']:+.3f}R "
             f"weights="
             f"{candidate.weights} "
             f"depths="
