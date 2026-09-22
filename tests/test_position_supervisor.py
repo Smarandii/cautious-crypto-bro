@@ -382,7 +382,9 @@ def test_uncertain_strategy_is_quarantined(caplog) -> None:
         poll_interval_seconds=1,
     )
 
-    with caplog.at_level(logging.WARNING, logger="cautious_crypto_bro.position_supervisor"):
+    with caplog.at_level(
+        logging.WARNING, logger="cautious_crypto_bro.position_supervisor"
+    ):
         asyncio.run(supervisor.reconcile_once())
         asyncio.run(supervisor.reconcile_once())
 
@@ -394,7 +396,6 @@ def test_uncertain_strategy_is_quarantined(caplog) -> None:
     assert executor.exits == []
 
     assert store.state.status is StrategyStatus.UNCERTAIN
-
 
 
 def test_uncertain_strategy_does_not_block_other_symbols() -> None:
