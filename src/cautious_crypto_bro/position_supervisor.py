@@ -13,6 +13,7 @@ from decimal import (
 from uuid import UUID
 
 from .bybit import (
+    AccountOrder,
     AccountPosition,
     AccountStateSummary,
     BybitDemoExecutor,
@@ -632,6 +633,7 @@ class PositionSupervisor:
         )
 
         risk_distance = abs(position.avg_price - plan.stop_loss)
+        expected_exits: dict[str, tuple[Decimal, Decimal]] = {}
 
         if remaining_weight > 0:
             for index, target in enumerate(
@@ -676,17 +678,28 @@ class PositionSupervisor:
                     )
                     continue
 
+                link_id = self._exit_link_id(state, index)
+                expected_exits[link_id] = (quantity, price)
+                existing = [
+                    order
+                    for order in account.open_orders
+                    if order.symbol == state.symbol and order.order_link_id == link_id
+                ]
+                if existing:
+                    if len(existing) != 1 or not self._matching_exit(
+                        existing[0], position.side, quantity, price
+                    ):
+                        raise RuntimeError(
+                            f"Existing exit {link_id} conflicts with the planned policy"
+                        )
+                    continue
+
                 await self._executor.place_reduce_only_exit(
                     symbol=state.symbol,
                     position_side=position.side,
                     quantity=quantity,
                     price=price,
-                    order_link_id=(
-                        self._exit_link_id(
-                            state,
-                            index,
-                        )
-                    ),
+                    order_link_id=link_id,
                 )
 
         verified = await self._executor.account_state()
@@ -698,8 +711,36 @@ class PositionSupervisor:
             protected_stop,
             trailing_distance,
         )
+        for link_id, (quantity, price) in expected_exits.items():
+            matches = [
+                order
+                for order in verified.open_orders
+                if order.symbol == state.symbol and order.order_link_id == link_id
+            ]
+            if len(matches) != 1 or not self._matching_exit(
+                matches[0], position.side, quantity, price
+            ):
+                raise RuntimeError(
+                    f"Bybit did not confirm expected Strategy V2 exit {link_id}"
+                )
 
         return (verified, protected_stop, trailing_distance)
+
+    @staticmethod
+    def _matching_exit(
+        order: AccountOrder,
+        position_side: Side,
+        quantity: Decimal,
+        price: Decimal,
+    ) -> bool:
+        expected_side = Side.SHORT if position_side is Side.LONG else Side.LONG
+        return (
+            order.side is expected_side
+            and order.reduce_only
+            and order.order_type == "Limit"
+            and order.remaining_quantity == quantity
+            and order.price == price
+        )
 
     @staticmethod
     def _partial_stops(
