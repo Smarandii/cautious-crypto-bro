@@ -749,23 +749,23 @@ class PositionSupervisor:
                 ),
             )
             account = await self._executor.account_state()
-            position = self._position(state, account)
-            if position is None:
+            live_position = self._position(state, account)
+            if live_position is None:
                 raise RuntimeError("Position disappeared during protection handoff")
 
         self._verify_protection(
-            position,
+            live_position,
             expected_stop,
             state.trailing_distance if state.trailing_active else None,
         )
         # Re-read immediately before cancelling. A stop may have triggered
         # between the original snapshot and the protection confirmation.
         account = await self._executor.account_state()
-        position = self._position(state, account)
-        if position is None:
+        live_position = self._position(state, account)
+        if live_position is None:
             return account
         self._verify_protection(
-            position,
+            live_position,
             expected_stop,
             state.trailing_distance if state.trailing_active else None,
         )
