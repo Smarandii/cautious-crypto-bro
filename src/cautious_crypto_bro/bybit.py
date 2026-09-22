@@ -121,6 +121,7 @@ class AccountOrder:
     create_type: str = ""
     trigger_price: Decimal | None = None
     close_on_trigger: bool = False
+    parent_order_link_id: str = ""
 
     @property
     def kind(self) -> str:
@@ -787,6 +788,7 @@ class BybitDemoExecutor:
                 item.get("closeOnTrigger") is True
                 or str(item.get("closeOnTrigger")).casefold() == "true"
             ),
+            parent_order_link_id=str(item.get("parentOrderLinkId") or ""),
         )
 
     def _exposure_sync(
