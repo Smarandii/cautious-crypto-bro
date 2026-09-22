@@ -900,8 +900,7 @@ class PositionSupervisor:
             state.protected_stop_loss is not None
             and position.stop_loss != state.protected_stop_loss
             and not (
-                position.stop_loss is None
-                and cls._partial_stops(state, plan, account)
+                position.stop_loss is None and cls._partial_stops(state, plan, account)
             )
         ):
             return (
