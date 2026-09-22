@@ -213,8 +213,7 @@ class Executor:
         self.state = replace(
             self.state,
             open_orders=tuple(
-                order for order in self.state.open_orders
-                if order.order_id != order_id
+                order for order in self.state.open_orders if order.order_id != order_id
             ),
         )
 
@@ -364,7 +363,6 @@ def test_supervisor_installs_exits_before_profit_threshold() -> None:
     assert store.state.exit_revision == 1
 
 
-
 def test_active_strategy_replaces_legacy_partial_stops_once() -> None:
     strategy_plan = plan()
     state = PositionStrategy(
@@ -381,11 +379,13 @@ def test_active_strategy_replaces_legacy_partial_stops_once() -> None:
     executor = Executor()
     executor.state = replace(
         executor.state,
-        positions=(replace(
-            executor.state.positions[0],
-            stop_loss=None,
-            mark_price=Decimal("102"),
-        ),),
+        positions=(
+            replace(
+                executor.state.positions[0],
+                stop_loss=None,
+                mark_price=Decimal("102"),
+            ),
+        ),
         open_orders=tuple(
             AccountOrder(
                 symbol="BTCUSDT",
@@ -469,6 +469,7 @@ def test_failed_full_stop_verification_does_not_cancel_partials() -> None:
     )
 
     import pytest
+
     with pytest.raises(RuntimeError, match="did not confirm expected"):
         asyncio.run(supervisor.reconcile_once())
 
