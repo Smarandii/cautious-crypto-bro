@@ -24,7 +24,7 @@ def test_initial_reconciliation_precedes_any_execution(
 
         return invoke
 
-    async def quarantine() -> tuple[tuple[()], tuple[()]]:
+    async def quarantine():
         events.append("store.quarantine")
         return (), ()
 
