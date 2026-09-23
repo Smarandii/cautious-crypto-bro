@@ -228,19 +228,6 @@ class SignalService:
     async def recover_auto_execution(
         self,
     ) -> None:
-        (
-            uncertain_intents,
-            uncertain_actions,
-        ) = await self._store.quarantine_auto_executing()
-
-        try:
-            await self._approval_bot.send_recovery_warning(
-                uncertain_intents=len(uncertain_intents),
-                uncertain_actions=len(uncertain_actions),
-            )
-        except Exception:
-            logger.exception("Failed to send AUTO recovery warning")
-
         pending_intents = await self._store.get_pending_auto_intent_ids()
 
         pending_actions = await self._store.get_pending_auto_action_ids()

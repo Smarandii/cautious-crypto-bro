@@ -524,7 +524,7 @@ class ApprovalBot:
         await self._bot.send_message(
             chat_id=self._approval_chat_id,
             text=(
-                "⚠️ <b>AUTO EXECUTION "
+                "⚠️ <b>INTERRUPTED EXECUTION "
                 "RECOVERY WARNING</b>\n\n"
                 "Previous process stopped while "
                 "execution was in progress. "

@@ -62,20 +62,22 @@ class PositionSupervisor:
             await asyncio.sleep(self._poll_interval_seconds)
 
     async def reconcile_once(self) -> None:
-        records = await self._store.get_active_position_strategies()
-
-        if not records:
-            self._reported_uncertain.clear()
-            return
-
-        uncertain_ids = {
-            state.strategy_id
-            for state, _ in records
-            if state.status is StrategyStatus.UNCERTAIN
-        }
-        self._reported_uncertain.intersection_update(uncertain_ids)
-
+        # The durable strategy snapshot must be loaded while holding the
+        # same lock used for exchange mutations and quarantine writes.
         async with self._mutation_lock:
+            records = await self._store.get_active_position_strategies()
+
+            if not records:
+                self._reported_uncertain.clear()
+                return
+
+            uncertain_ids = {
+                state.strategy_id
+                for state, _ in records
+                if state.status is StrategyStatus.UNCERTAIN
+            }
+            self._reported_uncertain.intersection_update(uncertain_ids)
+
             account: AccountStateSummary | None = None
 
             by_symbol: dict[

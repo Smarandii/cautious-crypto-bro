@@ -32,6 +32,10 @@ async def async_main() -> None:
 
     store = IntentStore(settings.database_path)
     await store.initialize()
+    (
+        interrupted_intents,
+        interrupted_actions,
+    ) = await store.quarantine_interrupted_executions()
 
     runtime_store = RedisRuntimeStore(
         settings.redis_url,
@@ -104,9 +108,18 @@ async def async_main() -> None:
 
     try:
         await bot.start()
+        try:
+            await bot.send_recovery_warning(
+                uncertain_intents=len(interrupted_intents),
+                uncertain_actions=len(interrupted_actions),
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Failed to send interrupted-execution recovery warning"
+            )
 
-        # Neither AUTO recovery nor Telegram lookback may execute against
-        # stale strategy state. Fail startup if reconciliation fails.
+        # Quarantine is durable before the first supervisor reconciliation.
+        # Fail startup if the resulting account-state reconciliation fails.
         await supervisor.reconcile_once()
         await service.recover_auto_execution()
         # AUTO recovery may open new positions; protect them before ingestion.
