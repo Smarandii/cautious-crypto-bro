@@ -13,6 +13,7 @@ from cautious_crypto_bro.bybit import (
     AccountStateSummary,
     BybitDemoExecutor,
     PositionActionExecutionResult,
+    PositionActionPreflightError,
 )
 from cautious_crypto_bro.domain import (
     ApprovalMode,
@@ -511,5 +512,170 @@ def test_coordinator_marks_unconfirmed_reduce_uncertain(
         assert stored.status is IntentStatus.UNCERTAIN
 
         assert executor.read_index == 20
+
+    asyncio.run(run())
+
+
+async def seed_live_strategy(database_path, strategy_id) -> None:
+    now = datetime.now(UTC).isoformat()
+    async with aiosqlite.connect(database_path) as db:
+        await db.execute(
+            """
+            INSERT INTO position_strategies(
+                strategy_id, symbol, side, status, created_at, updated_at
+            ) VALUES (?, 'NEARUSDT', 'LONG', 'OPEN_RISK', ?, ?)
+            """,
+            (str(strategy_id), now, now),
+        )
+        await db.commit()
+
+
+def test_transport_timeout_after_accepted_reduce_quarantines_strategy(tmp_path) -> None:
+    async def run() -> None:
+        database = tmp_path / "state.sqlite3"
+        store = IntentStore(database)
+        await store.initialize()
+        action = await persist_reduce_action(store)
+        await seed_live_strategy(database, action.action_id)
+
+        class TimeoutAfterAcceptance(CoordinatorExecutor):
+            async def account_state(self):
+                raise httpx.ReadTimeout("confirmation timed out")
+
+        executor = TimeoutAfterAcceptance([Decimal("10")])
+        coordinator = ExecutionCoordinator(
+            store=store,
+            executor=cast(BybitDemoExecutor, executor),
+            max_age_seconds=3600,
+        )
+        outcome = await coordinator.execute_position_action(
+            action.action_id, approval_mode=ApprovalMode.MANUAL,
+        )
+        assert outcome.status is IntentStatus.UNCERTAIN
+        assert outcome.result is not None
+        assert outcome.result.order_id == "reduce-confirm-test"
+
+        async with aiosqlite.connect(database) as db:
+            row = await (
+                await db.execute(
+                    "SELECT status, bybit_order_id FROM position_actions WHERE action_id = ?",
+                    (str(action.action_id),),
+                )
+            ).fetchone()
+            strategy = await (
+                await db.execute(
+                    "SELECT status, rebalance_needed FROM position_strategies WHERE strategy_id = ?",
+                    (str(action.action_id),),
+                )
+            ).fetchone()
+        assert row == ("UNCERTAIN", "reduce-confirm-test")
+        assert strategy == ("UNCERTAIN", 0)
+
+    asyncio.run(run())
+
+
+def test_ambiguous_submission_without_order_id_is_quarantined(tmp_path) -> None:
+    async def run() -> None:
+        database = tmp_path / "state.sqlite3"
+        store = IntentStore(database)
+        await store.initialize()
+        action = await persist_reduce_action(store)
+        await seed_live_strategy(database, action.action_id)
+
+        class NoAcknowledgement(CoordinatorExecutor):
+            async def execute_position_action(self, action):
+                raise httpx.ReadTimeout("order create timed out")
+
+        executor = NoAcknowledgement([Decimal("10")])
+        coordinator = ExecutionCoordinator(
+            store=store,
+            executor=cast(BybitDemoExecutor, executor),
+            max_age_seconds=3600,
+        )
+        outcome = await coordinator.execute_position_action(
+            action.action_id, approval_mode=ApprovalMode.MANUAL,
+        )
+        assert outcome.status is IntentStatus.UNCERTAIN
+        assert outcome.result is None
+
+        async with aiosqlite.connect(database) as db:
+            row = await (
+                await db.execute(
+                    "SELECT status, bybit_order_id FROM position_actions WHERE action_id = ?",
+                    (str(action.action_id),),
+                )
+            ).fetchone()
+            strategy = await (
+                await db.execute(
+                    "SELECT status FROM position_strategies WHERE strategy_id = ?",
+                    (str(action.action_id),),
+                )
+            ).fetchone()
+        assert row == ("UNCERTAIN", None)
+        assert strategy == ("UNCERTAIN",)
+
+    asyncio.run(run())
+
+
+def test_preflight_failure_is_distinguished_from_ambiguous_submission(tmp_path) -> None:
+    async def run() -> None:
+        store = IntentStore(tmp_path / "state.sqlite3")
+        await store.initialize()
+        action = await persist_reduce_action(store)
+
+        class RejectBeforeMutation(CoordinatorExecutor):
+            async def execute_position_action(self, action):
+                raise PositionActionPreflightError("wrong position side")
+
+        executor = RejectBeforeMutation([Decimal("10")])
+        coordinator = ExecutionCoordinator(
+            store=store,
+            executor=cast(BybitDemoExecutor, executor),
+            max_age_seconds=3600,
+        )
+        outcome = await coordinator.execute_position_action(
+            action.action_id, approval_mode=ApprovalMode.MANUAL,
+        )
+        assert outcome.status is IntentStatus.FAILED
+        stored = await store.get_position_action(action.action_id)
+        assert stored is not None
+        assert stored.status is IntentStatus.FAILED
+
+    asyncio.run(run())
+
+
+def test_confirmed_reduce_atomically_requests_rebalance(tmp_path) -> None:
+    async def run() -> None:
+        database = tmp_path / "state.sqlite3"
+        store = IntentStore(database)
+        await store.initialize()
+        action = await persist_reduce_action(store)
+        await seed_live_strategy(database, action.action_id)
+        executor = CoordinatorExecutor([Decimal("10"), Decimal("7")])
+        coordinator = ExecutionCoordinator(
+            store=store,
+            executor=cast(BybitDemoExecutor, executor),
+            max_age_seconds=3600,
+        )
+        outcome = await coordinator.execute_position_action(
+            action.action_id, approval_mode=ApprovalMode.MANUAL,
+        )
+        assert outcome.status is IntentStatus.EXECUTED
+
+        async with aiosqlite.connect(database) as db:
+            action_row = await (
+                await db.execute(
+                    "SELECT status FROM position_actions WHERE action_id = ?",
+                    (str(action.action_id),),
+                )
+            ).fetchone()
+            strategy = await (
+                await db.execute(
+                    "SELECT status, entry_frozen, rebalance_needed FROM position_strategies WHERE strategy_id = ?",
+                    (str(action.action_id),),
+                )
+            ).fetchone()
+        assert action_row == ("EXECUTED",)
+        assert strategy == ("OPEN_RISK", 1, 1)
 
     asyncio.run(run())
