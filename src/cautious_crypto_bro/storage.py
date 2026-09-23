@@ -1385,30 +1385,63 @@ class IntentStore:
 
             await db.commit()
 
-    async def mark_position_action_executed(
+    async def complete_position_action(
         self,
-        action_id: UUID,
+        action: PositionActionIntent,
         order_id: str,
     ) -> None:
+        """Commit a confirmed action and its strategy transition atomically."""
         async with aiosqlite.connect(self._database_path) as db:
-            await db.execute(
-                """
-                UPDATE position_actions
-                SET
-                    status = ?,
-                    bybit_order_id = ?,
-                    error = NULL,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE action_id = ?
-                """,
-                (
-                    IntentStatus.EXECUTED.value,
-                    order_id,
-                    str(action_id),
-                ),
-            )
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    """
+                    UPDATE position_actions
+                    SET status = ?, bybit_order_id = ?, error = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE action_id = ?
+                    """,
+                    (
+                        IntentStatus.EXECUTED.value,
+                        order_id,
+                        str(action.action_id),
+                    ),
+                )
 
-            await db.commit()
+                if action.action is PositionActionType.REDUCE:
+                    await db.execute(
+                        """
+                        UPDATE position_strategies
+                        SET entry_frozen = 1, rebalance_needed = 1,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE symbol = ? AND status NOT IN (?, ?)
+                        """,
+                        (
+                            action.symbol,
+                            StrategyStatus.CLOSED.value,
+                            StrategyStatus.MANUAL_OVERRIDE.value,
+                        ),
+                    )
+                else:
+                    await db.execute(
+                        """
+                        UPDATE position_strategies
+                        SET status = ?, entry_frozen = 1, rebalance_needed = 0,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE symbol = ? AND status NOT IN (?, ?, ?)
+                        """,
+                        (
+                            StrategyStatus.CLOSING.value,
+                            action.symbol,
+                            StrategyStatus.CLOSED.value,
+                            StrategyStatus.MANUAL_OVERRIDE.value,
+                            StrategyStatus.UNCERTAIN.value,
+                        ),
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
 
     async def mark_position_action_failed(
         self,
@@ -1425,30 +1458,47 @@ class IntentStore:
     async def mark_position_action_uncertain(
         self,
         action_id: UUID,
-        order_id: str,
+        symbol: str,
+        order_id: str | None,
         error: str,
     ) -> None:
+        """Persist ambiguous execution and quarantine exposure in one commit."""
         async with aiosqlite.connect(self._database_path) as db:
-            await db.execute(
-                """
-                UPDATE position_actions
-                SET
-                    status = ?,
-                    bybit_order_id = ?,
-                    error = ?,
-                    updated_at =
-                        CURRENT_TIMESTAMP
-                WHERE action_id = ?
-                """,
-                (
-                    IntentStatus.UNCERTAIN.value,
-                    order_id,
-                    error[:2000],
-                    str(action_id),
-                ),
-            )
-
-            await db.commit()
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    """
+                    UPDATE position_actions
+                    SET status = ?, bybit_order_id = ?, error = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE action_id = ?
+                    """,
+                    (
+                        IntentStatus.UNCERTAIN.value,
+                        order_id,
+                        error[:2000],
+                        str(action_id),
+                    ),
+                )
+                await db.execute(
+                    """
+                    UPDATE position_strategies
+                    SET status = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE symbol = ? AND status IN (?, ?, ?, ?)
+                    """,
+                    (
+                        StrategyStatus.UNCERTAIN.value,
+                        symbol.upper(),
+                        StrategyStatus.ENTERING.value,
+                        StrategyStatus.OPEN_RISK.value,
+                        StrategyStatus.PROFIT_PROTECTED.value,
+                        StrategyStatus.CLOSING.value,
+                    ),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
 
     async def mark_executed(
         self,
