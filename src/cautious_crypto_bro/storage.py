@@ -920,8 +920,8 @@ class IntentStore:
             action for action in actions if action.action is PositionActionType.CLOSE
         )
 
-    async def _quarantine_auto_executing_records(
-        self,
+    @staticmethod
+    async def _quarantine_executing_records(
         db: aiosqlite.Connection,
         *,
         table: str,
@@ -929,60 +929,93 @@ class IntentStore:
         error: str,
     ) -> tuple[UUID, ...]:
         cursor = await db.execute(
-            f"""
-            SELECT {id_column}
-            FROM {table}
-            WHERE approval_mode = ? AND status = ?
-            """,
-            (
-                ApprovalMode.AUTO.value,
-                IntentStatus.EXECUTING.value,
-            ),
+            f"SELECT {id_column} FROM {table} WHERE status = ?",
+            (IntentStatus.EXECUTING.value,),
         )
         record_ids = tuple(UUID(row[0]) for row in await cursor.fetchall())
-
         await db.execute(
             f"""
             UPDATE {table}
-            SET
-                status = ?,
-                error = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE approval_mode = ? AND status = ?
+            SET status = ?, error = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE status = ?
             """,
             (
                 IntentStatus.UNCERTAIN.value,
                 error,
-                ApprovalMode.AUTO.value,
                 IntentStatus.EXECUTING.value,
             ),
         )
         return record_ids
 
-    async def quarantine_auto_executing(
+    async def quarantine_interrupted_executions(
         self,
     ) -> tuple[tuple[UUID, ...], tuple[UUID, ...]]:
+        """Quarantine interrupted actions AND their strategies atomically."""
         error = (
-            "Process restarted while AUTO execution was in progress; "
+            "Process restarted during execution; exchange outcome is unknown; "
             "not retried automatically"
+        )
+        managed_statuses = (
+            StrategyStatus.ENTERING.value,
+            StrategyStatus.OPEN_RISK.value,
+            StrategyStatus.PROFIT_PROTECTED.value,
+            StrategyStatus.CLOSING.value,
         )
 
         async with aiosqlite.connect(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
-
             try:
-                intent_ids = await self._quarantine_auto_executing_records(
-                    db,
-                    table="intents",
-                    id_column="intent_id",
-                    error=error,
+                # Action symbols must be captured before status transitions,
+                # in the same transaction as the strategy quarantine.
+                cursor = await db.execute(
+                    "SELECT payload_json FROM position_actions WHERE status = ?",
+                    (IntentStatus.EXECUTING.value,),
                 )
-                action_ids = await self._quarantine_auto_executing_records(
-                    db,
-                    table="position_actions",
-                    id_column="action_id",
-                    error=error,
+                action_symbols = {
+                    PositionActionIntent.model_validate_json(row[0]).symbol
+                    for row in await cursor.fetchall()
+                }
+                intent_ids = await self._quarantine_executing_records(
+                    db, table="intents", id_column="intent_id", error=error,
                 )
+                action_ids = await self._quarantine_executing_records(
+                    db, table="position_actions", id_column="action_id", error=error,
+                )
+
+                if intent_ids:
+                    await db.executemany(
+                        """
+                        UPDATE position_strategies
+                        SET status = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE strategy_id = ? AND status IN (?, ?, ?, ?)
+                        """,
+                        [
+                            (
+                                StrategyStatus.UNCERTAIN.value,
+                                str(intent_id),
+                                *managed_statuses,
+                            )
+                            for intent_id in intent_ids
+                        ],
+                    )
+
+                if action_symbols:
+                    await db.executemany(
+                        """
+                        UPDATE position_strategies
+                        SET status = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE symbol = ? AND status IN (?, ?, ?, ?)
+                        """,
+                        [
+                            (
+                                StrategyStatus.UNCERTAIN.value,
+                                symbol,
+                                *managed_statuses,
+                            )
+                            for symbol in sorted(action_symbols)
+                        ],
+                    )
+
                 await db.commit()
             except Exception:
                 await db.rollback()
