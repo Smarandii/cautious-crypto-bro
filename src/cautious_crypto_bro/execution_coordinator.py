@@ -311,8 +311,8 @@ class ExecutionCoordinator:
 
         effective_plan = plan
 
-        try:
-            async with self._execution_lock:
+        async with self._execution_lock:
+            try:
                 if approval_mode is ApprovalMode.AUTO:
                     live_state = await self._executor.account_state()
 
@@ -359,35 +359,35 @@ class ExecutionCoordinator:
                 else:
                     order_ids = await self._executor.execute(plan)
 
-        except Exception as exc:
-            logger.exception(
-                "Execution failed for %s",
-                intent_id,
-            )
+                await self._store.mark_executed(
+                    intent_id,
+                    order_ids,
+                )
 
-            message = f"{type(exc).__name__}: {exc}"
+            except Exception as exc:
+                logger.exception(
+                    "Execution failed for %s",
+                    intent_id,
+                )
 
-            await self._store.mark_failed(
-                intent_id,
-                message,
-            )
+                message = f"{type(exc).__name__}: {exc}"
 
-            await self._store.set_position_strategy_status(
-                intent_id,
-                StrategyStatus.UNCERTAIN,
-            )
+                await self._store.mark_failed(
+                    intent_id,
+                    message,
+                )
 
-            return IntentExecutionOutcome(
-                status=IntentStatus.FAILED,
-                message=message,
-                intent=intent,
-                plan=effective_plan,
-            )
+                await self._store.set_position_strategy_status(
+                    intent_id,
+                    StrategyStatus.UNCERTAIN,
+                )
 
-        await self._store.mark_executed(
-            intent_id,
-            order_ids,
-        )
+                return IntentExecutionOutcome(
+                    status=IntentStatus.FAILED,
+                    message=message,
+                    intent=intent,
+                    plan=effective_plan,
+                )
 
         return IntentExecutionOutcome(
             status=IntentStatus.EXECUTED,
