@@ -976,10 +976,16 @@ class IntentStore:
                     for row in await cursor.fetchall()
                 }
                 intent_ids = await self._quarantine_executing_records(
-                    db, table="intents", id_column="intent_id", error=error,
+                    db,
+                    table="intents",
+                    id_column="intent_id",
+                    error=error,
                 )
                 action_ids = await self._quarantine_executing_records(
-                    db, table="position_actions", id_column="action_id", error=error,
+                    db,
+                    table="position_actions",
+                    id_column="action_id",
+                    error=error,
                 )
 
                 if intent_ids:
