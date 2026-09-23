@@ -1028,9 +1028,7 @@ def test_take_profit_ordinal_ignores_movement_percentage() -> None:
 
 
 def test_russian_explicit_reduce_percentage_is_preserved() -> None:
-    item = source().model_copy(
-        update={"text": "Закрываем часть BTC, 25% позиции."}
-    )
+    item = source().model_copy(update={"text": "Закрываем часть BTC, 25% позиции."})
     extraction = IntentExtraction.model_validate(
         {
             "actionable": True,
@@ -1080,9 +1078,7 @@ def test_model_excerpt_cannot_bypass_negated_source_clause() -> None:
 
 
 def test_unrelated_negation_does_not_block_other_symbol_close() -> None:
-    item = source().model_copy(
-        update={"text": "Do not close ETH. Close BTC now."}
-    )
+    item = source().model_copy(update={"text": "Do not close ETH. Close BTC now."})
     extraction = IntentExtraction.model_validate(
         {
             "actionable": True,
@@ -1108,12 +1104,7 @@ def test_unrelated_negation_does_not_block_other_symbol_close() -> None:
 
 def test_reduce_percentage_is_read_from_action_clause_not_other_sentence() -> None:
     item = source().model_copy(
-        update={
-            "text": (
-                "ETH is up 25% today. "
-                "Закрываем часть BTC, 30% позиции."
-            )
-        }
+        update={"text": ("ETH is up 25% today. Закрываем часть BTC, 30% позиции.")}
     )
     extraction = IntentExtraction.model_validate(
         {
