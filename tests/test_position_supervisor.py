@@ -597,7 +597,6 @@ def test_interrupted_exit_install_reuses_matching_order() -> None:
     assert len({item.order_link_id for item in executor.state.open_orders}) == 3
 
 
-
 def test_supervisor_never_uses_prelock_strategy_snapshot() -> None:
     strategy_plan = plan()
     state = PositionStrategy(
@@ -609,7 +608,9 @@ def test_supervisor_never_uses_prelock_strategy_snapshot() -> None:
     executor = Executor()
     mutation_lock = asyncio.Lock()
     supervisor = PositionSupervisor(
-        store=store, executor=executor, mutation_lock=mutation_lock,
+        store=store,
+        executor=executor,
+        mutation_lock=mutation_lock,
     )
 
     async def scenario() -> None:
