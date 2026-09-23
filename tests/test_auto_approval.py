@@ -281,7 +281,6 @@ def test_restart_quarantines_inflight_auto_execution(
     asyncio.run(run())
 
 
-
 def test_restart_atomically_quarantines_manual_actions_and_strategies(tmp_path) -> None:
     async def run() -> None:
         store = IntentStore(tmp_path / "state.sqlite3")
@@ -302,7 +301,9 @@ def test_restart_atomically_quarantines_manual_actions_and_strategies(tmp_path) 
         )
         await store.ensure_position_strategy(strategy_plan)
         assert await store.claim_for_execution(
-            intent.intent_id, None, expected_approval_mode=ApprovalMode.AUTO,
+            intent.intent_id,
+            None,
+            expected_approval_mode=ApprovalMode.AUTO,
         )
 
         action_source = _source().model_copy(update={"message_id": 124})
@@ -318,17 +319,25 @@ def test_restart_atomically_quarantines_manual_actions_and_strategies(tmp_path) 
         claim = await store.claim_source(action_source, lease_seconds=300)
         assert claim is not None
         assert await store.create_signal_batch_and_complete_source(
-            (), (action,), claim,
+            (),
+            (action,),
+            claim,
         )
         assert await store.claim_position_action_for_execution(
-            action.action_id, 1, expected_approval_mode=ApprovalMode.MANUAL,
+            action.action_id,
+            1,
+            expected_approval_mode=ApprovalMode.MANUAL,
         )
 
         intents, actions = await store.quarantine_interrupted_executions()
         assert intents == (intent.intent_id,)
         assert actions == (action.action_id,)
-        assert (await store.get_intent(intent.intent_id)).status is IntentStatus.UNCERTAIN
-        assert (await store.get_position_action(action.action_id)).status is IntentStatus.UNCERTAIN
+        assert (
+            await store.get_intent(intent.intent_id)
+        ).status is IntentStatus.UNCERTAIN
+        assert (
+            await store.get_position_action(action.action_id)
+        ).status is IntentStatus.UNCERTAIN
         active = await store.get_active_position_strategies()
         assert len(active) == 1
         assert active[0][0].status is StrategyStatus.UNCERTAIN
