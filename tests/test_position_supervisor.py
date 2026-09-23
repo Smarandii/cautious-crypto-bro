@@ -597,6 +597,37 @@ def test_interrupted_exit_install_reuses_matching_order() -> None:
     assert len({item.order_link_id for item in executor.state.open_orders}) == 3
 
 
+
+def test_supervisor_never_uses_prelock_strategy_snapshot() -> None:
+    strategy_plan = plan()
+    state = PositionStrategy(
+        strategy_id=strategy_plan.intent_id,
+        symbol="BTCUSDT",
+        side=Side.LONG,
+    )
+    store = Store(state, strategy_plan)
+    executor = Executor()
+    mutation_lock = asyncio.Lock()
+    supervisor = PositionSupervisor(
+        store=store, executor=executor, mutation_lock=mutation_lock,
+    )
+
+    async def scenario() -> None:
+        await mutation_lock.acquire()
+        reconciliation = asyncio.create_task(supervisor.reconcile_once())
+        await asyncio.sleep(0)
+        store.state = store.state.model_copy(
+            update={"status": StrategyStatus.UNCERTAIN}
+        )
+        mutation_lock.release()
+        await reconciliation
+
+    asyncio.run(scenario())
+    assert store.state.status is StrategyStatus.UNCERTAIN
+    assert executor.account_state_calls == 0
+    assert executor.exits == []
+
+
 def test_uncertain_strategy_is_quarantined(caplog) -> None:
     strategy_plan = plan()
 
