@@ -257,8 +257,19 @@ def test_restart_quarantines_inflight_auto_execution(
         await store.initialize()
 
         intent = _intent(approval_mode=ApprovalMode.AUTO)
-
         await _persist_intent(store, intent)
+        strategy_plan = ExecutionPlanner().plan(
+            intent,
+            ExecutionPolicy(trading_capital_usdt=Decimal("1000")),
+            InstrumentContext(
+                market_price=Decimal("110"),
+                tick_size=Decimal("0.1"),
+                qty_step=Decimal("0.001"),
+                min_qty=Decimal("0.001"),
+                min_notional=Decimal("5"),
+            ),
+        )
+        await store.ensure_position_strategy(strategy_plan)
 
         assert await store.claim_for_execution(
             intent.intent_id,
@@ -275,6 +286,11 @@ def test_restart_quarantines_inflight_auto_execution(
 
         assert stored is not None
         assert stored.status is IntentStatus.UNCERTAIN
+        active = await store.get_active_position_strategies()
+        assert len(active) == 1
+        # An interrupted OPEN is uncertain at the intent layer, but its
+        # strategy remains protectable by startup reconciliation.
+        assert active[0][0].status is StrategyStatus.ENTERING
 
         assert (await store.get_pending_auto_intent_ids()) == ()
 
