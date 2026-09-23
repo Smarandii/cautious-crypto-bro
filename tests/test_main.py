@@ -42,6 +42,7 @@ def test_initial_reconciliation_precedes_any_execution(
         reconcile_once=step("supervisor.reconcile"),
         run=step("supervisor.run"),
     )
+
     async def warning(**kwargs) -> None:
         events.append("bot.recovery_warning")
 
@@ -107,7 +108,9 @@ def test_initial_reconciliation_precedes_any_execution(
         asyncio.run(app.async_main())
 
         assert events.index("store.quarantine") < events.index("supervisor.reconcile")
-        assert events.index("bot.recovery_warning") < events.index("supervisor.reconcile")
+        assert events.index("bot.recovery_warning") < events.index(
+            "supervisor.reconcile"
+        )
         assert events.index("supervisor.reconcile") < events.index("service.recover")
         assert events.count("supervisor.reconcile") == 2
         assert events.index("service.recover") < events.index("source.start")
