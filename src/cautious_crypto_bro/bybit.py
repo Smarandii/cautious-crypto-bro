@@ -42,6 +42,10 @@ class TradeExecutionError(RuntimeError):
     pass
 
 
+class PositionActionPreflightError(TradeExecutionError):
+    """Validation failed before any exchange mutation was attempted."""
+
+
 @dataclass(frozen=True, slots=True)
 class PositionExposure:
     side: Side
@@ -932,10 +936,13 @@ class BybitDemoExecutor:
         initial_exposure = self._exposure_sync(action.symbol)
 
         # Validate before causing any side effects.
-        self._position_for_action(
-            action,
-            initial_exposure,
-        )
+        try:
+            self._position_for_action(
+                action,
+                initial_exposure,
+            )
+        except TradeExecutionError as exc:
+            raise PositionActionPreflightError(str(exc)) from exc
 
         # A lifecycle instruction supersedes stale
         # CCB entry orders for this symbol. Otherwise
