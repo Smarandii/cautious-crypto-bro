@@ -2,11 +2,13 @@ from datetime import UTC, datetime
 
 from cautious_crypto_bro.domain import (
     IncomingPost,
+    IntentExtraction,
     SourceMessage,
 )
 from cautious_crypto_bro.openrouter import (
     IntentExtractor,
     OpenRouterProvider,
+    _signals_from_extraction,
 )
 
 
@@ -1023,3 +1025,115 @@ def test_take_profit_ordinal_ignores_movement_percentage() -> None:
 
     assert action.action is PositionActionType.REDUCE
     assert action.close_pct == 50
+
+
+def test_russian_explicit_reduce_percentage_is_preserved() -> None:
+    item = source().model_copy(
+        update={"text": "Закрываем часть BTC, 25% позиции."}
+    )
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "reduce",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "BTCUSDT",
+                    "action": "REDUCE",
+                    "close_pct": 25,
+                    "evidence_text": "Закрываем часть BTC, 25% позиции.",
+                    "summary": "Reduce BTC",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    result = _signals_from_extraction(item, extraction)
+
+    assert len(result.position_actions) == 1
+    assert result.position_actions[0].close_pct == 25
+
+
+def test_model_excerpt_cannot_bypass_negated_source_clause() -> None:
+    item = source().model_copy(update={"text": "Do not close BTC."})
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "close",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "BTCUSDT",
+                    "action": "CLOSE",
+                    "evidence_text": "close BTC",
+                    "summary": "Close BTC",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    result = _signals_from_extraction(item, extraction)
+
+    assert result.position_actions == ()
+
+
+def test_unrelated_negation_does_not_block_other_symbol_close() -> None:
+    item = source().model_copy(
+        update={"text": "Do not close ETH. Close BTC now."}
+    )
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "close",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "BTCUSDT",
+                    "action": "CLOSE",
+                    "evidence_text": "Close BTC now",
+                    "summary": "Close BTC",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    result = _signals_from_extraction(item, extraction)
+
+    assert len(result.position_actions) == 1
+    assert result.position_actions[0].symbol == "BTCUSDT"
+
+
+def test_reduce_percentage_is_read_from_action_clause_not_other_sentence() -> None:
+    item = source().model_copy(
+        update={
+            "text": (
+                "ETH is up 25% today. "
+                "Закрываем часть BTC, 30% позиции."
+            )
+        }
+    )
+    extraction = IntentExtraction.model_validate(
+        {
+            "actionable": True,
+            "reason": "reduce",
+            "intents": [],
+            "position_actions": [
+                {
+                    "symbol": "BTCUSDT",
+                    "action": "REDUCE",
+                    "close_pct": 30,
+                    "evidence_text": "Закрываем часть BTC",
+                    "summary": "Reduce BTC",
+                    "confidence": 1,
+                }
+            ],
+        }
+    )
+
+    result = _signals_from_extraction(item, extraction)
+
+    assert len(result.position_actions) == 1
+    assert result.position_actions[0].close_pct == 30
