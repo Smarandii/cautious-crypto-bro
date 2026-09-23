@@ -25,7 +25,7 @@ from .domain import (
     TradingIntent,
 )
 
-LATEST_SCHEMA_VERSION = 7
+LATEST_SCHEMA_VERSION = 8
 
 LATEST_SCHEMA_SQL = """
 CREATE TABLE source_messages (
@@ -107,6 +107,7 @@ CREATE TABLE position_strategies (
     trailing_distance TEXT,
     exit_revision INTEGER NOT NULL DEFAULT 0,
     rebalance_needed INTEGER NOT NULL DEFAULT 0,
+    installing_exits INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -162,6 +163,14 @@ INSERT INTO execution_policy(
     risk_per_trade_pct
 )
 VALUES (1, '1');
+
+CREATE TABLE manual_deliveries (
+    record_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('OPEN', 'ACTION')),
+    claim_token TEXT,
+    retry_after TEXT,
+    delivered_at TEXT
+);
 """
 
 MIGRATION_4_TO_5_SQL = """
@@ -221,6 +230,18 @@ DROP TABLE IF EXISTS execution_exit_policy;
 """
 
 
+MIGRATION_7_TO_8_SQL = """
+ALTER TABLE position_strategies ADD COLUMN installing_exits INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE manual_deliveries (
+    record_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('OPEN', 'ACTION')),
+    claim_token TEXT,
+    retry_after TEXT,
+    delivered_at TEXT
+);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class AccountPnlSyncState:
     history_start_at: datetime
@@ -273,7 +294,7 @@ class IntentStore:
             if version == LATEST_SCHEMA_VERSION:
                 return
 
-            if version in {4, 5, 6}:
+            if version in {4, 5, 6, 7}:
                 try:
                     migration_sql = ""
 
@@ -283,12 +304,14 @@ class IntentStore:
                     if version in {4, 5}:
                         migration_sql += MIGRATION_5_TO_6_SQL + "\n"
 
-                    migration_sql += MIGRATION_6_TO_7_SQL
+                    if version in {4, 5, 6}:
+                        migration_sql += MIGRATION_6_TO_7_SQL
+                    migration_sql += MIGRATION_7_TO_8_SQL
 
                     await db.executescript(
                         "BEGIN IMMEDIATE;\n"
                         + migration_sql
-                        + "\nPRAGMA user_version = 7;\n"
+                        + f"\nPRAGMA user_version = {LATEST_SCHEMA_VERSION};\n"
                         + "COMMIT;"
                     )
 
@@ -301,7 +324,7 @@ class IntentStore:
             if version != 0:
                 raise RuntimeError(
                     "Unsupported database schema version: "
-                    f"{version}; expected 0, 4, 5, 6, "
+                    f"{version}; expected 0, 4, 5, 6, 7, "
                     f"or {LATEST_SCHEMA_VERSION}"
                 )
 
@@ -639,6 +662,23 @@ class IntentStore:
                         action,
                     )
 
+                for record_id, kind in (
+                    *(
+                        (str(intent.intent_id), "OPEN")
+                        for intent, _ in items
+                        if intent.approval_mode is ApprovalMode.MANUAL
+                    ),
+                    *(
+                        (str(action.action_id), "ACTION")
+                        for action in position_actions
+                        if action.approval_mode is ApprovalMode.MANUAL
+                    ),
+                ):
+                    await db.execute(
+                        "INSERT INTO manual_deliveries(record_id, kind) VALUES (?, ?)",
+                        (record_id, kind),
+                    )
+
                 if not await self._finish_source(
                     db,
                     source,
@@ -655,6 +695,46 @@ class IntentStore:
             except Exception:
                 await db.rollback()
                 raise
+
+    async def pending_manual_deliveries(self) -> tuple[tuple[UUID, str], ...]:
+        rows = await self._fetch(
+            """SELECT d.record_id, d.kind FROM manual_deliveries d
+               LEFT JOIN intents i ON d.kind = 'OPEN' AND i.intent_id = d.record_id
+               LEFT JOIN position_actions a ON d.kind = 'ACTION' AND a.action_id = d.record_id
+               WHERE d.delivered_at IS NULL
+                 AND (d.retry_after IS NULL OR d.retry_after <= CURRENT_TIMESTAMP)
+                 AND COALESCE(i.status, a.status) = 'PENDING'
+                 AND COALESCE(i.approval_mode, a.approval_mode) = 'MANUAL'
+               ORDER BY COALESCE(i.created_at, a.created_at) LIMIT 100""",
+            many=True,
+        )
+        return tuple((UUID(row[0]), row[1]) for row in rows)
+
+    async def claim_manual_delivery(self, record_id: UUID) -> str | None:
+        token = str(uuid4())
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """UPDATE manual_deliveries SET claim_token = ?,
+                   retry_after = datetime('now', '+5 minutes')
+                   WHERE record_id = ? AND delivered_at IS NULL
+                     AND (retry_after IS NULL OR retry_after <= CURRENT_TIMESTAMP)""",
+                (token, str(record_id)),
+            )
+            await db.commit()
+            return token if cursor.rowcount == 1 else None
+
+    async def finish_manual_delivery(
+        self, record_id: UUID, token: str, *, delivered: bool
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """UPDATE manual_deliveries SET claim_token = NULL,
+                   delivered_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END,
+                   retry_after = datetime('now', '+30 seconds')
+                   WHERE record_id = ? AND claim_token = ?""",
+                (delivered, str(record_id), token),
+            )
+            await db.commit()
 
     async def get_intent(
         self,
@@ -1638,6 +1718,7 @@ class IntentStore:
             trailing_distance=(optional_decimal("trailing_distance")),
             exit_revision=int(row["exit_revision"]),
             rebalance_needed=bool(row["rebalance_needed"]),
+            installing_exits=bool(row["installing_exits"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -1655,10 +1736,12 @@ class IntentStore:
             """
             SELECT
                 s.*,
-                p.payload_json AS plan_json
+                p.payload_json AS plan_json,
+                i.payload_json AS intent_json
             FROM position_strategies AS s
             JOIN execution_plans AS p
               ON p.intent_id = s.strategy_id
+            LEFT JOIN intents AS i ON i.intent_id = s.strategy_id
             WHERE s.status IN (?, ?, ?, ?, ?)
             ORDER BY s.created_at ASC
             """,
@@ -1673,13 +1756,19 @@ class IntentStore:
             row_factory=True,
         )
 
-        return tuple(
-            (
-                self._position_strategy_from_row(row),
-                ExecutionPlan.model_validate_json(row["plan_json"]),
-            )
-            for row in rows
-        )
+        records = []
+        for row in rows:
+            plan = ExecutionPlan.model_validate_json(row["plan_json"])
+            # Older plans only retained the policy's last target, losing distant
+            # trader caps. Recover the original absolute cap from the saved signal.
+            if plan.trader_take_profit is None and row["intent_json"] is not None:
+                intent = TradingIntent.model_validate_json(row["intent_json"])
+                if intent.take_profit is not None:
+                    plan = plan.model_copy(
+                        update={"trader_take_profit": Decimal(str(intent.take_profit))}
+                    )
+            records.append((self._position_strategy_from_row(row), plan))
+        return tuple(records)
 
     async def save_position_strategy(
         self,
@@ -1703,6 +1792,7 @@ class IntentStore:
                     trailing_distance = ?,
                     exit_revision = ?,
                     rebalance_needed = ?,
+                    installing_exits = ?,
                     updated_at = ?
                 WHERE strategy_id = ?
                 """,
@@ -1740,6 +1830,7 @@ class IntentStore:
                     ),
                     state.exit_revision,
                     int(state.rebalance_needed),
+                    int(state.installing_exits),
                     state.updated_at.isoformat(),
                     str(state.strategy_id),
                 ),

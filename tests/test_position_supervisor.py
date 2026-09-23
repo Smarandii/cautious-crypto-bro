@@ -141,6 +141,16 @@ class Executor:
         self.protection = []
         self.exits = []
 
+    async def strategy_order(self, symbol, link_id):
+        return next(
+            (
+                o
+                for o in self.state.open_orders
+                if o.symbol == symbol and o.order_link_id == link_id
+            ),
+            None,
+        )
+
     async def account_state(self):
         self.account_state_calls += 1
         return self.state
@@ -198,7 +208,11 @@ class Executor:
                 replace(
                     position,
                     stop_loss=stop_loss,
-                    trailing_stop=(trailing_distance),
+                    trailing_stop=(
+                        trailing_distance
+                        if trailing_distance is not None
+                        else position.trailing_stop
+                    ),
                 ),
             ),
             open_orders=(self.state.open_orders),
@@ -275,7 +289,7 @@ def test_supervisor_freezes_entries_and_protects_profit() -> None:
     asyncio.run(supervisor.reconcile_once())
 
     assert executor.cancelled_entries == 1
-    assert executor.cancelled_exits == 1
+    assert executor.cancelled_exits == 0
 
     assert len(executor.exits) == 3
 

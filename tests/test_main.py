@@ -53,6 +53,7 @@ def test_initial_reconciliation_precedes_any_execution(
         close=step("bot.close"),
     )
     service = SimpleNamespace(
+        run_manual_delivery_recovery=step("manual.recover"),
         recover_auto_execution=step("service.recover"),
         on_message=AsyncMock(),
     )

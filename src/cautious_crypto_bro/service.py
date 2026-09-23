@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import Counter
 from datetime import (
@@ -18,6 +19,7 @@ from .domain import (
     AutoApprovalMode,
     ExecutionPlan,
     IncomingPost,
+    IntentStatus,
     OpenRelation,
     PositionActionIntent,
     SignalPositionContext,
@@ -58,6 +60,58 @@ class SignalService:
         self._context_provider = context_provider
         self._auto_approval_mode = auto_approval_mode
         self._source_processing_lease_seconds = source_processing_lease_seconds
+
+    async def _deliver_manual(
+        self,
+        signal: TradingIntent | PositionActionIntent,
+        plan: ExecutionPlan | None = None,
+        **kwargs,
+    ) -> bool:
+        record_id = (
+            signal.intent_id if isinstance(signal, TradingIntent) else signal.action_id
+        )
+        token = await self._store.claim_manual_delivery(record_id)
+        if token is None:
+            return False
+        try:
+            if isinstance(signal, TradingIntent):
+                if plan is None:
+                    raise ValueError("Manual OPEN delivery requires its persisted plan")
+                await self._approval_bot.send_intent(signal, plan, **kwargs)
+            else:
+                await self._approval_bot.send_position_action(signal, **kwargs)
+        except Exception:
+            await self._store.finish_manual_delivery(record_id, token, delivered=False)
+            logger.exception(
+                "Approval delivery failed for %s; retry scheduled", record_id
+            )
+            return False
+        await self._store.finish_manual_delivery(record_id, token, delivered=True)
+        return True
+
+    async def recover_manual_deliveries(self) -> None:
+        for record_id, kind in await self._store.pending_manual_deliveries():
+            if kind == "OPEN":
+                signal = await self._store.get_intent(record_id)
+                plan = await self._store.get_execution_plan(record_id)
+                if (
+                    signal is not None
+                    and plan is not None
+                    and signal.status is IntentStatus.PENDING
+                ):
+                    await self._deliver_manual(signal, plan, send_account_state=False)
+            else:
+                action = await self._store.get_position_action(record_id)
+                if action is not None and action.status is IntentStatus.PENDING:
+                    await self._deliver_manual(action, send_account_state=False)
+
+    async def run_manual_delivery_recovery(self) -> None:
+        while True:
+            try:
+                await self.recover_manual_deliveries()
+            except Exception:
+                logger.exception("Manual approval recovery failed")
+            await asyncio.sleep(30)
 
     async def _sync_account_pnl(
         self,
@@ -553,7 +607,7 @@ class SignalService:
                 exposure = account_state.exposure_for(intent.symbol)
 
             try:
-                await self._approval_bot.send_intent(
+                sent = await self._deliver_manual(
                     intent,
                     plan,
                     exposure=exposure,
@@ -572,7 +626,7 @@ class SignalService:
                 )
                 continue
 
-            manual_cards_sent += 1
+            manual_cards_sent += int(sent)
 
         for action in position_actions:
             if action.approval_mode is ApprovalMode.AUTO:
@@ -597,7 +651,7 @@ class SignalService:
                 continue
 
             try:
-                await self._approval_bot.send_position_action(
+                sent = await self._deliver_manual(
                     action,
                     account_state=account_state,
                     account_state_error=(account_state_error),
@@ -613,4 +667,4 @@ class SignalService:
                 )
                 continue
 
-            manual_cards_sent += 1
+            manual_cards_sent += int(sent)

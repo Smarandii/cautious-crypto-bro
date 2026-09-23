@@ -130,6 +130,7 @@ async def async_main() -> None:
             # while startup lookback is creating cards.
             tg.create_task(bot.run())
             tg.create_task(supervisor.run())
+            tg.create_task(service.run_manual_delivery_recovery())
 
             await source.start()
 

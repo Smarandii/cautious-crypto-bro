@@ -223,6 +223,12 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
                 range_order_count=3,
             )
 
+        async def claim_manual_delivery(self, record_id):
+            return "claim"
+
+        async def finish_manual_delivery(self, record_id, token, *, delivered):
+            assert delivered
+
         async def create_signal_batch_and_complete_source(
             self,
             items,

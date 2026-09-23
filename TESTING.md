@@ -165,6 +165,37 @@ UNCERTAIN strategies are quarantined from automatic supervisor mutations.
 Manual/unexplained changes can move supported strategies to
 MANUAL_OVERRIDE.
 
+Remaining-concern regressions
+
+`python -m pytest tests/test_remaining_concerns.py tests/test_strategy_storage.py -q`
+exercises real SQLite persistence and the production Bybit adapter with mocked
+HTTP transport. It covers immediate/partial TP fills, fills followed by entry
+growth, interrupted installation before and after an accepted fill, stop changes
+before entry freeze, cancelled orders, trader caps for both sides and legacy
+plans, and failed manual approval delivery across restart.
+
+Exit installation checkpoints its revision, sizing snapshot, and intended
+protection before exchange mutations. Recovery reuses matching open or filled
+orders. Fill detection uses cumulative executed quantity, not disappearance from
+open orders or net position shrink. Partial TP fills freeze entry accumulation
+without replacing the remaining exit allocation. Missing or changed established
+stops trigger MANUAL_OVERRIDE during accumulation as well as after entry freeze.
+
+Schema 8 adds the installation checkpoint flag and a manual approval delivery
+queue. Migrations from schemas 4–7 are tested. New manual cards are queued in the
+same transaction as source completion; successful delivery is recorded, failures
+retry every 30 seconds, and abandoned delivery claims expire after five minutes.
+Delivery is at least once: a crash after Telegram accepts a card but before the
+SQLite acknowledgement can produce a duplicate card. Existing execution claims
+still prevent duplicate execution. Pre-upgrade cards are not replayed because
+schema 7 did not record whether Telegram delivery succeeded.
+
+Validation for these fixes: 139 tests passed; Ruff lint/format and Pyright passed.
+A read-only Bybit Demo check confirmed the new lookup retrieves a previously
+filled audit order with its executed quantity. No exchange order was submitted
+for this check. Bybit documents completed-order lookup and `cumExecQty` in
+[Get Open & Closed Orders](https://bybit-exchange.github.io/docs/v5/order/open-order).
+
 App lifecycle
 
 Start/recreate:

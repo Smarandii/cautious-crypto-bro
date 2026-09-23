@@ -126,6 +126,7 @@ class AccountOrder:
     trigger_price: Decimal | None = None
     close_on_trigger: bool = False
     parent_order_link_id: str = ""
+    executed_quantity: Decimal = Decimal("0")
 
     @property
     def kind(self) -> str:
@@ -793,7 +794,23 @@ class BybitDemoExecutor:
                 or str(item.get("closeOnTrigger")).casefold() == "true"
             ),
             parent_order_link_id=str(item.get("parentOrderLinkId") or ""),
+            executed_quantity=self._decimal(item.get("cumExecQty")),
         )
+
+    async def strategy_order(self, symbol: str, link_id: str) -> AccountOrder | None:
+        """Read open or completed orders; absence from open orders is not a fill."""
+        return await asyncio.to_thread(self._strategy_order_sync, symbol, link_id)
+
+    def _strategy_order_sync(self, symbol: str, link_id: str) -> AccountOrder | None:
+        for endpoint in ("/v5/order/realtime", "/v5/order/history"):
+            response = self._private_get(
+                endpoint,
+                {"category": "linear", "symbol": symbol, "orderLinkId": link_id},
+            )
+            for item in response.get("result", {}).get("list", []):
+                if item.get("orderLinkId") == link_id and item.get("symbol") == symbol:
+                    return self._account_order_from_item(item)
+        return None
 
     def _exposure_sync(
         self,

@@ -880,6 +880,7 @@ class ExecutionPlan(BaseModel):
         ...,
     ] = ()
     take_profit_source: TakeProfitSource = TakeProfitSource.TRADER
+    trader_take_profit: Decimal | None = Field(default=None, gt=0)
 
     # V1 plans load as zero runner. New V2 plans set 25%.
     runner_pct: Decimal = Field(
@@ -1000,6 +1001,7 @@ class PositionStrategy(BaseModel):
     )
 
     rebalance_needed: bool = False
+    installing_exits: bool = False
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

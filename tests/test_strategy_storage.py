@@ -2,8 +2,10 @@ import asyncio
 import sqlite3
 
 from cautious_crypto_bro.storage import (
+    LATEST_SCHEMA_VERSION,
     MIGRATION_4_TO_5_SQL,
     MIGRATION_5_TO_6_SQL,
+    MIGRATION_6_TO_7_SQL,
     IntentStore,
 )
 
@@ -72,7 +74,7 @@ def create_legacy_policy(
     )
 
 
-def assert_v7(
+def assert_latest(
     database,
 ) -> None:
     with sqlite3.connect(database) as db:
@@ -119,7 +121,7 @@ def assert_v7(
             )
         }
 
-    assert version == 7
+    assert version == LATEST_SCHEMA_VERSION
 
     assert policy_columns == {
         "id",
@@ -132,6 +134,7 @@ def assert_v7(
 
     assert "protected_stop_loss" in strategy_columns
     assert "trailing_distance" in strategy_columns
+    assert "installing_exits" in strategy_columns
 
 
 def migrate_from(
@@ -149,14 +152,17 @@ def migrate_from(
         if version >= 6:
             db.executescript(MIGRATION_5_TO_6_SQL)
 
+        if version >= 7:
+            db.executescript(MIGRATION_6_TO_7_SQL)
+
         db.execute(f"PRAGMA user_version = {version}")
 
     asyncio.run(IntentStore(database).initialize())
 
-    assert_v7(database)
+    assert_latest(database)
 
 
-def test_schema_migrates_v4_to_v7(
+def test_schema_migrates_v4_to_latest(
     tmp_path,
 ) -> None:
     migrate_from(
@@ -165,7 +171,7 @@ def test_schema_migrates_v4_to_v7(
     )
 
 
-def test_schema_migrates_v5_to_v7(
+def test_schema_migrates_v5_to_latest(
     tmp_path,
 ) -> None:
     migrate_from(
@@ -174,10 +180,14 @@ def test_schema_migrates_v5_to_v7(
     )
 
 
-def test_schema_migrates_v6_to_v7(
+def test_schema_migrates_v6_to_latest(
     tmp_path,
 ) -> None:
     migrate_from(
         tmp_path,
         6,
     )
+
+
+def test_schema_migrates_v7_to_latest(tmp_path) -> None:
+    migrate_from(tmp_path, 7)

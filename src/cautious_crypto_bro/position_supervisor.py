@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import (
     ROUND_CEILING,
@@ -23,6 +24,7 @@ from .domain import (
     PositionStrategy,
     Side,
     StrategyStatus,
+    TakeProfitSource,
 )
 from .execution import InstrumentContext
 from .storage import IntentStore
@@ -212,6 +214,37 @@ class PositionSupervisor:
 
             return account
 
+        if state.installing_exits:
+            # Resume the same revision and sizing snapshot; completed orders retain
+            # their unique IDs in exchange history and must never be resubmitted.
+            snapshot = replace(
+                position,
+                size=state.last_position_qty or position.size,
+                avg_price=state.last_avg_price or position.avg_price,
+            )
+            account, stop, trail = await self._install_structure(
+                state,
+                plan,
+                snapshot,
+                account,
+                enable_trailing=state.trailing_active,
+            )
+            await self._save(
+                state.model_copy(
+                    update={
+                        "installing_exits": False,
+                        "protected_stop_loss": stop,
+                        "trailing_distance": trail,
+                        "status": (
+                            StrategyStatus.PROFIT_PROTECTED
+                            if state.trailing_active
+                            else StrategyStatus.OPEN_RISK
+                        ),
+                    }
+                )
+            )
+            return account
+
         override_reason = self._manual_override_reason(
             state,
             plan,
@@ -260,19 +293,32 @@ class PositionSupervisor:
         if not state.entry_frozen:
             previous_position_qty = state.last_position_qty
 
-            state = self._detect_fixed_exit_fills(
+            state, fixed_exit_filled = await self._detect_fixed_exit_fills(
                 state,
                 account,
                 position,
             )
 
-            fixed_exit_filled = any(
-                (
-                    state.tp1_done,
-                    state.tp2_done,
-                    state.tp3_done,
+            if fixed_exit_filled:
+                # Keep partially filled exits and their remaining quantities intact.
+                # Rebuilding here would sell that target's allocation a second time.
+                await self._executor.cancel_pending_entries(state.symbol)
+                account = await self._executor.account_state()
+                position = self._position(state, account)
+                if position is None:
+                    await self._save(
+                        state.model_copy(update={"status": StrategyStatus.CLOSED})
+                    )
+                    return account
+                state = state.model_copy(
+                    update={
+                        "entry_frozen": True,
+                        "last_position_qty": position.size,
+                        "last_avg_price": position.avg_price,
+                    }
                 )
-            )
+                await self._save(state)
+                return await self._reconcile(state, plan, account)
 
             position_grew = (
                 previous_position_qty is not None
@@ -303,9 +349,6 @@ class PositionSupervisor:
 
             if not should_freeze:
                 if structure_missing or position_grew:
-                    if not structure_missing:
-                        await self._executor.cancel_strategy_exits(state.symbol)
-
                     state = state.model_copy(
                         update={
                             "exit_revision": (state.exit_revision + 1),
@@ -374,8 +417,6 @@ class PositionSupervisor:
                 }
             )
 
-            await self._executor.cancel_strategy_exits(state.symbol)
-
             (
                 account,
                 installed_stop,
@@ -406,8 +447,6 @@ class PositionSupervisor:
             return account
 
         if state.rebalance_needed:
-            await self._executor.cancel_strategy_exits(state.symbol)
-
             account = await self._executor.account_state()
 
             position = self._position(
@@ -474,7 +513,7 @@ class PositionSupervisor:
 
             return account
 
-        state = self._detect_fixed_exit_fills(
+        state, _ = await self._detect_fixed_exit_fills(
             state,
             account,
             position,
@@ -586,6 +625,27 @@ class PositionSupervisor:
             else (state.protected_stop_loss or plan.stop_loss)
         )
 
+        if position.stop_loss is not None:
+            protected_stop = (
+                max(protected_stop, position.stop_loss)
+                if position.side is Side.LONG
+                else min(protected_stop, position.stop_loss)
+            )
+        if state.trailing_active:
+            trailing_distance = state.trailing_distance or trailing_distance
+        await self._save(
+            state.model_copy(
+                update={
+                    "installing_exits": True,
+                    "protected_stop_loss": protected_stop,
+                    "trailing_active": enable_trailing or state.trailing_active,
+                    "trailing_distance": trailing_distance,
+                    "last_position_qty": position.size,
+                    "last_avg_price": position.avg_price,
+                }
+            )
+        )
+
         if (
             position.stop_loss != protected_stop
             or position.trailing_stop != trailing_distance
@@ -595,6 +655,17 @@ class PositionSupervisor:
                 protected_stop,
                 trailing_distance=trailing_distance,
             )
+
+        # The new revision is durable before replacing older owned exits.
+        prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-t"
+        for order in account.open_orders:
+            if (
+                order.symbol == state.symbol
+                and order.reduce_only
+                and order.order_link_id.startswith(prefix)
+                and not order.order_link_id.endswith(f"r{state.exit_revision}")
+            ):
+                await self._executor.cancel_order(state.symbol, order.order_id)
 
         # Never cancel partial protection until Bybit confirms the full stop.
         verified = await self._executor.account_state()
@@ -635,6 +706,26 @@ class PositionSupervisor:
         )
 
         risk_distance = abs(position.avg_price - plan.stop_loss)
+        cap = plan.trader_take_profit or (
+            plan.take_profit
+            if plan.take_profit_source is TakeProfitSource.TRADER
+            else None
+        )
+        target_rs = [target.r_multiple for target in plan.take_profit_targets]
+        if cap is not None:
+            cap_r = (
+                (cap - position.avg_price)
+                if position.side is Side.LONG
+                else (position.avg_price - cap)
+            ) / risk_distance
+            if cap_r <= 0:
+                raise RuntimeError("Trader TP cap is no longer beyond the live entry")
+            if cap_r < target_rs[-1]:
+                if cap_r > target_rs[0]:
+                    target_rs = [target_rs[0], (target_rs[0] + cap_r) / 2, cap_r]
+                else:
+                    target_rs = [r * cap_r / target_rs[-1] for r in target_rs]
+
         expected_exits: dict[str, tuple[Decimal, Decimal]] = {}
 
         if remaining_weight > 0:
@@ -661,14 +752,43 @@ class PositionSupervisor:
                     continue
 
                 if position.side is Side.LONG:
-                    raw_price = position.avg_price + (target.r_multiple * risk_distance)
+                    raw_price = position.avg_price + (
+                        target_rs[index - 1] * risk_distance
+                    )
                 else:
-                    raw_price = position.avg_price - (target.r_multiple * risk_distance)
+                    raw_price = position.avg_price - (
+                        target_rs[index - 1] * risk_distance
+                    )
 
                 price = self._round_price(
                     raw_price,
                     context.tick_size,
                 )
+
+                if cap is not None:
+                    rounding = (
+                        ROUND_FLOOR if position.side is Side.LONG else ROUND_CEILING
+                    )
+                    cap_price = (cap / context.tick_size).to_integral_value(
+                        rounding=rounding
+                    ) * context.tick_size
+                    price = (
+                        min(price, cap_price)
+                        if position.side is Side.LONG
+                        else max(price, cap_price)
+                    )
+                if (
+                    price <= position.avg_price
+                    if position.side is Side.LONG
+                    else price >= position.avg_price
+                ):
+                    raise RuntimeError(
+                        "Trader TP geometry cannot fit profitable exchange ticks"
+                    )
+                if price in [p for _, p in expected_exits.values()]:
+                    raise RuntimeError(
+                        "Trader TP geometry cannot fit distinct exchange ticks"
+                    )
 
                 if context.min_notional and (quantity * price < context.min_notional):
                     logger.warning(
@@ -687,6 +807,12 @@ class PositionSupervisor:
                     for order in account.open_orders
                     if order.symbol == state.symbol and order.order_link_id == link_id
                 ]
+                if not existing:
+                    historical = await self._executor.strategy_order(
+                        state.symbol, link_id
+                    )
+                    if historical is not None:
+                        existing = [historical]
                 if existing:
                     if len(existing) != 1 or not self._matching_exit(
                         existing[0], position.side, quantity, price
@@ -719,6 +845,10 @@ class PositionSupervisor:
                 for order in verified.open_orders
                 if order.symbol == state.symbol and order.order_link_id == link_id
             ]
+            if not matches:
+                historical = await self._executor.strategy_order(state.symbol, link_id)
+                if historical is not None:
+                    matches = [historical]
             if len(matches) != 1 or not self._matching_exit(
                 matches[0], position.side, quantity, price
             ):
@@ -740,7 +870,8 @@ class PositionSupervisor:
             order.side is expected_side
             and order.reduce_only
             and order.order_type == "Limit"
-            and order.remaining_quantity == quantity
+            and order.quantity == quantity
+            and order.status in {"New", "PartiallyFilled", "Filled"}
             and order.price == price
         )
 
@@ -824,57 +955,40 @@ class PositionSupervisor:
                 await self._executor.cancel_order(state.symbol, order_id)
         return await self._executor.account_state()
 
-    def _detect_fixed_exit_fills(
+    async def _detect_fixed_exit_fills(
         self,
         state: PositionStrategy,
         account: AccountStateSummary,
         position: AccountPosition,
-    ) -> PositionStrategy:
-        if (
-            state.exit_revision <= 0
-            or state.last_position_qty is None
-            or position.size >= state.last_position_qty
-        ):
-            return state
-
-        open_links = {
-            order.order_link_id
-            for order in account.open_orders
-            if (order.symbol == state.symbol and order.reduce_only)
-        }
-
-        done = [
-            state.tp1_done,
-            state.tp2_done,
-            state.tp3_done,
-        ]
-
-        changed = False
-
+    ) -> tuple[PositionStrategy, bool]:
+        if state.exit_revision <= 0:
+            return state, False
+        done = [state.tp1_done, state.tp2_done, state.tp3_done]
+        filled = any(done)
         for index in range(1, 4):
             if done[index - 1]:
                 continue
-
-            if (
-                self._exit_link_id(
-                    state,
-                    index,
-                )
-                not in open_links
-            ):
-                done[index - 1] = True
-                changed = True
-
-        if not changed:
-            return state
-
+            link = self._exit_link_id(state, index)
+            order = next(
+                (
+                    o
+                    for o in account.open_orders
+                    if o.symbol == state.symbol and o.order_link_id == link
+                ),
+                None,
+            )
+            if order is None:
+                order = await self._executor.strategy_order(state.symbol, link)
+            if order is not None and order.executed_quantity > 0:
+                filled = True
+                done[index - 1] = order.status == "Filled"
         return state.model_copy(
             update={
                 "tp1_done": done[0],
                 "tp2_done": done[1],
                 "tp3_done": done[2],
             }
-        )
+        ), filled
 
     @staticmethod
     def _entry_link_id(
@@ -943,17 +1057,17 @@ class PositionSupervisor:
                         f"live={order.price}"
                     )
 
-            return None
-
         if (
-            not state.rebalance_needed
+            state.entry_frozen
+            and not state.rebalance_needed
             and state.last_position_qty is not None
             and position.size > state.last_position_qty
         ):
             return "position size increased after entry freeze"
 
         if (
-            not state.rebalance_needed
+            state.entry_frozen
+            and not state.rebalance_needed
             and state.last_avg_price is not None
             and position.avg_price != state.last_avg_price
         ):

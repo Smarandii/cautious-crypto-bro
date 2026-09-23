@@ -16,5 +16,6 @@ audit-output-*/
 audit-artifacts/
 debug/
 .planning/
+forensic_exports/
 
 backups/

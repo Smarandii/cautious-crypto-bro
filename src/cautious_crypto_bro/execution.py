@@ -151,6 +151,11 @@ class ExecutionPlanner:
             take_profit=(take_profit_targets[-1].price),
             take_profit_targets=(take_profit_targets),
             take_profit_source=(take_profit_source),
+            trader_take_profit=(
+                Decimal(str(intent.take_profit))
+                if intent.take_profit is not None
+                else None
+            ),
             runner_pct=(strategy.runner_pct),
             policy=policy.model_copy(deep=True),
             planned_max_loss_usdt=(planned_max_loss),
@@ -469,6 +474,14 @@ class ExecutionPlanner:
                 "take_profit": (target_tuple[-1].price),
                 "take_profit_targets": (target_tuple),
                 "take_profit_source": (take_profit_source),
+                "trader_take_profit": (
+                    plan.trader_take_profit
+                    or (
+                        plan.take_profit
+                        if plan.take_profit_source is TakeProfitSource.TRADER
+                        else None
+                    )
+                ),
                 "planned_max_loss_usdt": (planned_max_loss),
             }
         )
