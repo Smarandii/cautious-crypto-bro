@@ -742,6 +742,34 @@ def _deterministic_action_evidence(
     return None
 
 
+def _action_clauses(text: str) -> tuple[str, ...]:
+    """Return sentence-like source clauses while preserving commas and amounts."""
+    normalized = _normalize_evidence_text(text)
+    if not normalized:
+        return ()
+
+    return tuple(
+        clause.strip()
+        for clause in re.split(r"[.!?…;\n]+", normalized)
+        if clause.strip()
+    )
+
+
+def _clause_containing_evidence(
+    post_text: str,
+    evidence_text: str,
+) -> str | None:
+    evidence = _normalize_evidence_text(evidence_text)
+    if not evidence:
+        return None
+
+    for clause in _action_clauses(post_text):
+        if evidence in clause:
+            return clause
+
+    return None
+
+
 def _current_post_action_evidence(
     source: SourceMessage,
     action_type: PositionActionType,
@@ -762,12 +790,16 @@ def _current_post_action_evidence(
     scopes: list[str] = []
 
     if model_evidence_text:
-        evidence = _normalize_evidence_text(model_evidence_text)
+        clause = _clause_containing_evidence(
+            post_text,
+            model_evidence_text,
+        )
+        if clause is not None:
+            scopes.append(clause)
 
-        if evidence and evidence in post_text:
-            scopes.append(evidence)
-
-    scopes.append(post_text)
+    for clause in _action_clauses(post_text):
+        if clause not in scopes:
+            scopes.append(clause)
 
     for scope in scopes:
         evidence = _deterministic_action_evidence(
@@ -777,7 +809,10 @@ def _current_post_action_evidence(
         )
 
         if evidence is not None:
-            return evidence
+            # Return the complete source clause, not only the regex match.
+            # This keeps authoritative percentages/fractions and surrounding
+            # negation in the same deterministic scope.
+            return scope
 
     return None
 
