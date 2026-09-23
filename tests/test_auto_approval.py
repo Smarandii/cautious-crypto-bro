@@ -24,8 +24,10 @@ from cautious_crypto_bro.domain import (
     SignalPositionContext,
     SourceMessage,
     SourceOpenContext,
+    StrategyStatus,
     TradingIntent,
 )
+from cautious_crypto_bro.execution import ExecutionPlanner, InstrumentContext
 from cautious_crypto_bro.execution_coordinator import (
     ExecutionCoordinator,
 )
@@ -264,7 +266,7 @@ def test_restart_quarantines_inflight_auto_execution(
             expected_approval_mode=(ApprovalMode.AUTO),
         )
 
-        intents, actions = await store.quarantine_auto_executing()
+        intents, actions = await store.quarantine_interrupted_executions()
 
         assert intents == (intent.intent_id,)
         assert actions == ()
@@ -275,6 +277,62 @@ def test_restart_quarantines_inflight_auto_execution(
         assert stored.status is IntentStatus.UNCERTAIN
 
         assert (await store.get_pending_auto_intent_ids()) == ()
+
+    asyncio.run(run())
+
+
+
+def test_restart_atomically_quarantines_manual_actions_and_strategies(tmp_path) -> None:
+    async def run() -> None:
+        store = IntentStore(tmp_path / "state.sqlite3")
+        await store.initialize()
+        intent = _intent(approval_mode=ApprovalMode.AUTO)
+        await _persist_intent(store, intent)
+
+        strategy_plan = ExecutionPlanner().plan(
+            intent,
+            ExecutionPolicy(trading_capital_usdt=Decimal("1000")),
+            InstrumentContext(
+                market_price=Decimal("110"),
+                tick_size=Decimal("0.1"),
+                qty_step=Decimal("0.001"),
+                min_qty=Decimal("0.001"),
+                min_notional=Decimal("5"),
+            ),
+        )
+        await store.ensure_position_strategy(strategy_plan)
+        assert await store.claim_for_execution(
+            intent.intent_id, None, expected_approval_mode=ApprovalMode.AUTO,
+        )
+
+        action_source = _source().model_copy(update={"message_id": 124})
+        action = PositionActionIntent(
+            source=action_source,
+            symbol="BTCUSDT",
+            action=PositionActionType.REDUCE,
+            close_pct=25,
+            summary="Reduce 25%",
+            confidence=1,
+            approval_mode=ApprovalMode.MANUAL,
+        )
+        claim = await store.claim_source(action_source, lease_seconds=300)
+        assert claim is not None
+        assert await store.create_signal_batch_and_complete_source(
+            (), (action,), claim,
+        )
+        assert await store.claim_position_action_for_execution(
+            action.action_id, 1, expected_approval_mode=ApprovalMode.MANUAL,
+        )
+
+        intents, actions = await store.quarantine_interrupted_executions()
+        assert intents == (intent.intent_id,)
+        assert actions == (action.action_id,)
+        assert (await store.get_intent(intent.intent_id)).status is IntentStatus.UNCERTAIN
+        assert (await store.get_position_action(action.action_id)).status is IntentStatus.UNCERTAIN
+        active = await store.get_active_position_strategies()
+        assert len(active) == 1
+        assert active[0][0].status is StrategyStatus.UNCERTAIN
+        assert await store.quarantine_interrupted_executions() == ((), ())
 
     asyncio.run(run())
 
