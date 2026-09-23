@@ -11,6 +11,7 @@ from .bybit import (
     AccountStateSummary,
     BybitDemoExecutor,
     PositionActionExecutionResult,
+    PositionActionPreflightError,
 )
 from .domain import (
     ApprovalMode,
@@ -461,86 +462,52 @@ class ExecutionCoordinator:
 
         result: PositionActionExecutionResult | None = None
 
-        try:
-            async with self._execution_lock:
+        async with self._execution_lock:
+            try:
                 result = await self._executor.execute_position_action(action)
+                await self._confirm_position_action(action, result)
 
-                await self._confirm_position_action(
-                    action,
-                    result,
+            except PositionActionPreflightError as exc:
+                # A typed preflight error is raised only before any mutation.
+                message = f"{type(exc).__name__}: {exc}"
+                await self._store.mark_position_action_failed(
+                    action_id,
+                    message,
+                )
+                return PositionActionExecutionOutcome(
+                    status=IntentStatus.FAILED,
+                    message=message,
+                    action=action,
                 )
 
-        except PositionActionConfirmationError as exc:
+            except Exception as exc:
+                # The exchange may have accepted a market reduction even
+                # when its response or the later confirmation timed out.
+                logger.exception(
+                    "Position action %s has an uncertain exchange outcome",
+                    action_id,
+                )
+                message = f"{type(exc).__name__}: {exc}"
+                await self._store.mark_position_action_uncertain(
+                    action_id,
+                    action.symbol,
+                    result.order_id if result is not None else None,
+                    message,
+                )
+                return PositionActionExecutionOutcome(
+                    status=IntentStatus.UNCERTAIN,
+                    message=message,
+                    action=action,
+                    result=result,
+                )
+
             assert result is not None
-
-            logger.error(
-                "Position action %s is uncertain: %s",
-                action_id,
-                exc,
-            )
-
-            message = f"{type(exc).__name__}: {exc}"
-
-            await self._store.mark_position_action_uncertain(
-                action_id,
+            # Status and resulting strategy rebalance/close must be durable
+            # before releasing the lock to the position supervisor.
+            await self._store.complete_position_action(
+                action,
                 result.order_id,
-                message,
             )
-
-            records = await self._store.get_active_position_strategies()
-
-            for state, _ in records:
-                if state.symbol != action.symbol:
-                    continue
-
-                await self._store.set_position_strategy_status(
-                    state.strategy_id,
-                    StrategyStatus.UNCERTAIN,
-                )
-
-            return PositionActionExecutionOutcome(
-                status=IntentStatus.UNCERTAIN,
-                message=message,
-                action=action,
-                result=result,
-            )
-
-        except Exception as exc:
-            logger.exception(
-                "Position action execution failed for %s",
-                action_id,
-            )
-
-            message = f"{type(exc).__name__}: {exc}"
-
-            await self._store.mark_position_action_failed(
-                action_id,
-                message,
-            )
-
-            # Execution may already have cancelled
-            # V2 exits before the final market action
-            # failed. Ask the supervisor to rebuild.
-            await self._store.request_strategy_rebalance(action.symbol)
-
-            return PositionActionExecutionOutcome(
-                status=IntentStatus.FAILED,
-                message=message,
-                action=action,
-            )
-
-        assert result is not None
-
-        await self._store.mark_position_action_executed(
-            action_id,
-            result.order_id,
-        )
-
-        if action.action is PositionActionType.REDUCE:
-            await self._store.request_strategy_rebalance(action.symbol)
-
-        elif action.action is PositionActionType.CLOSE:
-            await self._store.request_strategy_close(action.symbol)
 
         return PositionActionExecutionOutcome(
             status=IntentStatus.EXECUTED,
