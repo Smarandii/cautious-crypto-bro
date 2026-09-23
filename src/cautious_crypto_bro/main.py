@@ -32,9 +32,10 @@ async def async_main() -> None:
 
     store = IntentStore(settings.database_path)
     await store.initialize()
-    interrupted_intents, interrupted_actions = (
-        await store.quarantine_interrupted_executions()
-    )
+    (
+        interrupted_intents,
+        interrupted_actions,
+    ) = await store.quarantine_interrupted_executions()
 
     runtime_store = RedisRuntimeStore(
         settings.redis_url,
