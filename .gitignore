@@ -15,5 +15,6 @@ audit-output/
 audit-output-*/
 audit-artifacts/
 debug/
+.planning/
 
 backups/
