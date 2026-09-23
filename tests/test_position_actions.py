@@ -549,7 +549,8 @@ def test_transport_timeout_after_accepted_reduce_quarantines_strategy(tmp_path) 
             max_age_seconds=3600,
         )
         outcome = await coordinator.execute_position_action(
-            action.action_id, approval_mode=ApprovalMode.MANUAL,
+            action.action_id,
+            approval_mode=ApprovalMode.MANUAL,
         )
         assert outcome.status is IntentStatus.UNCERTAIN
         assert outcome.result is not None
@@ -593,7 +594,8 @@ def test_ambiguous_submission_without_order_id_is_quarantined(tmp_path) -> None:
             max_age_seconds=3600,
         )
         outcome = await coordinator.execute_position_action(
-            action.action_id, approval_mode=ApprovalMode.MANUAL,
+            action.action_id,
+            approval_mode=ApprovalMode.MANUAL,
         )
         assert outcome.status is IntentStatus.UNCERTAIN
         assert outcome.result is None
@@ -634,7 +636,8 @@ def test_preflight_failure_is_distinguished_from_ambiguous_submission(tmp_path) 
             max_age_seconds=3600,
         )
         outcome = await coordinator.execute_position_action(
-            action.action_id, approval_mode=ApprovalMode.MANUAL,
+            action.action_id,
+            approval_mode=ApprovalMode.MANUAL,
         )
         assert outcome.status is IntentStatus.FAILED
         stored = await store.get_position_action(action.action_id)
@@ -658,7 +661,8 @@ def test_confirmed_reduce_atomically_requests_rebalance(tmp_path) -> None:
             max_age_seconds=3600,
         )
         outcome = await coordinator.execute_position_action(
-            action.action_id, approval_mode=ApprovalMode.MANUAL,
+            action.action_id,
+            approval_mode=ApprovalMode.MANUAL,
         )
         assert outcome.status is IntentStatus.EXECUTED
 
