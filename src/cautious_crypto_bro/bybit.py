@@ -46,6 +46,10 @@ class PositionActionPreflightError(TradeExecutionError):
     """Validation failed before any exchange mutation was attempted."""
 
 
+class EntryPreflightError(TradeExecutionError):
+    """Entry failed before any order submission was attempted."""
+
+
 @dataclass(frozen=True, slots=True)
 class PositionExposure:
     side: Side
@@ -1350,21 +1354,14 @@ class BybitDemoExecutor:
         self,
         plan: ExecutionPlan,
     ) -> MarketPrimaryExecutionResult:
-        self._validate_staged_market_plan(plan)
-
-        self._sync_clock()
-
-        market_price = self._last_price(plan.symbol)
-
-        self._validate_market_plan(
-            plan,
-            market_price,
-        )
-
-        request = self._order_params(
-            plan,
-            0,
-        )
+        try:
+            self._validate_staged_market_plan(plan)
+            self._sync_clock()
+            market_price = self._last_price(plan.symbol)
+            self._validate_market_plan(plan, market_price)
+            request = self._order_params(plan, 0)
+        except Exception as exc:
+            raise EntryPreflightError(str(exc)) from exc
 
         response = self._private_post(
             "/v5/order/create",
@@ -1424,18 +1421,20 @@ class BybitDemoExecutor:
         self,
         plan: ExecutionPlan,
     ) -> tuple[str, ...]:
-        self._require_v2(plan)
-
-        if any(order.order_type is ExecutionOrderType.MARKET for order in plan.orders):
-            raise TradeExecutionError(
-                "Strategy V2 MARKET plans require staged E1 execution"
-            )
-
-        self._sync_clock()
-
-        requests = [
-            self._order_params(plan, index) for index in range(len(plan.orders))
-        ]
+        try:
+            self._require_v2(plan)
+            if any(
+                order.order_type is ExecutionOrderType.MARKET for order in plan.orders
+            ):
+                raise TradeExecutionError(
+                    "Strategy V2 MARKET plans require staged E1 execution"
+                )
+            self._sync_clock()
+            requests = [
+                self._order_params(plan, index) for index in range(len(plan.orders))
+            ]
+        except Exception as exc:
+            raise EntryPreflightError(str(exc)) from exc
 
         response = self._private_post(
             "/v5/order/create-batch",

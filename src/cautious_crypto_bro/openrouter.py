@@ -123,6 +123,13 @@ OPEN trade rules:
   is already open
 - for an already-open position screenshot, MARKET takes precedence over
   historical/average entry prices shown in the screenshot
+- Caption lifecycle/status instructions take precedence over screenshot copying.
+  A profit recap, "not closing yet", take-profit update, or move-to-breakeven
+  instruction is NOT a new OPEN, even when this source was never copied.
+  An image with an exit price or realized ROI is not evidence of a live entry.
+  "Take profit after re-entry" describes an existing trade, not a new re-entry.
+  Only extract a separate OPEN from such a post when it explicitly instructs
+  a new entry now; never replace an unsupported stop update with OPEN.
 - if one current exchange screenshot shows multiple distinct live positions,
   extract EACH valid position as its own independent OPEN candidate when its
   symbol and side are available
@@ -264,7 +271,7 @@ def _evaluation_fingerprint(
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 10,
+        "cache_version": 11,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
@@ -889,6 +896,23 @@ def _reduction_pct_from_evidence(
     return DEFAULT_REDUCTION_PCT
 
 
+def _caption_is_market_update(text: str) -> bool:
+    text = _normalize_evidence_text(text)
+    update = re.search(
+        r"\b(?:профит\w*|тейк\w*|не\s+закрываю|держим|держу|"
+        r"стоп\s+в\s+б[у/]+|taking\s+profit|take\s+profit|"
+        r"still\s+holding|not\s+closing|move\s+stop\s+to\s+breakeven)\b",
+        text,
+    )
+    new_entry = re.search(
+        r"\b(?:открываю|открываем|вхожу|входим|беру|берем|подобрал|"
+        r"перезахожу|перезаходим|open|opening|enter|entering|buy|sell|reenter|"
+        r"(?:long|short|лонг|шорт)\s+(?:at\s+)?(?:market|маркетом))\b",
+        text,
+    )
+    return update is not None and new_entry is None
+
+
 def _signals_from_extraction(
     source: SourceMessage,
     extraction: IntentExtraction,
@@ -910,6 +934,19 @@ def _signals_from_extraction(
         side = _side_from_transport(raw.side) or _side_from_transport(raw.direction)
 
         entry = _entry_from_transport(raw)
+
+        if (
+            entry is not None
+            and entry.type is EntryType.MARKET
+            and _caption_is_market_update(source.text)
+        ):
+            logger.warning(
+                "Dropping recap-derived MARKET OPEN for %s from %s/%s",
+                raw.symbol,
+                source.channel_id,
+                source.message_id,
+            )
+            continue
 
         if side is None or entry is None:
             logger.warning(

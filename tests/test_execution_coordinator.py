@@ -166,6 +166,9 @@ def test_execution_outcome_persists_under_mutation_lock() -> None:
         lock = asyncio.Lock()
 
         class Store:
+            async def get_active_position_strategies(self):
+                return ()
+
             async def get_intent(self, intent_id):
                 return intent
 
@@ -190,6 +193,11 @@ def test_execution_outcome_persists_under_mutation_lock() -> None:
                 assert status is StrategyStatus.UNCERTAIN
 
         class Executor:
+            async def account_state(self):
+                from types import SimpleNamespace
+
+                return SimpleNamespace(positions=(), open_orders=())
+
             async def execute(self, plan):
                 assert lock.locked()
                 if fail:

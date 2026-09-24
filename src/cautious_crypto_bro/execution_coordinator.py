@@ -10,6 +10,7 @@ from uuid import UUID
 from .bybit import (
     AccountStateSummary,
     BybitDemoExecutor,
+    EntryPreflightError,
     PositionActionExecutionResult,
     PositionActionPreflightError,
 )
@@ -313,10 +314,23 @@ class ExecutionCoordinator:
         effective_plan = plan
 
         async with self._execution_lock:
+            strategy_created = False
+            primary_filled = False
             try:
+                active = await self._store.get_active_position_strategies()
+                if any(state.symbol == plan.symbol for state, _ in active):
+                    raise EntryPreflightError(
+                        f"Existing strategy owns {plan.symbol}; resolve it before opening another"
+                    )
+                live_state = await self._executor.account_state()
+                # V2 owns a whole net position. Manual approval cannot make two
+                # independent entry/exit ladders safe on the same symbol.
+                conflict = self.auto_open_safety_reason(
+                    intent.model_copy(update={"relation": OpenRelation.NEW}), live_state
+                )
+                if conflict is not None:
+                    raise EntryPreflightError(conflict)
                 if approval_mode is ApprovalMode.AUTO:
-                    live_state = await self._executor.account_state()
-
                     safety_reason = self.auto_open_safety_reason(
                         intent,
                         live_state,
@@ -326,11 +340,13 @@ class ExecutionCoordinator:
                         raise AutoExecutionSafetyError(safety_reason)
 
                 await self._store.ensure_position_strategy(plan)
+                strategy_created = True
 
                 staged_market = plan.orders[0].order_type is ExecutionOrderType.MARKET
 
                 if staged_market:
                     primary = await self._executor.execute_market_primary(plan)
+                    primary_filled = True
 
                     context = await self._executor.market_context(plan.symbol)
 
@@ -378,10 +394,13 @@ class ExecutionCoordinator:
                     message,
                 )
 
-                await self._store.set_position_strategy_status(
-                    intent_id,
-                    StrategyStatus.UNCERTAIN,
-                )
+                if strategy_created:
+                    await self._store.set_position_strategy_status(
+                        intent_id,
+                        StrategyStatus.CLOSED
+                        if isinstance(exc, EntryPreflightError) and not primary_filled
+                        else StrategyStatus.UNCERTAIN,
+                    )
 
                 return IntentExecutionOutcome(
                     status=IntentStatus.FAILED,
