@@ -115,7 +115,7 @@ def policy(
     )
 
 
-def test_range_plan_uses_three_weighted_v2_entries() -> None:
+def test_range_plan_has_weighted_entries_independent_exits_and_runner() -> None:
     plan = ExecutionPlanner().plan(
         range_intent(),
         policy(),
@@ -147,14 +147,6 @@ def test_range_plan_uses_three_weighted_v2_entries() -> None:
     assert plan.planned_max_loss_usdt <= Decimal("68")
 
     assert plan.planned_max_loss_usdt > Decimal("67.9")
-
-
-def test_range_plan_has_independent_v2_exits_and_runner() -> None:
-    plan = ExecutionPlanner().plan(
-        range_intent(),
-        policy(),
-        context(),
-    )
 
     assert [target.name for target in plan.take_profit_targets] == [
         "TP1",

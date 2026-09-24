@@ -458,109 +458,8 @@ def test_account_state_keeps_active_partial_stops_with_zero_leaves_qty() -> None
         executor.close()
 
 
-def test_v2_entries_use_stop_only_payloads() -> None:
-    plan = ExecutionPlanner().plan(
-        TradingIntent(
-            source=SourceMessage(
-                channel_id=1,
-                channel_title="Test",
-                message_id=1,
-                published_at=datetime.now(UTC),
-                received_at=datetime.now(UTC),
-                text="test",
-            ),
-            symbol="BTCUSDT",
-            side=Side.LONG,
-            entry=Entry(
-                type=EntryType.MARKET,
-            ),
-            stop_loss=90,
-            take_profit=None,
-            summary="test",
-            confidence=1,
-        ),
-        policy(),
-        InstrumentContext(
-            market_price=Decimal("120"),
-            tick_size=Decimal("0.1"),
-            qty_step=Decimal("0.001"),
-            min_qty=Decimal("0.001"),
-            min_notional=Decimal("5"),
-        ),
-    )
-
-    executor = BybitDemoExecutor(
-        api_key="key",
-        api_secret="secret",
-    )
-
-    try:
-        requests = [
-            executor._order_params(
-                plan,
-                index,
-            )
-            for index in range(len(plan.orders))
-        ]
-
-        assert [request["orderType"] for request in requests] == [
-            "Market",
-            "Limit",
-            "Limit",
-        ]
-
-        assert all("takeProfit" not in request for request in requests)
-
-        assert all(request["stopLoss"] == "90" for request in requests)
-
-        assert all(request["tpslMode"] == "Partial" for request in requests)
-
-        assert [
-            request["orderLinkId"].rsplit(
-                "-",
-                1,
-            )[-1]
-            for request in requests
-        ] == [
-            "e1",
-            "e2",
-            "e3",
-        ]
-
-    finally:
-        executor.close()
-
-
 def test_v2_market_direct_batch_execution_is_rejected() -> None:
-    plan = ExecutionPlanner().plan(
-        TradingIntent(
-            source=SourceMessage(
-                channel_id=1,
-                channel_title="Test",
-                message_id=1,
-                published_at=datetime.now(UTC),
-                received_at=datetime.now(UTC),
-                text="test",
-            ),
-            symbol="BTCUSDT",
-            side=Side.LONG,
-            entry=Entry(
-                type=EntryType.MARKET,
-            ),
-            stop_loss=90,
-            take_profit=None,
-            summary="test",
-            confidence=1,
-        ),
-        policy(),
-        InstrumentContext(
-            market_price=Decimal("120"),
-            tick_size=Decimal("0.1"),
-            qty_step=Decimal("0.001"),
-            min_qty=Decimal("0.001"),
-            min_notional=Decimal("5"),
-        ),
-    )
+    plan = v2_market_plan()
 
     executor = BybitDemoExecutor(
         api_key="key",
@@ -586,35 +485,7 @@ def test_v2_market_direct_batch_execution_is_rejected() -> None:
 
 
 def test_v2_market_primary_fill_precedes_scale_ins() -> None:
-    plan = ExecutionPlanner().plan(
-        TradingIntent(
-            source=SourceMessage(
-                channel_id=1,
-                channel_title="Test",
-                message_id=2,
-                published_at=datetime.now(UTC),
-                received_at=datetime.now(UTC),
-                text="test",
-            ),
-            symbol="BTCUSDT",
-            side=Side.LONG,
-            entry=Entry(
-                type=EntryType.MARKET,
-            ),
-            stop_loss=90,
-            take_profit=None,
-            summary="test",
-            confidence=1,
-        ),
-        policy(),
-        InstrumentContext(
-            market_price=Decimal("120"),
-            tick_size=Decimal("0.1"),
-            qty_step=Decimal("0.001"),
-            min_qty=Decimal("0.001"),
-            min_notional=Decimal("5"),
-        ),
-    )
+    plan = v2_market_plan()
 
     calls: list[str] = []
     batch_request = None
@@ -645,6 +516,9 @@ def test_v2_market_primary_fill_precedes_scale_ins() -> None:
             body = json.loads(request.read().decode())
 
             assert body["orderType"] == "Market"
+            assert "takeProfit" not in body
+            assert body["stopLoss"] == "90"
+            assert body["tpslMode"] == "Partial"
 
             assert body["orderLinkId"].endswith("-e1")
 
@@ -760,6 +634,10 @@ def test_v2_market_primary_fill_precedes_scale_ins() -> None:
         requests = batch_request["request"]
 
         assert len(requests) == 2
+        assert all(item["orderType"] == "Limit" for item in requests)
+        assert all("takeProfit" not in item for item in requests)
+        assert all(item["stopLoss"] == "90" for item in requests)
+        assert all(item["tpslMode"] == "Partial" for item in requests)
 
         assert [
             item["orderLinkId"].rsplit(

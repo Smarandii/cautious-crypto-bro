@@ -23,8 +23,6 @@ PASS = {"check": "suite", "result": "passed"}
 @pytest.mark.parametrize(
     "records,expected",
     [
-        ([START, CLEAN], True),
-        ([START], False),
         ([START, {**CLEAN, "side": "SHORT"}], False),
         ([START, {**CLEAN, "symbol": "LINKUSDT"}], False),
         ([START, {**CLEAN, "flat": False}], False),

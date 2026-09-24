@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 from cautious_crypto_bro.domain import (
     IntentExtraction,
 )
@@ -20,8 +22,10 @@ def _walk(value):
 
 def test_intent_schema_is_normalized_for_strict_responses() -> None:
     original = IntentExtraction.model_json_schema()
+    before = deepcopy(original)
 
     normalized = _strict_response_schema(original)
+    assert original == before
 
     objects = [
         item
@@ -45,13 +49,3 @@ def test_intent_schema_is_normalized_for_strict_responses() -> None:
     for item in _walk(normalized):
         if isinstance(item, dict):
             assert "default" not in item
-
-
-def test_normalization_does_not_mutate_pydantic_schema() -> None:
-    original = IntentExtraction.model_json_schema()
-
-    assert any(isinstance(item, dict) and "default" in item for item in _walk(original))
-
-    _strict_response_schema(original)
-
-    assert any(isinstance(item, dict) and "default" in item for item in _walk(original))

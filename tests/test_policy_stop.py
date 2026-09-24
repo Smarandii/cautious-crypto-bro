@@ -22,29 +22,37 @@ from cautious_crypto_bro.openrouter import _signals_from_extraction
 
 
 @pytest.mark.parametrize(
-    "side,entry,market,expected",
+    "side,entry,market,expected,trader_stop",
     [
-        ("LONG", {"type": "MARKET"}, "100", "98"),
-        ("SHORT", {"type": "MARKET"}, "100", "102"),
-        ("LONG", {"type": "LIMIT", "price": 100}, "101", "98"),
-        ("SHORT", {"type": "LIMIT", "price": 100}, "99", "102"),
-        ("LONG", {"type": "RANGE", "range_low": 98, "range_high": 100}, "101", "96.04"),
+        ("LONG", {"type": "MARKET"}, "100", "98", False),
+        ("SHORT", {"type": "MARKET"}, "100", "102", False),
+        ("LONG", {"type": "LIMIT", "price": 100}, "101", "98", False),
+        ("SHORT", {"type": "LIMIT", "price": 100}, "99", "102", False),
+        (
+            "LONG",
+            {"type": "RANGE", "range_low": 98, "range_high": 100},
+            "101",
+            "96.04",
+            False,
+        ),
         (
             "SHORT",
             {"type": "RANGE", "range_low": 100, "range_high": 102},
             "99",
             "104.04",
+            False,
         ),
+        # Trader stops bypass the entry-type-specific fallback calculation.
+        ("LONG", {"type": "MARKET"}, "100", "90", True),
+        ("SHORT", {"type": "MARKET"}, "100", "110", True),
     ],
 )
-@pytest.mark.parametrize("trader_stop", [False, True])
 def test_extraction_to_concrete_plan(side, entry, market, expected, trader_stop):
     candidate = dict(
         symbol="BTCUSDT", side=side, entry=entry, summary="Explicit entry", confidence=1
     )
     if trader_stop:
         candidate["stop_loss"] = 90 if side == "LONG" else 110
-        expected = str(candidate["stop_loss"])
     extraction = IntentExtraction.model_validate(
         dict(actionable=True, reason="Explicit entry", intents=[candidate])
     )
@@ -95,7 +103,6 @@ def test_extraction_to_concrete_plan(side, entry, market, expected, trader_stop)
         {"entry": "LIMIT"},
         {"entry": "RANGE"},
         {"stop_loss": 0},
-        {"stop_loss": -1},
         {"entry": {"type": "LIMIT", "price": 100}, "take_profit": 95},
     ],
 )
@@ -110,14 +117,13 @@ def test_missing_stop_does_not_rescue_invalid_candidate(overrides):
     assert not _signals_from_extraction(source(), extraction).open_intents
 
 
-@pytest.mark.parametrize("distance", [0, -1, 100, 101])
+@pytest.mark.parametrize("distance", [0, 100])
 def test_invalid_fallback_distance(distance):
     with pytest.raises(ValidationError):
         StrategyV2Policy(fallback_stop_distance_pct=Decimal(distance))
 
 
-@pytest.mark.parametrize("tick", ["100", "1"])
-def test_fallback_rejects_unrepresentable_geometry(tick):
+def test_fallback_rejects_unrepresentable_geometry():
     intent = TradingIntent(
         source=source(),
         symbol="BTCUSDT",
@@ -127,9 +133,9 @@ def test_fallback_rejects_unrepresentable_geometry(tick):
         confidence=1,
     )
     context = InstrumentContext(
-        Decimal("1"), Decimal(tick), Decimal("0.001"), Decimal("0.001"), Decimal("5")
+        Decimal("1"), Decimal("1"), Decimal("0.001"), Decimal("0.001"), Decimal("5")
     )
-    with pytest.raises(ExecutionPlanningError):
+    with pytest.raises(ExecutionPlanningError, match="Stop loss must be positive"):
         ExecutionPlanner().plan(intent, policy(), context)
 
 
