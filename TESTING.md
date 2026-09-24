@@ -1,214 +1,94 @@
-# Testing and diagnostics
+# Testing and operations
 
-Run commands from the repository root.
+Run from repository root. Local checks need Python 3.12 and uv.
 
-## Local quality gate
+## Quality gate
 
-Static analysis and unit tests run locally with `uv`:
-
-```bash
-uv run ruff format --check .
-uv run ruff check .
+```sh
+uv sync --frozen --group dev
+uv run ruff format --check src scripts tests
+uv run ruff check src scripts tests
 uv run pyright
 uv run pytest -q
 uv lock --check
+uv build
 uv run pre-commit run --all-files
 git diff --check
+```
 
-Do not use Docker as the normal unit-test/static-check environment.
+Default pytest uses offline/mocked boundaries and real temporary SQLite.
+Live Demo testing is opt-in; passing tests does not prove complete reliability.
 
-Docker Compose is for runtime and integration checks that require application
-configuration, Redis, Telegram, Bybit Demo, or an LLM provider.
+## Configured helpers
 
-App-container helper
+These Bash examples use Compose configuration, Redis and persistent app state.
+Helpers may initialize schema, populate caches or call paid providers.
 
-For scripts that need the application environment:
-
+```bash
 pyapp() {
-  docker compose run --rm -T \
-    --entrypoint /app/.venv/bin/python \
-    app "$@"
+  docker compose run --rm -T --entrypoint /app/.venv/bin/python app "$@"
 }
-
-Use -T for heredoc-driven Docker commands.
-
-Replay a Telegram post
-
-Replay reconstructs the Telegram text/images/albums, loads current guidance, and
-runs the production extractor.
-
 pyapp scripts/replay_telegram_post.py '<telegram-post-url>'
 pyapp scripts/replay_telegram_post.py '<telegram-post-url>' --intent-only
-pyapp scripts/replay_telegram_post.py '<telegram-post-url>' --send-approval
-
-Replay does not mark the source post as processed.
-
-Historical MARKET signals can fail planning when current Bybit market geometry
-is no longer compatible with the historical signal.
-
-REDUCE/CLOSE are executable only when current Telegram text/caption contains
-explicit destructive-action evidence.
-
-Audit recent signals
-rm -rf audit-output
-mkdir -p audit-output
-
-docker compose run --rm -T \
-  -v "$PWD/audit-output:/audit-output" \
-  --entrypoint /app/.venv/bin/python \
-  app \
-  /app/scripts/audit_recent_signals.py \
-  --hours 5 \
-  --output-dir /audit-output
-
-Use --cache-only to avoid fresh model calls.
-
-Strategy replay
-
-Strategy V2 replay/forensic tools should remain offline and deterministic.
-
-Use them to compare candidate parameter sets by loss prevention rather than only
-gross historical PnL.
-
-The frozen V2.0 defaults are documented in
-STRATEGY.md.
-
-Execution policy
-
-Show the current execution policy:
-
 pyapp scripts/set_execution_policy.py
-
-Update risk per strategy:
-
 pyapp scripts/set_execution_policy.py --risk-pct 1
-
-Capital is not configured here. New plans read live Bybit
-totalWalletBalance and freeze it into the execution plan.
-
-Guidance
-
-Global:
-
 cat guidance.txt | pyapp scripts/set_guidance.py --global
+cat guidance.txt | pyapp scripts/set_guidance.py --channel -1001234567890
+```
 
-Per channel:
+Post replay does not submit orders or mark the source processed. Historical MARKET
+plans can fail against today's prices. Capital comes from live wallet balance.
 
-cat guidance.txt | pyapp scripts/set_guidance.py --channel <channel-id>
-Bybit Demo smoke tests
+```bash
+mkdir -p audit-output
+docker compose run --rm -T -v "$PWD/audit-output:/audit-output" \
+  --entrypoint /app/.venv/bin/python app scripts/audit_recent_signals.py \
+  --hours 5 --output-dir /audit-output
+```
 
-The repository must use Bybit Demo credentials only.
+Add `--cache-only` to avoid fresh model calls; keep each audit's evidence separately.
+Offline comparison: `uv run python scripts/replay_strategy_v2.py <forensic-bundle>`.
 
-Basic trade smoke:
+Other tools in `scripts/` cover Telegram authorization, image-provider smoke checks,
+cooldown stress checks and configurable Bybit smoke planning.
+`smoke_bybit_trade.py --execute` submits Demo orders; default behavior is preview.
 
-pyapp scripts/smoke_bybit_trade.py \
-  --entry-type RANGE \
-  --side LONG \
-  --omit-tp
+## Live Bybit Demo integration
 
-Adding --execute submits real orders to the Bybit Demo account.
+```sh
+python scripts/run_bybit_demo_e2e.py --execute-demo
+```
 
-Before any targeted lifecycle smoke:
+Requires Docker Compose, configured Demo credentials, and an empty DOGEUSDT
+position with no DOGE orders. One operator at a time. LONG/SHORT cases submit
+real Demo orders: initial notional ≤ $75, planned total ≤ $200, frozen risk ≤ $5,
+with 10% initially reserved for quote movement.
 
-stop the normal app;
-choose a symbol with no existing position/orders;
-use an isolated SQLite database under /state;
-keep risk deliberately small while satisfying Bybit minimum quantity and
-notional constraints;
-verify cleanup from live Bybit state afterward.
+The runner pauses the app, uses temporary SQLite databases, then unpauses the same
+process only after verified cleanup. Other symbols remain untouched; their native
+protection continues while app reconciliation pauses. No Telegram messages, LLM
+calls, production migrations or deployment occur.
 
-Example:
+Scenarios: staged entry/rebasing; stop handoff and target caps; fresh-process restart;
+interrupted exit installation; changed/removed stops; TP fill and entry freeze;
+Russian 25% REDUCE/rebalance; accepted-but-unconfirmed reduction quarantine; CLOSE
+and zero-position/order cleanup. Partial-fill timing and fills during installation
+are also tested deterministically.
 
-docker compose stop app
+Evidence: `audit-artifacts/bybit-demo-<timestamp>/results.jsonl` and `manifest.json`
+record checks, cleanup receipts, revision, dirty files, hashes and app identity.
+If cleanup fails, the app stays paused. Inspect DOGE exposure and evidence before
+unpausing; host/Docker failures also need manual inspection.
 
-docker compose run --rm -T \
-  -e DATABASE_PATH=/state/ccb-v2-smoke.sqlite3 \
-  app /app/.venv/bin/python - <<'PY'
-# runtime smoke code
-PY
-V2 runtime scenarios validated for v2.0.0
+## Deployment and state
 
-The release validation exercised these scenarios on Bybit Demo:
-
-MARKET E1 executes before E2/E3;
-actual E1 fill price/quantity are persisted into the effective plan;
-E2/E3 are derived from the confirmed E1 fill;
-adverse-fill risk cannot exceed the frozen budget;
-E1 has immediate catastrophe protection through Bybit PartialStopLoss;
-supervisor installs and verifies the position-level stop before removing the
-partial stop;
-fixed TP1/TP2/TP3 exits are installed from live position quantity;
-fresh-process reconciliation leaves an unchanged active strategy untouched;
-REDUCE cancels stale entries/exits and waits for the live reduced quantity;
-exits rebuild from the actual REDUCE remainder;
-unchanged stop protection does not produce a fatal reconciliation error;
-CLOSE waits until Bybit reports zero position;
-supervisor persists the strategy as CLOSED;
-final cleanup leaves zero position and zero stale V2 orders.
-Failure semantics
-
-Historical V1 execution plans remain readable but are rejected before new
-exchange mutations, including through stale manual approval or AUTO recovery.
-
-Startup reconciles before pending AUTO recovery and again after recovery to
-protect any recovered exposure before approval polling or Telegram lookback.
-A reconciliation failure aborts startup rather than enabling ingestion.
-
-A submitted destructive lifecycle order is not considered successful merely
-because Bybit returned an order ID.
-
-If the resulting live position cannot be confirmed, the action becomes
-UNCERTAIN.
-
-UNCERTAIN strategies are quarantined from automatic supervisor mutations.
-
-Manual/unexplained changes can move supported strategies to
-MANUAL_OVERRIDE.
-
-Remaining-concern regressions
-
-`python -m pytest tests/test_remaining_concerns.py tests/test_strategy_storage.py -q`
-exercises real SQLite persistence and the production Bybit adapter with mocked
-HTTP transport. It covers immediate/partial TP fills, fills followed by entry
-growth, interrupted installation before and after an accepted fill, stop changes
-before entry freeze, cancelled orders, trader caps for both sides and legacy
-plans, and failed manual approval delivery across restart.
-
-Exit installation checkpoints its revision, sizing snapshot, and intended
-protection before exchange mutations. Recovery reuses matching open or filled
-orders. Fill detection uses cumulative executed quantity, not disappearance from
-open orders or net position shrink. Partial TP fills freeze entry accumulation
-without replacing the remaining exit allocation. Missing or changed established
-stops trigger MANUAL_OVERRIDE during accumulation as well as after entry freeze.
-
-Schema 8 adds the installation checkpoint flag and a manual approval delivery
-queue. Migrations from schemas 4–7 are tested. New manual cards are queued in the
-same transaction as source completion; successful delivery is recorded, failures
-retry every 30 seconds, and abandoned delivery claims expire after five minutes.
-Delivery is at least once: a crash after Telegram accepts a card but before the
-SQLite acknowledgement can produce a duplicate card. Existing execution claims
-still prevent duplicate execution. Pre-upgrade cards are not replayed because
-schema 7 did not record whether Telegram delivery succeeded.
-
-Validation for these fixes: 139 tests passed; Ruff lint/format and Pyright passed.
-A read-only Bybit Demo check confirmed the new lookup retrieves a previously
-filled audit order with its executed quantity. No exchange order was submitted
-for this check. Bybit documents completed-order lookup and `cumExecQty` in
-[Get Open & Closed Orders](https://bybit-exchange.github.io/docs/v5/order/open-order).
-
-App lifecycle
-
-Start/recreate:
-
-docker compose up -d --build --force-recreate app
+```sh
+docker compose up -d --build app
 docker compose logs -f app
-
-Stop only the app:
-
 docker compose stop app
+```
 
-Do not run:
-
-docker compose down -v
-
-unless the intention is to erase persistent SQLite/Telegram/Redis state.
+Back up SQLite before state repair; stop the app to prevent concurrent mutations.
+Restore a paused strategy only after checking ownership, orders and protection.
+Never replay uncertain submissions blindly. Do not run `docker compose down -v`
+unless intentionally erasing SQLite, Telegram-session and Redis volumes.
