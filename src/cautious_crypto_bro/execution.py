@@ -392,101 +392,17 @@ class ExecutionPlanner:
                 "Actual-fill weighted entry has no stop distance"
             )
 
-        rules = list(strategy.exit_rules)
-
-        take_profit_source = TakeProfitSource.POLICY
-
-        if plan.take_profit_source is TakeProfitSource.TRADER:
-            trader_tp = plan.take_profit
-
-            if plan.side is Side.LONG:
-                trader_reward = trader_tp - weighted_entry
-            else:
-                trader_reward = weighted_entry - trader_tp
-
-            trader_r = trader_reward / risk_distance
-
-            if trader_r <= strategy.first_take_profit_r:
-                raise ExecutionPlanningError(
-                    "Trader take profit became too close after actual E1 fill"
-                )
-
-            if trader_r < strategy.third_take_profit_r:
-                take_profit_source = TakeProfitSource.TRADER
-
-                middle_r = (strategy.first_take_profit_r + trader_r) / Decimal("2")
-
-                rules = [
-                    (
-                        "TP1",
-                        strategy.first_take_profit_r,
-                        strategy.first_take_profit_pct,
-                    ),
-                    (
-                        "TP2",
-                        middle_r,
-                        strategy.second_take_profit_pct,
-                    ),
-                    (
-                        "TP3",
-                        trader_r,
-                        strategy.third_take_profit_pct,
-                    ),
-                ]
-
-        targets: list[PlannedTakeProfit] = []
-
-        previous_price: Decimal | None = None
-
-        for (
-            name,
-            configured_r,
-            close_pct,
-        ) in rules:
-            reward_distance = risk_distance * configured_r
-
-            if plan.side is Side.LONG:
-                raw_price = weighted_entry + reward_distance
-            else:
-                raw_price = weighted_entry - reward_distance
-
-            price = self._round_price(
-                raw_price,
-                context.tick_size,
-            )
-
-            if price <= 0:
-                raise ExecutionPlanningError("Derived take profit is not positive")
-
-            if previous_price is not None:
-                if plan.side is Side.LONG and price <= previous_price:
-                    raise ExecutionPlanningError(
-                        "Actual-fill V2 take-profit levels collapse after rounding"
-                    )
-
-                if plan.side is Side.SHORT and price >= previous_price:
-                    raise ExecutionPlanningError(
-                        "Actual-fill V2 take-profit levels collapse after rounding"
-                    )
-
-            targets.append(
-                PlannedTakeProfit(
-                    name=name,
-                    price=price,
-                    close_pct=close_pct,
-                    r_multiple=configured_r,
-                )
-            )
-
-            previous_price = price
-
-        if len(targets) != 3:
-            raise ExecutionPlanningError("Strategy V2 requires three fixed exits")
-
-        target_tuple = (
-            targets[0],
-            targets[1],
-            targets[2],
+        target_tuple, take_profit_source = self._build_take_profit_targets(
+            plan.side,
+            strategy,
+            weighted_entry,
+            risk_distance,
+            context.tick_size,
+            plan.take_profit
+            if plan.take_profit_source is TakeProfitSource.TRADER
+            else None,
+            trader_target_error="Trader take profit became too close after actual E1 fill",
+            collapsed_targets_error="Actual-fill V2 take-profit levels collapse after rounding",
         )
 
         self._validate_target_geometry(
@@ -732,17 +648,43 @@ class ExecutionPlanner:
         if risk_distance <= 0:
             raise ExecutionPlanningError("Weighted entry and stop must be different")
 
+        trader_tp = (
+            self._round_price(Decimal(str(intent.take_profit)), tick_size)
+            if intent.take_profit is not None
+            else None
+        )
+        return self._build_take_profit_targets(
+            intent.side,
+            strategy,
+            weighted_entry,
+            risk_distance,
+            tick_size,
+            trader_tp,
+            trader_target_error="Trader take profit is too close for Strategy V2 partial exits",
+            collapsed_targets_error="V2 take-profit levels collapse after rounding",
+        )
+
+    def _build_take_profit_targets(
+        self,
+        side: Side,
+        strategy: StrategyV2Policy,
+        weighted_entry: Decimal,
+        risk_distance: Decimal,
+        tick_size: Decimal,
+        trader_tp: Decimal | None,
+        *,
+        trader_target_error: str,
+        collapsed_targets_error: str,
+    ) -> tuple[
+        tuple[PlannedTakeProfit, PlannedTakeProfit, PlannedTakeProfit],
+        TakeProfitSource,
+    ]:
         rules = list(strategy.exit_rules)
 
         source = TakeProfitSource.POLICY
 
-        if intent.take_profit is not None:
-            trader_tp = self._round_price(
-                Decimal(str(intent.take_profit)),
-                tick_size,
-            )
-
-            if intent.side is Side.LONG:
+        if trader_tp is not None:
+            if side is Side.LONG:
                 trader_reward = trader_tp - weighted_entry
             else:
                 trader_reward = weighted_entry - trader_tp
@@ -750,9 +692,7 @@ class ExecutionPlanner:
             trader_r = trader_reward / risk_distance
 
             if trader_r <= strategy.first_take_profit_r:
-                raise ExecutionPlanningError(
-                    "Trader take profit is too close for Strategy V2 partial exits"
-                )
+                raise ExecutionPlanningError(trader_target_error)
 
             if trader_r < strategy.third_take_profit_r:
                 source = TakeProfitSource.TRADER
@@ -788,7 +728,7 @@ class ExecutionPlanner:
         ) in rules:
             reward_distance = risk_distance * configured_r
 
-            if intent.side is Side.LONG:
+            if side is Side.LONG:
                 raw_price = weighted_entry + reward_distance
             else:
                 raw_price = weighted_entry - reward_distance
@@ -802,15 +742,11 @@ class ExecutionPlanner:
                 raise ExecutionPlanningError("Derived take profit is not positive")
 
             if previous_price is not None:
-                if intent.side is Side.LONG and price <= previous_price:
-                    raise ExecutionPlanningError(
-                        "V2 take-profit levels collapse after rounding"
-                    )
+                if side is Side.LONG and price <= previous_price:
+                    raise ExecutionPlanningError(collapsed_targets_error)
 
-                if intent.side is Side.SHORT and price >= previous_price:
-                    raise ExecutionPlanningError(
-                        "V2 take-profit levels collapse after rounding"
-                    )
+                if side is Side.SHORT and price >= previous_price:
+                    raise ExecutionPlanningError(collapsed_targets_error)
 
             targets.append(
                 PlannedTakeProfit(
