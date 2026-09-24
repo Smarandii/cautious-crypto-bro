@@ -113,9 +113,11 @@ Position relationship rules:
 OPEN trade rules:
 - only USDT linear/perpetual-style symbols
 - NEW and ADD_OR_REENTRY candidates require symbol, LONG/SHORT,
-  entry semantics, and stop loss
+  explicit entry semantics; stop loss and take profit are optional
 - UPDATE_EXISTING may omit entry or stop loss because it is informational
-- take profit is optional
+- omit missing stop loss and take profit; the execution planner supplies policy defaults
+- symbol and direction alone, market commentary, or possible future areas without
+  a clear entry instruction are not executable OPEN candidates
 - MARKET when the author clearly says enter now/at market, clearly states
   they entered now, or an exchange screenshot clearly shows the position
   is already open
@@ -123,7 +125,7 @@ OPEN trade rules:
   historical/average entry prices shown in the screenshot
 - if one current exchange screenshot shows multiple distinct live positions,
   extract EACH valid position as its own independent OPEN candidate when its
-  symbol, side, and stop loss are available
+  symbol and side are available
 - do not emit a fake REDUCE/CLOSE placeholder merely because another live
   position is visible in the screenshot
 - when no explicit lifecycle instruction exists for a visible position,
@@ -262,7 +264,7 @@ def _evaluation_fingerprint(
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 9,
+        "cache_version": 10,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
@@ -909,7 +911,7 @@ def _signals_from_extraction(
 
         entry = _entry_from_transport(raw)
 
-        if side is None or entry is None or raw.stop_loss is None:
+        if side is None or entry is None:
             logger.warning(
                 "Dropping incomplete OPEN candidate from %s/%s for %s",
                 source.channel_id,

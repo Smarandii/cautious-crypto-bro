@@ -61,6 +61,11 @@ class ExecutionOrderType(StrEnum):
     LIMIT = "LIMIT"
 
 
+class StopLossSource(StrEnum):
+    TRADER = "TRADER"
+    POLICY = "POLICY"
+
+
 class TakeProfitSource(StrEnum):
     TRADER = "TRADER"
     POLICY = "POLICY"
@@ -381,7 +386,7 @@ class TradingIntent(BaseModel):
     symbol: str
     side: Side
     entry: Entry
-    stop_loss: float = Field(gt=0)
+    stop_loss: float | None = Field(default=None, gt=0)
     take_profit: float | None = Field(default=None, gt=0)
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
@@ -410,7 +415,7 @@ class TradingIntent(BaseModel):
         self.symbol = _normalize_usdt_symbol(self.symbol)
 
         if self.entry.type is EntryType.MARKET:
-            if self.take_profit is None:
+            if self.take_profit is None or self.stop_loss is None:
                 return self
 
             if self.side is Side.LONG and not self.stop_loss < self.take_profit:
@@ -433,14 +438,14 @@ class TradingIntent(BaseModel):
         high = max(value for value in references if value is not None)
 
         if self.side is Side.LONG:
-            if not self.stop_loss < low:
+            if self.stop_loss is not None and not self.stop_loss < low:
                 raise ValueError("LONG requires stop_loss below entry/range")
 
             if self.take_profit is not None and not high < self.take_profit:
                 raise ValueError("LONG requires take_profit above entry/range")
 
         else:
-            if not high < self.stop_loss:
+            if self.stop_loss is not None and not high < self.stop_loss:
                 raise ValueError("SHORT requires stop_loss above entry/range")
 
             if self.take_profit is not None and not self.take_profit < low:
@@ -588,6 +593,8 @@ class ExitPolicy(BaseModel):
 
 class StrategyV2Policy(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    fallback_stop_distance_pct: Decimal = Field(default=Decimal("2"), gt=0, lt=100)
 
     primary_entry_risk_pct: Decimal = Field(
         default=Decimal("60"),
@@ -874,6 +881,7 @@ class ExecutionPlan(BaseModel):
         max_length=20,
     )
     stop_loss: Decimal = Field(gt=0)
+    stop_loss_source: StopLossSource = StopLossSource.TRADER
     take_profit: Decimal = Field(gt=0)
     take_profit_targets: tuple[
         PlannedTakeProfit,

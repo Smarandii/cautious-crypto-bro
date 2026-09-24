@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import (
+    ROUND_CEILING,
     ROUND_DOWN,
+    ROUND_FLOOR,
     ROUND_HALF_UP,
     Decimal,
 )
@@ -15,6 +17,7 @@ from .domain import (
     PlannedOrder,
     PlannedTakeProfit,
     Side,
+    StopLossSource,
     StrategyV2Policy,
     TakeProfitSource,
     TradingIntent,
@@ -49,12 +52,8 @@ class ExecutionPlanner:
         policy: ExecutionPolicy,
         context: InstrumentContext,
     ) -> ExecutionPlan:
-        stop_loss = self._round_price(
-            Decimal(str(intent.stop_loss)),
-            context.tick_size,
-        )
-
         strategy = policy.strategy_v2
+        stop_loss, stop_source = self._resolve_stop_loss(intent, strategy, context)
 
         entry_specs = self._entry_specs(
             intent,
@@ -148,6 +147,7 @@ class ExecutionPlanner:
             side=intent.side,
             orders=orders,
             stop_loss=stop_loss,
+            stop_loss_source=stop_source,
             take_profit=(take_profit_targets[-1].price),
             take_profit_targets=(take_profit_targets),
             take_profit_source=(take_profit_source),
@@ -160,6 +160,43 @@ class ExecutionPlanner:
             policy=policy.model_copy(deep=True),
             planned_max_loss_usdt=(planned_max_loss),
         )
+
+    def _resolve_stop_loss(
+        self,
+        intent: TradingIntent,
+        strategy: StrategyV2Policy,
+        context: InstrumentContext,
+    ) -> tuple[Decimal, StopLossSource]:
+        if intent.stop_loss is not None:
+            stop = self._round_price(Decimal(str(intent.stop_loss)), context.tick_size)
+            source = StopLossSource.TRADER
+        else:
+            if intent.entry.type is EntryType.MARKET:
+                anchor = context.market_price
+            elif intent.entry.type is EntryType.LIMIT:
+                anchor = Decimal(str(intent.entry.price))
+            else:
+                anchor = Decimal(
+                    str(
+                        intent.entry.range_low
+                        if intent.side is Side.LONG
+                        else intent.entry.range_high
+                    )
+                )
+            distance = strategy.fallback_stop_distance_pct / Decimal("100")
+            raw_stop = anchor * (
+                1 - distance if intent.side is Side.LONG else 1 + distance
+            )
+            rounding = ROUND_FLOOR if intent.side is Side.LONG else ROUND_CEILING
+            stop = (raw_stop / context.tick_size).to_integral_value(
+                rounding=rounding
+            ) * context.tick_size
+            source = StopLossSource.POLICY
+        if stop <= 0:
+            raise ExecutionPlanningError(
+                "Stop loss must be positive after tick rounding"
+            )
+        return stop, source
 
     def rebase_market_plan(
         self,

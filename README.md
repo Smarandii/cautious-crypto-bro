@@ -54,6 +54,18 @@ Strategy V2
 
 New OPEN signals use Strategy V2.
 
+Executable OPEN signals require a symbol, LONG/SHORT direction, and an explicit
+LIMIT price, RANGE, or MARKET instruction. Stop loss and take profit are optional;
+the extractor never invents prices. Missing SL uses
+`StrategyV2Policy.fallback_stop_distance_pct` (default 2%): below the live MARKET
+price or LIMIT price for LONG, above for SHORT. RANGE uses the adverse edge
+(LONG: lower boundary; SHORT: upper boundary). Stops round outward to exchange
+ticks. Trader stops take precedence. Execution plans store the concrete stop and
+`stop_loss_source` (`TRADER` or `POLICY`), displayed on approval cards.
+Risk budget sizes positions after choosing the stop; it does not set stop distance.
+Actual MARKET fills retain that original stop. Missing entry semantics, symbol,
+or direction remain non-executable. Policy-derived targets retain existing R rules.
+
 
 
 Default entry risk:
