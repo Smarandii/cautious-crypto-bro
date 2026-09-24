@@ -34,6 +34,7 @@ class EntryType(StrEnum):
 
 
 class PositionActionType(StrEnum):
+    CANCEL_ENTRIES = "CANCEL_ENTRIES"
     REDUCE = "REDUCE"
     CLOSE = "CLOSE"
 
@@ -490,8 +491,8 @@ class PositionActionIntent(BaseModel):
         if self.action is PositionActionType.REDUCE and self.close_pct is None:
             raise ValueError("REDUCE requires close_pct")
 
-        if self.action is PositionActionType.CLOSE and self.close_pct is not None:
-            raise ValueError("CLOSE must not contain close_pct")
+        if self.action is not PositionActionType.REDUCE and self.close_pct is not None:
+            raise ValueError("Only REDUCE may contain close_pct")
 
         return self
 

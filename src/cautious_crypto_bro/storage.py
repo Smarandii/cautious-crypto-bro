@@ -1052,8 +1052,12 @@ class IntentStore:
                     (IntentStatus.EXECUTING.value,),
                 )
                 action_symbols = {
-                    PositionActionIntent.model_validate_json(row[0]).symbol
+                    action.symbol
                     for row in await cursor.fetchall()
+                    if (
+                        action := PositionActionIntent.model_validate_json(row[0])
+                    ).action
+                    is not PositionActionType.CANCEL_ENTRIES
                 }
                 intent_ids = await self._quarantine_executing_records(
                     db,
@@ -1505,6 +1509,74 @@ class IntentStore:
             except Exception:
                 await db.rollback()
                 raise
+
+    async def entry_cancellation_targets(
+        self, action: PositionActionIntent
+    ) -> tuple[UUID, ...]:
+        rows = await self._fetch(
+            "SELECT payload_json FROM intents WHERE channel_id = ? AND status IN (?, ?, ?, ?, ?)",
+            (
+                action.source.channel_id,
+                IntentStatus.EXECUTING.value,
+                IntentStatus.FAILED.value,
+                IntentStatus.PENDING.value,
+                IntentStatus.EXECUTED.value,
+                IntentStatus.UNCERTAIN.value,
+            ),
+            many=True,
+        )
+        intents = (TradingIntent.model_validate_json(row[0]) for row in rows)
+        return tuple(
+            i.intent_id
+            for i in intents
+            if i.symbol == action.symbol
+            and i.source.published_at <= action.source.published_at
+            and (action.expected_side is None or i.side is action.expected_side)
+        )
+
+    async def record_entry_cancellation(
+        self,
+        action: PositionActionIntent,
+        targets: tuple[UUID, ...],
+        *,
+        complete: bool = False,
+        flat: bool = False,
+        error: str | None = None,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            for ident in targets:
+                await db.execute(
+                    "UPDATE intents SET status = ?, error = ?, updated_at = CURRENT_TIMESTAMP WHERE intent_id = ? AND status IN (?, ?)",
+                    (
+                        IntentStatus.SKIPPED.value,
+                        "Entry withdrawn by source",
+                        str(ident),
+                        IntentStatus.PENDING.value,
+                        IntentStatus.EXECUTING.value,
+                    ),
+                )
+                await db.execute(
+                    "UPDATE position_strategies SET entry_frozen = 1, rebalance_needed = 1, updated_at = CURRENT_TIMESTAMP WHERE strategy_id = ? AND status != ?",
+                    (str(ident), StrategyStatus.CLOSED.value),
+                )
+                if complete and flat:
+                    await db.execute(
+                        "UPDATE position_strategies SET status = ?, rebalance_needed = 0, updated_at = CURRENT_TIMESTAMP WHERE strategy_id = ?",
+                        (StrategyStatus.CLOSED.value, str(ident)),
+                    )
+            if complete or error is not None:
+                await db.execute(
+                    "UPDATE position_actions SET status = ?, error = ?, updated_at = CURRENT_TIMESTAMP WHERE action_id = ?",
+                    (
+                        IntentStatus.EXECUTED.value
+                        if complete
+                        else IntentStatus.UNCERTAIN.value,
+                        error,
+                        str(action.action_id),
+                    ),
+                )
+            await db.commit()
 
     async def mark_position_action_failed(
         self,

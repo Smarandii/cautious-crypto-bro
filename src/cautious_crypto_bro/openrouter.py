@@ -145,6 +145,12 @@ OPEN trade rules:
 - never invent a stop, entry, target, or range boundary
 
 Existing-position action rules:
+- CANCEL_ENTRIES cancels pending entry orders, never positions or protection.
+  Emit it for explicit current-caption cancellation of a named symbol's limit/
+  entry orders (including "INJ улетела. Отменяем лимитку"). Include the symbol
+  and cancellation instruction in evidence_text. Do not emit CLOSE instead.
+  Separate canceled symbols from retained orders: "cancel INJ, keep AVAX" cancels
+  INJ only. Scope is the current source channel's earlier entries for that symbol.
 - position actions are account-wide operations on the current position for
   the extracted symbol; they are NOT new opposite-side trades
 - REDUCE means partially close an existing position
@@ -271,7 +277,7 @@ def _evaluation_fingerprint(
     source = post.source
 
     fingerprint_payload = {
-        "cache_version": 11,
+        "cache_version": 12,
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": (IntentExtraction.model_json_schema()),
@@ -790,6 +796,32 @@ def _current_post_action_evidence(
     if not post_text:
         return None
 
+    if action_type is PositionActionType.CANCEL_ENTRIES:
+        # Bind the ticker to this instruction, never arbitrary nearby text.
+        clauses = re.split(r"[.!?…;\n]+", source.text)
+        for index, clause in enumerate(clauses):
+            normalized = _normalize_evidence_text(clause)
+            match = re.search(
+                r"\b(?:cancel|отменяем|отменить|отменяю)\b[^.!?\n]{0,60}?"
+                r"(?:лимит\w*|заявк\w*|ордер\w*|entr\w*|limit\w*|orders?)",
+                normalized,
+            )
+            if match is None or re.search(
+                r"\b(?:не|not|don't|never)\s+(?:cancel|отмен\w*)", normalized
+            ):
+                continue
+            # Uppercase ticker tokens are evidence from the actual post.
+            tickers = re.findall(r"\b[A-Z][A-Z0-9]{1,14}\b", clause)
+            scope = normalized
+            if not tickers and index:
+                previous = clauses[index - 1]
+                tickers = re.findall(r"\b[A-Z][A-Z0-9]{1,14}\b", previous)
+                scope = _normalize_evidence_text(previous) + ". " + normalized
+            variants = _symbol_close_variants(symbol)
+            if tickers and all(t.lower() in variants for t in tickers):
+                return scope
+        return None
+
     if (
         action_type is PositionActionType.REDUCE
         and _optional_reduce_overridden_by_self_hold(post_text)
@@ -1029,7 +1061,7 @@ def _signals_from_extraction(
             raw.side
         )
 
-        if action_type is PositionActionType.CLOSE:
+        if action_type is not PositionActionType.REDUCE:
             close_pct = None
         else:
             close_pct = _reduction_pct_from_evidence(action_evidence)

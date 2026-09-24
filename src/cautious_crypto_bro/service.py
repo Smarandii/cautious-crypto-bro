@@ -22,6 +22,7 @@ from .domain import (
     IntentStatus,
     OpenRelation,
     PositionActionIntent,
+    PositionActionType,
     SignalPositionContext,
     TradingIntent,
 )
@@ -246,6 +247,10 @@ class SignalService:
                 action.action.value,
                 action.symbol,
             )
+
+        if action.action is PositionActionType.CANCEL_ENTRIES:
+            # Execution resolves ownership from durable source records, not position count.
+            return ApprovalMode.AUTO
 
         positions = tuple(
             position

@@ -952,6 +952,10 @@ class BybitDemoExecutor:
         self,
         action: PositionActionIntent,
     ) -> PositionActionExecutionResult:
+        if action.action is PositionActionType.CANCEL_ENTRIES:
+            raise PositionActionPreflightError(
+                "Entry cancellation requires source-scoped coordinator"
+            )
         self._sync_clock()
 
         initial_exposure = self._exposure_sync(action.symbol)

@@ -314,6 +314,14 @@ class ExecutionCoordinator:
         effective_plan = plan
 
         async with self._execution_lock:
+            current = await self._store.get_intent(intent_id)
+            if current is not None and current.status is IntentStatus.SKIPPED:
+                return IntentExecutionOutcome(
+                    status=current.status,
+                    message="Entry withdrawn by source",
+                    intent=current,
+                    plan=plan,
+                )
             strategy_created = False
             primary_filled = False
             try:
@@ -482,6 +490,8 @@ class ExecutionCoordinator:
         result: PositionActionExecutionResult | None = None
 
         async with self._execution_lock:
+            if action.action is PositionActionType.CANCEL_ENTRIES:
+                return await self._cancel_entries(action)
             try:
                 result = await self._executor.execute_position_action(action)
                 await self._confirm_position_action(action, result)
@@ -533,4 +543,57 @@ class ExecutionCoordinator:
             message="Executed on Bybit Demo",
             action=action,
             result=result,
+        )
+
+    async def _cancel_entries(
+        self, action: PositionActionIntent
+    ) -> PositionActionExecutionOutcome:
+        targets = await self._store.entry_cancellation_targets(action)
+        if not targets:
+            message = "No earlier entries owned by this source for this symbol"
+            await self._store.mark_position_action_failed(action.action_id, message)
+            return PositionActionExecutionOutcome(
+                status=IntentStatus.FAILED, message=message, action=action
+            )
+        prefixes = tuple(f"ccb-v2-{ident.hex[:20]}-e" for ident in targets)
+
+        def owned(order):
+            return (
+                order.symbol == action.symbol
+                and order.order_link_id.startswith(prefixes)
+                and not order.reduce_only
+                and not order.is_protective
+            )
+
+        cancelled = 0
+        try:
+            await self._store.record_entry_cancellation(action, targets)
+            state = await self._executor.account_state()
+            for order in state.open_orders:
+                if owned(order):
+                    await self._executor.cancel_order(action.symbol, order.order_id)
+                    cancelled += 1
+            for attempt in range(20):
+                state = await self._executor.account_state()
+                if not any(owned(o) for o in state.open_orders):
+                    break
+                if attempt == 19:
+                    raise RuntimeError("Entry cancellation not confirmed")
+                await asyncio.sleep(0.25)
+            await self._store.record_entry_cancellation(
+                action,
+                targets,
+                complete=True,
+                flat=not any(p.symbol == action.symbol for p in state.positions),
+            )
+        except Exception as exc:
+            message = f"Entry cancellation uncertain: {exc}"
+            await self._store.record_entry_cancellation(action, targets, error=message)
+            return PositionActionExecutionOutcome(
+                status=IntentStatus.UNCERTAIN, message=message, action=action
+            )
+        return PositionActionExecutionOutcome(
+            status=IntentStatus.EXECUTED,
+            message=f"Cancelled {cancelled} source-owned entry orders; positions and protection preserved",
+            action=action,
         )

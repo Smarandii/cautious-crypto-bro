@@ -23,7 +23,7 @@ Fill `.env` with credentials and account/channel IDs from [.env.example](.env.ex
 The dialog helper authorizes the Telegram session.
 
 `AUTO_APPROVAL_MODE` defaults to `disabled`; `open_only` enables eligible OPEN
-signals, and `all` also enables eligible REDUCE/CLOSE actions. Both manual and
+signals, and `all` also enables eligible REDUCE/CLOSE/CANCEL_ENTRIES actions. Both manual and
 AUTO entries reject symbols already controlled by an active strategy or live
 exposure/orders. Independent V2 ladders cannot share a net position.
 
@@ -33,6 +33,9 @@ exposure/orders. Independent V2 ladders cannot share a net position.
   Missing stops use a deterministic 2% fallback; missing targets use policy exits.
 - Profit/holding updates do not authorize new entries. REDUCE/CLOSE require
   explicit current-caption evidence; images can identify symbol/side.
+- CANCEL_ENTRIES withdraws earlier pending entries from the same Telegram source
+  and symbol. Positions, protection, other sources and newer entries remain intact.
+  Ambiguous cancellation stays UNCERTAIN; restart never retries it automatically.
 - Plans freeze wallet capital and a default 1% price-risk budget.
   Fees and stop slippage can make realized losses larger.
 - MARKET E1 fills before E2/E3 are calculated and submitted.

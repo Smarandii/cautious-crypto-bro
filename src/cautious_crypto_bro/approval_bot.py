@@ -244,7 +244,9 @@ class ApprovalBot:
             )
 
         execute_label = (
-            "Execute close"
+            "Cancel source entries"
+            if action.action is PositionActionType.CANCEL_ENTRIES
+            else "Execute close"
             if action.action is PositionActionType.CLOSE
             else "Execute reduction"
         )
@@ -619,6 +621,15 @@ class ApprovalBot:
         account_state_error: str | None = None,
     ) -> str:
         source_line = ApprovalBot._source_line(action.source.telegram_url)
+
+        if action.action is PositionActionType.CANCEL_ENTRIES:
+            return (
+                f"<b>CANCEL ENTRIES {html.escape(action.symbol)}</b>\n\n"
+                "Cancel pending CCB entries from this source only.\n"
+                "Positions, stops, exits and other sources are preserved.\n"
+                "Ownership is rechecked on Execute.\n\n"
+                f"Trader: <b>{html.escape(action.source.channel_title)}</b>\n{source_line}"
+            )
 
         if action.action is PositionActionType.CLOSE:
             instruction = "Close 100%"
