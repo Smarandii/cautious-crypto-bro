@@ -26,6 +26,8 @@ The dialog helper authorizes the Telegram session.
 signals, and `all` also enables eligible REDUCE/CLOSE/CANCEL_ENTRIES actions. Both manual and
 AUTO entries reject symbols already controlled by an active strategy or live
 exposure/orders. Independent V2 ladders cannot share a net position.
+Every AUTO result includes an account preview fetched after execution, including
+recovered actions. Preview failures do not suppress the execution result.
 
 ## Behavior
 

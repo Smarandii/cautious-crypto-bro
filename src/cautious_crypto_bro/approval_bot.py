@@ -146,7 +146,7 @@ class ApprovalBot:
             reply_markup=reply_markup,
         )
 
-    async def _send_account_snapshot(
+    async def send_account_snapshot(
         self,
         state: AccountStateSummary | None,
         *,
@@ -181,7 +181,7 @@ class ApprovalBot:
         send_account_state: bool = True,
     ) -> None:
         if send_account_state:
-            await self._send_account_snapshot(
+            await self.send_account_snapshot(
                 account_state,
                 state_error=account_state_error,
                 pnl=account_pnl,
@@ -236,7 +236,7 @@ class ApprovalBot:
         send_account_state: bool = True,
     ) -> None:
         if send_account_state:
-            await self._send_account_snapshot(
+            await self.send_account_snapshot(
                 account_state,
                 state_error=account_state_error,
                 pnl=account_pnl,

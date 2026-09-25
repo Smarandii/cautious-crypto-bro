@@ -27,7 +27,11 @@ from .domain import (
     TradingIntent,
 )
 from .execution import ExecutionPlanner
-from .execution_coordinator import ExecutionCoordinator
+from .execution_coordinator import (
+    ExecutionCoordinator,
+    IntentExecutionOutcome,
+    PositionActionExecutionOutcome,
+)
 from .openrouter import IntentExtractor
 from .signal_context import SignalContextProvider
 from .storage import IntentStore
@@ -284,6 +288,31 @@ class SignalService:
 
         return ApprovalMode.AUTO
 
+    async def _send_auto_outcome(
+        self, outcome: IntentExecutionOutcome | PositionActionExecutionOutcome
+    ) -> None:
+        # Fetch after execution so the preview includes the resulting account state.
+        state = pnl = None
+        state_error = pnl_error = None
+        try:
+            state = await self._executor.account_state()
+        except Exception as exc:
+            state_error = f"{type(exc).__name__}: {exc}"
+        try:
+            pnl = await self._sync_account_pnl()
+        except Exception as exc:
+            pnl_error = f"{type(exc).__name__}: {exc}"
+        try:
+            await self._approval_bot.send_account_snapshot(
+                state, state_error=state_error, pnl=pnl, pnl_error=pnl_error
+            )
+        except Exception:
+            logger.exception("AUTO account preview delivery failed")
+        if isinstance(outcome, IntentExecutionOutcome):
+            await self._approval_bot.send_auto_intent_outcome(outcome)
+        else:
+            await self._approval_bot.send_auto_action_outcome(outcome)
+
     async def recover_auto_execution(
         self,
     ) -> None:
@@ -313,7 +342,7 @@ class SignalService:
             )
 
             try:
-                await self._approval_bot.send_auto_intent_outcome(outcome)
+                await self._send_auto_outcome(outcome)
             except Exception:
                 logger.exception(
                     "Failed to send recovered AUTO intent outcome %s",
@@ -340,7 +369,7 @@ class SignalService:
             )
 
             try:
-                await self._approval_bot.send_auto_action_outcome(outcome)
+                await self._send_auto_outcome(outcome)
             except Exception:
                 logger.exception(
                     "Failed to send recovered AUTO action outcome %s",
@@ -592,7 +621,7 @@ class SignalService:
                 )
 
                 try:
-                    await self._approval_bot.send_auto_intent_outcome(outcome)
+                    await self._send_auto_outcome(outcome)
                 except Exception:
                     logger.exception(
                         "AUTO outcome delivery failed for intent %s",
@@ -641,7 +670,7 @@ class SignalService:
                 )
 
                 try:
-                    await self._approval_bot.send_auto_action_outcome(outcome)
+                    await self._send_auto_outcome(outcome)
                 except Exception:
                     logger.exception(
                         "AUTO outcome delivery failed for action %s",
