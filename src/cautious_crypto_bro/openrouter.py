@@ -420,11 +420,11 @@ _LIFECYCLE_NEGATION_PATTERNS: tuple[
     ...,
 ] = (
     re.compile(
-        r"\bне\s+"
+        r"\b(?:не|нельзя)\s+"
         r"(?:(?:надо|нужно|стоит|будем)\s+)?"
         r"(?:сейчас\s+)?"
         r"(?:"
-        r"закрыва\w*|закрыть|"
+        r"закрыва\w*|закрыть|закроем|"
         r"фиксир\w*|"
         r"тейк\w*|"
         r"выхож\w*|выход\w*"
@@ -441,10 +441,17 @@ _LIFECYCLE_NEGATION_PATTERNS: tuple[
 )
 
 
+# Observed current-caption suggestions; bare future "закроем" is not enough.
+_SUGGESTED_REDUCE_PATTERN = re.compile(
+    r"\b(?:часть\s+можно\s+закрыть|давайте\s+закроем\s+часть)\b"
+)
+
+
 _REDUCE_INSTRUCTION_PATTERNS: tuple[
     re.Pattern[str],
     ...,
 ] = (
+    _SUGGESTED_REDUCE_PATTERN,
     # Russian take-profit milestone, unspecified size.
     # Example: "Фиксируем 3 тейк".
     # The ordinal identifies the TP milestone, not position size.
@@ -697,6 +704,13 @@ def _deterministic_action_evidence(
     normalized = _normalize_evidence_text(text)
 
     if not normalized:
+        return None
+
+    if _SUGGESTED_REDUCE_PATTERN.search(normalized) and re.search(
+        r"\b(?:если|когда|при|после|потом|позже|завтра|вчера)\b", normalized
+    ):
+        # A suggestion tied to a future condition or a recap is not an action
+        # now, and must not fall through to the generic CLOSE matcher either.
         return None
 
     if (

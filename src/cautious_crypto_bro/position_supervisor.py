@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import (
@@ -81,6 +82,7 @@ class PositionSupervisor:
             self._reported_uncertain.intersection_update(uncertain_ids)
 
             account: AccountStateSummary | None = None
+            first_error: Exception | None = None
 
             by_symbol: dict[
                 str,
@@ -133,11 +135,28 @@ class PositionSupervisor:
                 if account is None:
                     account = await self._executor.account_state()
 
-                account = await self._reconcile(
-                    state,
-                    plan,
-                    account,
-                )
+                try:
+                    account = await self._reconcile(state, plan, account)
+                except sqlite3.Error:
+                    # All strategies share durable storage; no further trading
+                    # is safe when its state cannot be read or committed.
+                    raise
+                except Exception as exc:
+                    logger.exception(
+                        "Strategy %s %s reconciliation failed",
+                        state.strategy_id,
+                        symbol,
+                    )
+                    if first_error is None:
+                        first_error = exc
+                    # A mutation may have succeeded before the error. Refresh
+                    # account state before reconciling another strategy.
+                    account = None
+
+        # Preserve fail-closed startup and direct callers without starving
+        # healthy symbols in the recurring supervisor loop.
+        if first_error is not None:
+            raise first_error
 
     async def _reconcile(
         self,

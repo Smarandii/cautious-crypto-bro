@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from cautious_crypto_bro.domain import (
     IncomingPost,
     IntentExtraction,
@@ -1128,3 +1130,36 @@ def test_reduce_percentage_is_read_from_action_clause_not_other_sentence() -> No
 
     assert len(result.position_actions) == 1
     assert result.position_actions[0].close_pct == 30
+
+
+@pytest.mark.parametrize(
+    "caption,expected_pct",
+    [
+        ("Часть можно закрыть 💃", 50),
+        ("Давайте закроем часть тут ❤️", 50),
+        ("Давайте закроем часть тут, 25% позиции ❤️", 25),
+        ("Часть можно не закрыть", None),
+        ("Часть нельзя закрыть", None),
+        ("Давайте не закроем часть", None),
+        ("Если цена дойдет до цели, часть можно закрыть", None),
+        ("Если цена дойдет до цели, давайте закроем часть", None),
+        ("Часть можно закрыть, когда цена дойдет до цели", None),
+        ("Вчера часть закрыли", None),
+        ("Если переживаете, можете закрыть часть, я пока держу", None),
+    ],
+)
+def test_observed_partial_close_captions_are_scoped(caption, expected_pct) -> None:
+    item = source().model_copy(update={"text": caption})
+    extraction = _audit_position_action_extraction(
+        symbol="AKEUSDT", action="REDUCE", evidence_text=None
+    )
+    signals = _signals_from_extraction(item, extraction)
+    assert [action.close_pct for action in signals.position_actions] == (
+        [] if expected_pct is None else [expected_pct]
+    )
+
+    # A partial or negated instruction must never authorize a full close.
+    extraction = _audit_position_action_extraction(
+        symbol="AKEUSDT", action="CLOSE", evidence_text=None
+    )
+    assert not _signals_from_extraction(item, extraction).position_actions

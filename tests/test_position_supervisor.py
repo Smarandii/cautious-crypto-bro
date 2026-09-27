@@ -1,11 +1,15 @@
 import asyncio
 import logging
+import sqlite3
 from dataclasses import replace
 from datetime import (
     UTC,
     datetime,
 )
 from decimal import Decimal
+from unittest.mock import AsyncMock
+
+import pytest
 
 from cautious_crypto_bro.bybit import (
     AccountOrder,
@@ -732,6 +736,121 @@ def test_uncertain_strategy_does_not_block_other_symbols() -> None:
     assert store.state.status is StrategyStatus.UNCERTAIN
     assert store.active.status is StrategyStatus.CLOSING
     assert store.active.last_position_qty == Decimal("4.08")
+
+
+def test_failed_strategy_does_not_starve_other_symbols(monkeypatch, caplog) -> None:
+    plans = [plan(symbol) for symbol in ("BTCUSDT", "ETHUSDT")]
+    states = [
+        PositionStrategy(
+            strategy_id=item.intent_id,
+            symbol=item.symbol,
+            side=Side.LONG,
+            status=StrategyStatus.CLOSING,
+        )
+        for item in plans
+    ]
+    store = Store(states[0], plans[0])
+    store.get_active_position_strategies = AsyncMock(
+        return_value=list(zip(states, plans, strict=True))
+    )
+    store.save_position_strategy = AsyncMock()
+    executor = Executor()
+    executor.state = replace(
+        executor.state,
+        positions=(replace(executor.state.positions[0], symbol="ETHUSDT"),),
+    )
+    supervisor = PositionSupervisor(
+        store=store, executor=executor, mutation_lock=asyncio.Lock()
+    )
+    reconcile = supervisor._reconcile
+    visited = []
+
+    async def fail_after_mutation(state, strategy_plan, account):
+        visited.append(state.symbol)
+        if state.symbol == "BTCUSDT":
+            # An exchange mutation can succeed before its response is lost.
+            position = executor.state.positions[0]
+            executor.state = replace(
+                executor.state,
+                positions=(replace(position, size=position.size / 2),),
+            )
+            raise RuntimeError("BTC reconciliation failed")
+        return await reconcile(state, strategy_plan, account)
+
+    monkeypatch.setattr(supervisor, "_reconcile", fail_after_mutation)
+    for _ in range(2):
+        # Callers such as startup still receive the failure, after healthy work.
+        with pytest.raises(RuntimeError, match="BTC reconciliation failed"):
+            asyncio.run(supervisor.reconcile_once())
+
+    assert visited == ["BTCUSDT", "ETHUSDT", "BTCUSDT", "ETHUSDT"]
+    assert executor.account_state_calls == 4
+    assert [
+        call.args[0].last_position_qty
+        for call in store.save_position_strategy.await_args_list
+    ] == [Decimal("2.04"), Decimal("1.02")]
+    assert str(states[0].strategy_id) in caplog.text
+    assert "BTCUSDT" in caplog.text
+    assert not supervisor._mutation_lock.locked()
+
+
+@pytest.mark.parametrize(
+    "failure", ["account_read", "cancelled", "store_read", "store_write"]
+)
+def test_supervisor_does_not_continue_after_global_failure(
+    monkeypatch, failure
+) -> None:
+    strategy_plan = plan()
+    state = PositionStrategy(
+        strategy_id=strategy_plan.intent_id,
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        status=StrategyStatus.CLOSING,
+    )
+    store = Store(state, strategy_plan)
+    other_plan = plan("ETHUSDT")
+    store.get_active_position_strategies = AsyncMock(
+        return_value=[
+            (state, strategy_plan),
+            (
+                state.model_copy(
+                    update={"strategy_id": other_plan.intent_id, "symbol": "ETHUSDT"}
+                ),
+                other_plan,
+            ),
+        ]
+    )
+    executor = Executor()
+    supervisor = PositionSupervisor(
+        store=store, executor=executor, mutation_lock=asyncio.Lock()
+    )
+    reconcile = AsyncMock(wraps=supervisor._reconcile)
+    monkeypatch.setattr(supervisor, "_reconcile", reconcile)
+    error = (
+        asyncio.CancelledError()
+        if failure == "cancelled"
+        else RuntimeError("unavailable")
+    )
+    if failure == "account_read":
+        monkeypatch.setattr(executor, "account_state", AsyncMock(side_effect=error))
+    elif failure == "store_read":
+        monkeypatch.setattr(
+            store, "get_active_position_strategies", AsyncMock(side_effect=error)
+        )
+    elif failure == "store_write":
+        error = sqlite3.OperationalError("database or disk is full")
+        monkeypatch.setattr(
+            store, "save_position_strategy", AsyncMock(side_effect=error)
+        )
+    else:
+        reconcile.side_effect = error
+
+    with pytest.raises(type(error)):
+        asyncio.run(supervisor.reconcile_once())
+    assert reconcile.await_count == (
+        1 if failure in {"cancelled", "store_write"} else 0
+    )
+    assert not supervisor._mutation_lock.locked()
 
 
 def test_reduce_rebalance_skips_unchanged_protection() -> None:
