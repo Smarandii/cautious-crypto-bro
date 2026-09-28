@@ -10,7 +10,7 @@ import time
 import unicodedata
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from .domain import (
     Entry,
@@ -341,14 +341,8 @@ def _entry_from_transport(
 
     if isinstance(entry, str):
         entry_name = entry
-        nested_price = None
-        nested_range_low = None
-        nested_range_high = None
     elif isinstance(entry, ExtractedEntryPayload):
         entry_name = entry.type
-        nested_price = entry.price
-        nested_range_low = entry.range_low
-        nested_range_high = entry.range_high
     else:
         return None
 
@@ -365,15 +359,27 @@ def _entry_from_transport(
         # is intentionally ignored.
         return Entry(type=EntryType.MARKET)
 
-    price = raw.price if raw.price is not None else nested_price
+    price = (
+        raw.price
+        if raw.price is not None
+        else (entry.price if isinstance(entry, ExtractedEntryPayload) else None)
+    )
 
     if entry_type is EntryType.LIMIT:
         if price is None:
             return None
         return Entry(type=EntryType.LIMIT, price=price)
 
-    range_low = raw.range_low if raw.range_low is not None else nested_range_low
-    range_high = raw.range_high if raw.range_high is not None else nested_range_high
+    range_low = (
+        raw.range_low
+        if raw.range_low is not None
+        else (entry.range_low if isinstance(entry, ExtractedEntryPayload) else None)
+    )
+    range_high = (
+        raw.range_high
+        if raw.range_high is not None
+        else (entry.range_high if isinstance(entry, ExtractedEntryPayload) else None)
+    )
 
     if range_low is None or range_high is None:
         return None
@@ -1068,67 +1074,53 @@ def _signals_from_extraction(
     )
 
 
-class _OpenRouterChoiceError(BaseModel):
-    code: object = None
-    message: object = None
-
-
-class _OpenRouterChoiceMessage(BaseModel):
-    content: str
-
-
-class _OpenRouterChoice(BaseModel):
-    finish_reason: str | None = None
-    error: _OpenRouterChoiceError | None = None
-    message: _OpenRouterChoiceMessage | None = None
-
-
-class _OpenRouterResponse(BaseModel):
-    provider: str | None = None
-    choices: list[_OpenRouterChoice]
-
-
 def _completion_content(
     response_data: dict[str, object],
 ) -> str:
-    try:
-        response = _OpenRouterResponse.model_validate(response_data)
-    except ValidationError as exc:
-        raise ValueError(f"OpenRouter response is malformed: {exc}") from exc
-
-    if not response.choices:
+    choices = response_data.get("choices")
+    if not isinstance(choices, list) or not choices:
         raise ValueError("OpenRouter response contains no completion choices")
 
-    choice = response.choices[0]
-    provider = response.provider
-    provider_label = provider or "unknown"
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        raise ValueError("OpenRouter completion choice is invalid")
 
-    if choice.finish_reason == "length":
+    provider = _response_provider(response_data)
+
+    finish_reason = choice.get("finish_reason")
+    if finish_reason == "length":
         message = (
             "OpenRouter completion was truncated: "
-            f"provider={provider_label}, "
+            f"provider={provider or 'unknown'}, "
             "finish_reason=length"
         )
         if provider is not None:
             raise OpenRouterProviderFailure(provider, message)
         raise ValueError(message)
 
-    if choice.error is not None or choice.finish_reason == "error":
-        error = choice.error or _OpenRouterChoiceError()
+    error = choice.get("error")
+    if error is not None or finish_reason == "error":
+        error_code = error.get("code") if isinstance(error, dict) else None
+        error_message = error.get("message") if isinstance(error, dict) else None
         message = (
             "OpenRouter provider failure: "
-            f"provider={provider_label}, "
-            f"code={error.code}, "
-            f"message={error.message}"
+            f"provider={provider or 'unknown'}, "
+            f"code={error_code}, "
+            f"message={error_message}"
         )
         if provider is not None:
             raise OpenRouterProviderFailure(provider, message)
         raise ValueError(message)
 
-    if choice.message is None:
+    message = choice.get("message")
+    if not isinstance(message, dict):
         raise ValueError("OpenRouter response contains no assistant message")
 
-    return choice.message.content
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise ValueError("OpenRouter response content is not a string")
+
+    return content
 
 
 class OpenRouterProvider:

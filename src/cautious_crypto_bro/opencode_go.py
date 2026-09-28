@@ -67,17 +67,17 @@ def _response_text(
     if isinstance(output_text, str) and output_text:
         return output_text
 
-    parts: list[str] = []
     output = response_data.get("output")
-    for item in output if isinstance(output, list) else []:
-        if not isinstance(item, dict) or item.get("type") != "message":
-            continue
-        content = item.get("content")
-        for block in content if isinstance(content, list) else []:
-            if isinstance(block, dict) and block.get("type") == "output_text":
-                text = block.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
+    parts = [
+        text
+        for item in (output if isinstance(output, list) else [])
+        if isinstance(item, dict) and item.get("type") == "message"
+        for content in [item.get("content")]
+        for block in (content if isinstance(content, list) else [])
+        if isinstance(block, dict) and block.get("type") == "output_text"
+        for text in [block.get("text")]
+        if isinstance(text, str)
+    ]
 
     if not parts:
         raise ValueError("OpenCode Go response contains no output text")
