@@ -49,6 +49,19 @@ docker compose run --rm -T -v "$PWD/audit-output:/audit-output" \
 Add `--cache-only` to avoid fresh model calls; keep each audit's evidence separately.
 Offline comparison: `uv run python scripts/replay_strategy_v2.py <forensic-bundle>`.
 
+Corrected shadow diagnostic (offline, separate from the frozen primary run):
+
+```sh
+uv run python scripts/reconcile_shadow_actions.py --run-dir <archived-run> \
+  --engine <frozen-replay_engine.py> --output <new-output-directory>
+```
+
+Requires the archive's config, snapshot, inputs, summary and actual ledger JSON.
+Matches fully filled lifecycle orders before comparing exchange timestamps;
+unfilled actions remain unresolved. Pins the existing engine hash, preserves
+policies/window, refuses output overwrite, and reports baseline discrepancies.
+This execution-based diagnostic cannot reconstruct unexecuted source actions.
+
 Other tools in `scripts/` cover Telegram authorization, image-provider smoke checks,
 cooldown stress checks and configurable Bybit smoke planning.
 `smoke_bybit_trade.py --execute` submits Demo orders; default behavior is preview.
