@@ -10,12 +10,13 @@ import time
 import unicodedata
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from .domain import (
     Entry,
     EntryType,
     ExtractedEntryPayload,
+    ExtractedIntent,
     IncomingPost,
     IntentExtraction,
     OpenRelation,
@@ -334,26 +335,22 @@ def _side_from_transport(
 
 
 def _entry_from_transport(
-    raw,
+    raw: ExtractedIntent,
 ) -> Entry | None:
-    nested: ExtractedEntryPayload | None = None
-    entry_name: str | None = None
+    entry = raw.entry
 
-    if isinstance(raw.entry, str):
-        entry_name = raw.entry
-
-    elif isinstance(
-        raw.entry,
-        ExtractedEntryPayload,
-    ):
-        nested = raw.entry
-        entry_name = nested.type
-
-    if not entry_name:
-        entry_name = raw.entry_semantics
-
-    if not entry_name:
-        entry_name = raw.entry_type
+    if isinstance(entry, str):
+        entry_name = entry
+        nested_price = None
+        nested_range_low = None
+        nested_range_high = None
+    elif isinstance(entry, ExtractedEntryPayload):
+        entry_name = entry.type
+        nested_price = entry.price
+        nested_range_low = entry.range_low
+        nested_range_high = entry.range_high
+    else:
+        return None
 
     if not entry_name:
         return None
@@ -363,48 +360,30 @@ def _entry_from_transport(
     except ValueError:
         return None
 
-    price = (
-        raw.price
-        if raw.price is not None
-        else (nested.price if nested is not None else None)
-    )
+    if entry_type is EntryType.MARKET:
+        # Historical/average price attached to a MARKET signal
+        # is intentionally ignored.
+        return Entry(type=EntryType.MARKET)
 
-    range_low = (
-        raw.range_low
-        if raw.range_low is not None
-        else (nested.range_low if nested is not None else None)
-    )
+    price = raw.price if raw.price is not None else nested_price
 
-    range_high = (
-        raw.range_high
-        if raw.range_high is not None
-        else (nested.range_high if nested is not None else None)
-    )
+    if entry_type is EntryType.LIMIT:
+        if price is None:
+            return None
+        return Entry(type=EntryType.LIMIT, price=price)
+
+    range_low = raw.range_low if raw.range_low is not None else nested_range_low
+    range_high = raw.range_high if raw.range_high is not None else nested_range_high
+
+    if range_low is None or range_high is None:
+        return None
 
     try:
-        if entry_type is EntryType.MARKET:
-            # Historical/average price attached to a
-            # MARKET signal is intentionally ignored.
-            return Entry(type=EntryType.MARKET)
-
-        if entry_type is EntryType.LIMIT:
-            if price is None:
-                return None
-
-            return Entry(
-                type=EntryType.LIMIT,
-                price=price,
-            )
-
-        if range_low is None or range_high is None:
-            return None
-
         return Entry(
             type=EntryType.RANGE,
             range_low=range_low,
             range_high=range_high,
         )
-
     except ValidationError:
         return None
 
@@ -578,39 +557,6 @@ _CLOSE_INSTRUCTION_PATTERNS: tuple[
 )
 
 
-def _first_action_match(
-    patterns: tuple[
-        re.Pattern[str],
-        ...,
-    ],
-    text: str,
-) -> re.Match[str] | None:
-    for pattern in patterns:
-        match = pattern.search(text)
-
-        if match is not None:
-            return match
-
-    return None
-
-
-def _all_action_matches(
-    patterns: tuple[
-        re.Pattern[str],
-        ...,
-    ],
-    text: str,
-) -> tuple[re.Match[str], ...]:
-    return tuple(match for pattern in patterns for match in pattern.finditer(text))
-
-
-def _matches_overlap(
-    first: re.Match[str],
-    second: re.Match[str],
-) -> bool:
-    return first.start() < second.end() and second.start() < first.end()
-
-
 def _symbol_close_variants(
     symbol: str,
 ) -> tuple[str, ...]:
@@ -713,18 +659,13 @@ def _deterministic_action_evidence(
         # now, and must not fall through to the generic CLOSE matcher either.
         return None
 
-    if (
-        _first_action_match(
-            _LIFECYCLE_NEGATION_PATTERNS,
-            normalized,
-        )
-        is not None
-    ):
+    if any(pattern.search(normalized) for pattern in _LIFECYCLE_NEGATION_PATTERNS):
         return None
 
-    reduce_matches = _all_action_matches(
-        _REDUCE_INSTRUCTION_PATTERNS,
-        normalized,
+    reduce_matches = tuple(
+        m
+        for pattern in _REDUCE_INSTRUCTION_PATTERNS
+        for m in pattern.finditer(normalized)
     )
 
     if action_type is PositionActionType.REDUCE:
@@ -742,10 +683,8 @@ def _deterministic_action_evidence(
 
     if symbol_close is not None:
         if not any(
-            _matches_overlap(
-                symbol_close,
-                reduce_match,
-            )
+            symbol_close.start() < reduce_match.end()
+            and reduce_match.start() < symbol_close.end()
             for reduce_match in reduce_matches
         ):
             return symbol_close.group(0)
@@ -753,15 +692,14 @@ def _deterministic_action_evidence(
     # Generic CLOSE remains valid, but only when that
     # particular close phrase is not part of a REDUCE
     # instruction such as "close half".
-    for close_match in _all_action_matches(
-        _CLOSE_INSTRUCTION_PATTERNS,
-        normalized,
+    for close_match in (
+        m
+        for pattern in _CLOSE_INSTRUCTION_PATTERNS
+        for m in pattern.finditer(normalized)
     ):
         if any(
-            _matches_overlap(
-                close_match,
-                reduce_match,
-            )
+            close_match.start() < reduce_match.end()
+            and reduce_match.start() < close_match.end()
             for reduce_match in reduce_matches
         ):
             continue
@@ -1130,88 +1068,67 @@ def _signals_from_extraction(
     )
 
 
+class _OpenRouterChoiceError(BaseModel):
+    code: object = None
+    message: object = None
+
+
+class _OpenRouterChoiceMessage(BaseModel):
+    content: str
+
+
+class _OpenRouterChoice(BaseModel):
+    finish_reason: str | None = None
+    error: _OpenRouterChoiceError | None = None
+    message: _OpenRouterChoiceMessage | None = None
+
+
+class _OpenRouterResponse(BaseModel):
+    provider: str | None = None
+    choices: list[_OpenRouterChoice]
+
+
 def _completion_content(
     response_data: dict[str, object],
 ) -> str:
-    choices = response_data.get("choices")
+    try:
+        response = _OpenRouterResponse.model_validate(response_data)
+    except ValidationError as exc:
+        raise ValueError(f"OpenRouter response is malformed: {exc}") from exc
 
-    if not isinstance(choices, list) or not choices:
+    if not response.choices:
         raise ValueError("OpenRouter response contains no completion choices")
 
-    choice = choices[0]
-
-    if not isinstance(
-        choice,
-        dict,
-    ):
-        raise ValueError("OpenRouter completion choice is invalid")
-
-    provider = _response_provider(response_data)
-
+    choice = response.choices[0]
+    provider = response.provider
     provider_label = provider or "unknown"
 
-    provider_error = choice.get("error")
-
-    finish_reason = choice.get("finish_reason")
-
-    if finish_reason == "length":
+    if choice.finish_reason == "length":
         message = (
             "OpenRouter completion was truncated: "
             f"provider={provider_label}, "
             "finish_reason=length"
         )
-
         if provider is not None:
-            raise OpenRouterProviderFailure(
-                provider,
-                message,
-            )
-
+            raise OpenRouterProviderFailure(provider, message)
         raise ValueError(message)
 
-    if provider_error is not None or finish_reason == "error":
-        error_code = None
-        error_message = None
-
-        if isinstance(
-            provider_error,
-            dict,
-        ):
-            error_code = provider_error.get("code")
-            error_message = provider_error.get("message")
-
+    if choice.error is not None or choice.finish_reason == "error":
+        error = choice.error or _OpenRouterChoiceError()
         message = (
             "OpenRouter provider failure: "
             f"provider={provider_label}, "
-            f"code={error_code}, "
-            f"message={error_message}"
+            f"code={error.code}, "
+            f"message={error.message}"
         )
-
         if provider is not None:
-            raise OpenRouterProviderFailure(
-                provider,
-                message,
-            )
-
+            raise OpenRouterProviderFailure(provider, message)
         raise ValueError(message)
 
-    message = choice.get("message")
-
-    if not isinstance(
-        message,
-        dict,
-    ):
+    if choice.message is None:
         raise ValueError("OpenRouter response contains no assistant message")
 
-    content = message.get("content")
-
-    if not isinstance(
-        content,
-        str,
-    ):
-        raise ValueError("OpenRouter response content is not a string")
-
-    return content
+    return choice.message.content
 
 
 class OpenRouterProvider:

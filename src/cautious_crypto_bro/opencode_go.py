@@ -30,97 +30,54 @@ def _strict_response_schema(
     def normalize(value: object) -> object:
         if isinstance(value, list):
             return [normalize(item) for item in value]
-
         if not isinstance(value, dict):
             return value
 
-        if any(not isinstance(key, str) for key in value):
-            raise TypeError("JSON Schema keys must be strings")
-
-        result: dict[str, object] = {
-            str(key): normalize(item) for key, item in value.items() if key != "default"
+        result = {
+            key: normalize(item) for key, item in value.items() if key != "default"
         }
-
         properties = result.get("properties")
-
         if isinstance(properties, dict):
-            if any(not isinstance(key, str) for key in properties):
-                raise TypeError("JSON Schema property names must be strings")
-
-            result["required"] = [str(key) for key in properties]
+            result["required"] = list(properties)
             result["additionalProperties"] = False
-
         return result
 
     normalized = normalize(schema)
-
     if not isinstance(normalized, dict):
         raise TypeError("Response schema must normalize to an object")
-
-    return {str(key): value for key, value in normalized.items()}
+    return normalized
 
 
 def _response_text(
     response_data: dict[str, object],
 ) -> str:
     error = response_data.get("error")
-
     if error is not None:
-        if isinstance(error, dict):
-            message = error.get("message")
-        else:
-            message = error
-
+        message = error.get("message") if isinstance(error, dict) else error
         raise ValueError(f"OpenCode Go response error: {message}")
 
     status = response_data.get("status")
-
-    if status in {
-        "failed",
-        "cancelled",
-        "incomplete",
-    }:
+    if status in {"failed", "cancelled", "incomplete"}:
         details = response_data.get("incomplete_details")
-
         raise ValueError(
             f"OpenCode Go response did not complete: status={status}, details={details}"
         )
 
     output_text = response_data.get("output_text")
-
     if isinstance(output_text, str) and output_text:
         return output_text
 
-    output = response_data.get("output")
-
-    if not isinstance(output, list):
-        raise ValueError("OpenCode Go response contains no output")
-
     parts: list[str] = []
-
-    for item in output:
-        if not isinstance(item, dict):
+    output = response_data.get("output")
+    for item in output if isinstance(output, list) else []:
+        if not isinstance(item, dict) or item.get("type") != "message":
             continue
-
-        if item.get("type") != "message":
-            continue
-
         content = item.get("content")
-
-        if not isinstance(content, list):
-            continue
-
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-
-            if block.get("type") != "output_text":
-                continue
-
-            text = block.get("text")
-
-            if isinstance(text, str):
-                parts.append(text)
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict) and block.get("type") == "output_text":
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
 
     if not parts:
         raise ValueError("OpenCode Go response contains no output text")
