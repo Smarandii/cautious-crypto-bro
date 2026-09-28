@@ -15,7 +15,6 @@ from pydantic import ValidationError
 from .domain import (
     Entry,
     EntryType,
-    ExtractedEntryPayload,
     ExtractedIntent,
     IncomingPost,
     IntentExtraction,
@@ -338,14 +337,10 @@ def _entry_from_transport(
     raw: ExtractedIntent,
 ) -> Entry | None:
     entry = raw.entry
-
-    if isinstance(entry, str):
-        entry_name = entry
-    elif isinstance(entry, ExtractedEntryPayload):
-        entry_name = entry.type
-    else:
+    if entry is None:
         return None
 
+    entry_name = entry if isinstance(entry, str) else entry.type
     if not entry_name:
         return None
 
@@ -359,11 +354,7 @@ def _entry_from_transport(
         # is intentionally ignored.
         return Entry(type=EntryType.MARKET)
 
-    price = (
-        raw.price
-        if raw.price is not None
-        else (entry.price if isinstance(entry, ExtractedEntryPayload) else None)
-    )
+    price = raw.price if raw.price is not None else getattr(entry, "price", None)
 
     if entry_type is EntryType.LIMIT:
         if price is None:
@@ -373,12 +364,12 @@ def _entry_from_transport(
     range_low = (
         raw.range_low
         if raw.range_low is not None
-        else (entry.range_low if isinstance(entry, ExtractedEntryPayload) else None)
+        else getattr(entry, "range_low", None)
     )
     range_high = (
         raw.range_high
         if raw.range_high is not None
-        else (entry.range_high if isinstance(entry, ExtractedEntryPayload) else None)
+        else getattr(entry, "range_high", None)
     )
 
     if range_low is None or range_high is None:
