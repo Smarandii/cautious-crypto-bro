@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import httpx
 
-from cautious_crypto_bro.bybit import BybitDemoExecutor
+from cautious_crypto_bro.bybit import BybitClient, BybitDemoExecutor
 
 
 def test_account_state_reads_bybit_snapshot() -> None:
@@ -131,15 +131,15 @@ def test_account_state_reads_bybit_snapshot() -> None:
     )
 
     executor._client.close()
-    executor._client = httpx.Client(
+    executor._client._http_client = httpx.Client(
         base_url=("https://api-demo.bybit.com"),
         transport=httpx.MockTransport(handler),
     )
 
     try:
         with patch.object(
-            executor,
-            "_sync_clock",
+            executor._client._auth,
+            "sync_clock",
         ):
             state = executor._account_state_sync()
 
@@ -194,15 +194,21 @@ def test_wallet_balance_reads_total_wallet_balance() -> None:
 
     executor._client.close()
 
-    executor._client = httpx.Client(
+    executor._client = BybitClient(
+        base_url="https://api-demo.bybit.com",
+        api_key="key",
+        api_secret="secret",
+    )
+
+    executor._client._http_client = httpx.Client(
         base_url="https://api-demo.bybit.com",
         transport=httpx.MockTransport(handler),
     )
 
     try:
         with patch.object(
-            executor,
-            "_sync_clock",
+            executor._client._auth,
+            "sync_clock",
         ):
             balance = executor._wallet_balance_usdt_sync()
 

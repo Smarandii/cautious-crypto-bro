@@ -34,7 +34,7 @@ def test_entry_failure_only_closes_strategy_before_submission(tmp_path, stage):
             store, intent, plan, coordinator, _ = await prepare(
                 path, exchange, executor
             )
-            original_post = executor._private_post
+            original_post = executor._client.private_post
 
             def accepted_timeout(*args, **kwargs):
                 original_post(*args, **kwargs)
@@ -47,8 +47,8 @@ def test_entry_failure_only_closes_strategy_before_submission(tmp_path, stage):
                     side_effect=EntryPreflightError("Remaining legs failed validation")
                 )
             with patch.object(
-                executor,
-                "_private_post",
+                executor._client,
+                "private_post",
                 accepted_timeout if stage == "accepted_timeout" else original_post,
             ):
                 result = await coordinator.execute_intent(

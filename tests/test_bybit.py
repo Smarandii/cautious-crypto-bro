@@ -9,9 +9,10 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from cautious_crypto_bro.bybit import BybitDemoExecutor
+from cautious_crypto_bro.bybit import BybitClient, BybitDemoExecutor
 from cautious_crypto_bro.domain import (
     Entry,
+    EntryPreflightError,
     EntryType,
     ExecutionOrderType,
     ExecutionPlan,
@@ -67,7 +68,9 @@ def range_plan() -> ExecutionPlan:
     )
 
 
-def v2_range_plan() -> ExecutionPlan:
+def v2_range_plan(
+    side: Side = Side.LONG, entry_type: EntryType = EntryType.RANGE
+) -> ExecutionPlan:
     now = datetime.now(UTC)
     return ExecutionPlanner().plan(
         TradingIntent(
@@ -80,16 +83,22 @@ def v2_range_plan() -> ExecutionPlan:
                 text="test",
             ),
             symbol="BTCUSDT",
-            side=Side.LONG,
-            entry=Entry(type=EntryType.RANGE, range_low=100, range_high=110),
-            stop_loss=90,
+            side=side,
+            entry=(
+                Entry(type=EntryType.RANGE, range_low=100, range_high=110)
+                if entry_type is EntryType.RANGE
+                else Entry(
+                    type=EntryType.LIMIT, price=110 if side is Side.LONG else 100
+                )
+            ),
+            stop_loss=90 if side is Side.LONG else 120,
             take_profit=None,
             summary="test",
             confidence=1,
         ),
         policy(),
         InstrumentContext(
-            market_price=Decimal("120"),
+            market_price=Decimal("120" if side is Side.LONG else "90"),
             tick_size=Decimal("0.1"),
             qty_step=Decimal("0.001"),
             min_qty=Decimal("0.001"),
@@ -151,14 +160,20 @@ def test_clock_sync_compensates_for_local_drift() -> None:
 
     executor._client.close()
 
-    executor._client = httpx.Client(
+    executor._client = BybitClient(
+        base_url=("https://api-demo.bybit.com"),
+        api_key="key",
+        api_secret="secret",
+    )
+
+    executor._client._http_client = httpx.Client(
         base_url=("https://api-demo.bybit.com"),
         transport=(httpx.MockTransport(handler)),
     )
 
     try:
         with patch(
-            ("cautious_crypto_bro.bybit._wall_clock_ms"),
+            ("cautious_crypto_bro.bybit.auth._wall_clock_ms"),
             side_effect=[
                 100_000,
                 100_100,
@@ -166,22 +181,45 @@ def test_clock_sync_compensates_for_local_drift() -> None:
         ):
             executor._sync_clock(force=True)
 
-        assert executor._clock_offset_ms == 19_000
+        assert executor._client._auth._clock_offset_ms == 19_000
 
     finally:
         executor.close()
 
 
-def test_v2_range_plan_uses_batch_stop_only_entries() -> None:
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+@pytest.mark.parametrize("entry_type", [EntryType.LIMIT, EntryType.RANGE])
+@pytest.mark.parametrize("resting_distance", ["0", "0.1", "50"])
+def test_priced_entries_recheck_market_without_chasing(
+    side: Side, entry_type: EntryType, resting_distance: str
+) -> None:
+    plan = v2_range_plan(side, entry_type)
+    market_price = plan.orders[0].reference_price + Decimal(resting_distance) * (
+        1 if side is Side.LONG else -1
+    )
+    calls: list[str] = []
+
     def handler(
         request: httpx.Request,
     ) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/v5/market/tickers":
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "result": {"list": [{"lastPrice": str(market_price)}]},
+                },
+            )
         assert request.url.path == "/v5/order/create-batch"
 
         body = request.read().decode()
 
         assert body.count('"tpslMode":"Partial"') == 3
         assert '"takeProfit"' not in body
+        assert [Decimal(item["price"]) for item in json.loads(body)["request"]] == [
+            order.price for order in plan.orders
+        ]
 
         return httpx.Response(
             200,
@@ -221,23 +259,28 @@ def test_v2_range_plan_uses_batch_stop_only_entries() -> None:
 
     executor._client.close()
 
-    executor._client = httpx.Client(
+    executor._client = BybitClient(
+        base_url="https://api-demo.bybit.com", api_key="key", api_secret="secret"
+    )
+
+    executor._client._http_client = httpx.Client(
         base_url=("https://api-demo.bybit.com"),
         transport=(httpx.MockTransport(handler)),
     )
 
     try:
         with patch.object(
-            executor,
-            "_sync_clock",
+            executor._client._auth,
+            "sync_clock",
         ):
-            order_ids = executor._execute_sync(v2_range_plan())
+            order_ids = executor._execute_sync(plan)
 
         assert order_ids == (
             "a",
             "b",
             "c",
         )
+        assert calls == ["/v5/market/tickers", "/v5/order/create-batch"]
 
     finally:
         executor.close()
@@ -262,8 +305,8 @@ def test_historical_v1_cannot_reach_order_submission() -> None:
 
     try:
         with patch.object(
-            executor,
-            "_sync_clock",
+            executor._client._auth,
+            "sync_clock",
             side_effect=AssertionError("V1 must not make exchange calls"),
         ):
             with pytest.raises(TradeExecutionError, match="read-only"):
@@ -354,15 +397,21 @@ def test_exposure_reads_position_and_pending_ccb_orders() -> None:
 
     executor._client.close()
 
-    executor._client = httpx.Client(
+    executor._client = BybitClient(
+        base_url=("https://api-demo.bybit.com"),
+        api_key="key",
+        api_secret="secret",
+    )
+
+    executor._client._http_client = httpx.Client(
         base_url=("https://api-demo.bybit.com"),
         transport=httpx.MockTransport(handler),
     )
 
     try:
         with patch.object(
-            executor,
-            "_sync_clock",
+            executor._client._auth,
+            "sync_clock",
         ):
             exposure = executor._exposure_sync("BTCUSDT")
 
@@ -436,12 +485,12 @@ def test_account_state_keeps_active_partial_stops_with_zero_leaves_qty() -> None
 
     executor = BybitDemoExecutor(api_key="key", api_secret="secret")
     executor._client.close()
-    executor._client = httpx.Client(
+    executor._client._http_client = httpx.Client(
         base_url="https://api-demo.bybit.com",
         transport=httpx.MockTransport(handler),
     )
     try:
-        with patch.object(executor, "_sync_clock"):
+        with patch.object(executor._client._auth, "sync_clock"):
             state = executor._account_state_sync()
         assert len(state.open_orders) == 1
         assert state.open_orders[0].remaining_quantity == Decimal("4")
@@ -464,8 +513,8 @@ def test_v2_market_direct_batch_execution_is_rejected() -> None:
 
     try:
         with patch.object(
-            executor,
-            "_sync_clock",
+            executor._client._auth,
+            "sync_clock",
         ):
             try:
                 executor._execute_sync(plan)
@@ -589,15 +638,21 @@ def test_v2_market_primary_fill_precedes_scale_ins() -> None:
 
     executor._client.close()
 
-    executor._client = httpx.Client(
+    executor._client = BybitClient(
+        base_url=("https://api-demo.bybit.com"),
+        api_key="key",
+        api_secret="secret",
+    )
+
+    executor._client._http_client = httpx.Client(
         base_url=("https://api-demo.bybit.com"),
         transport=httpx.MockTransport(handler),
     )
 
     try:
         with patch.object(
-            executor,
-            "_sync_clock",
+            executor._client._auth,
+            "sync_clock",
         ):
             primary = executor._execute_market_primary_sync(plan)
 
@@ -653,5 +708,66 @@ def test_v2_market_primary_fill_precedes_scale_ins() -> None:
 
         assert calls.index("/v5/order/realtime") < calls.index("/v5/order/create-batch")
 
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+@pytest.mark.parametrize("entry_type", [EntryType.LIMIT, EntryType.RANGE])
+def test_priced_entry_passed_since_planning_rejects_before_submission(
+    side: Side, entry_type: EntryType
+) -> None:
+    plan = v2_range_plan(side, entry_type)
+    market_price = plan.orders[0].reference_price + Decimal("0.1") * (
+        -1 if side is Side.LONG else 1
+    )
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
+    try:
+        with (
+            patch.object(executor._client._auth, "sync_clock"),
+            patch.object(executor, "_last_price", return_value=market_price),
+            patch.object(executor._client, "private_post") as submit,
+        ):
+            with pytest.raises(
+                EntryPreflightError, match=f"primary {side.value} entry"
+            ):
+                executor._execute_sync(plan)
+            submit.assert_not_called()
+    finally:
+        executor.close()
+
+
+def test_priced_entry_ticker_failure_rejects_before_submission() -> None:
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
+    try:
+        with (
+            patch.object(executor._client._auth, "sync_clock"),
+            patch.object(
+                executor, "_last_price", side_effect=httpx.ReadTimeout("ticker")
+            ),
+            patch.object(executor._client, "private_post") as submit,
+        ):
+            with pytest.raises(EntryPreflightError, match="ticker"):
+                executor._execute_sync(v2_range_plan())
+            submit.assert_not_called()
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+@pytest.mark.parametrize("price", ["0", "-1", "NaN", "Infinity", "-Infinity"])
+def test_priced_entry_invalid_ticker_rejects_before_submission(
+    side: Side, price: str
+) -> None:
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
+    try:
+        with (
+            patch.object(executor._client._auth, "sync_clock"),
+            patch.object(executor, "_last_price", return_value=Decimal(price)),
+            patch.object(executor._client, "private_post") as submit,
+        ):
+            with pytest.raises(EntryPreflightError, match="positive and finite"):
+                executor._execute_sync(v2_range_plan(side))
+            submit.assert_not_called()
     finally:
         executor.close()
