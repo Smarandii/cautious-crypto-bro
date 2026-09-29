@@ -4,9 +4,7 @@ from datetime import (
 )
 from decimal import Decimal
 
-from cautious_crypto_bro.approval_bot import (
-    ApprovalBot,
-)
+from cautious_crypto_bro.approval_presenter import render
 from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
@@ -95,7 +93,7 @@ def test_render_contains_execution_policy() -> None:
         planned_max_loss_usdt=(Decimal("66")),
     )
 
-    rendered = ApprovalBot._render(
+    rendered = render(
         intent,
         plan,
     )

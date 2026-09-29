@@ -4,9 +4,7 @@ from datetime import (
 )
 from decimal import Decimal
 
-from cautious_crypto_bro.approval_bot import (
-    ApprovalBot,
-)
+from cautious_crypto_bro.approval_presenter import render
 from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
@@ -93,7 +91,7 @@ def test_opposite_exposure_warning() -> None:
         ),
     )
 
-    rendered = ApprovalBot._render(
+    rendered = render(
         intent,
         plan,
         exposure=exposure,
