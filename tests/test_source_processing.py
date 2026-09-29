@@ -18,9 +18,7 @@ from cautious_crypto_bro.domain import (
     SourceMessage,
     TradingIntent,
 )
-from cautious_crypto_bro.storage import (
-    IntentStore,
-)
+from cautious_crypto_bro.storage import IntentStore
 
 
 def source() -> SourceMessage:

@@ -11,12 +11,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cautious_crypto_bro.bybit import (
+from cautious_crypto_bro.domain import (
     AccountOrder,
     AccountPosition,
     AccountStateSummary,
-)
-from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
     ExecutionPolicy,

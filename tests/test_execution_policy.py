@@ -5,9 +5,7 @@ from cautious_crypto_bro.domain import (
     ExecutionPolicy,
     StrategyV2Policy,
 )
-from cautious_crypto_bro.storage import (
-    IntentStore,
-)
+from cautious_crypto_bro.storage import IntentStore
 
 
 def test_execution_policy_persists_only_risk(

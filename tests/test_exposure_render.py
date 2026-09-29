@@ -7,10 +7,6 @@ from decimal import Decimal
 from cautious_crypto_bro.approval_bot import (
     ApprovalBot,
 )
-from cautious_crypto_bro.bybit import (
-    PositionExposure,
-    SymbolExposure,
-)
 from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
@@ -18,8 +14,10 @@ from cautious_crypto_bro.domain import (
     ExecutionPlan,
     ExecutionPolicy,
     PlannedOrder,
+    PositionExposure,
     Side,
     SourceMessage,
+    SymbolExposure,
     TradingIntent,
 )
 

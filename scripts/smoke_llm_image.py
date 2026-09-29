@@ -18,9 +18,7 @@ from cautious_crypto_bro.domain import (
 from cautious_crypto_bro.llm_factory import (
     build_intent_extractor,
 )
-from cautious_crypto_bro.storage import (
-    IntentStore,
-)
+from cautious_crypto_bro.storage import IntentStore
 
 
 async def main() -> None:

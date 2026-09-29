@@ -9,10 +9,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from cautious_crypto_bro.bybit import (
-    BybitDemoExecutor,
-    TradeExecutionError,
-)
+from cautious_crypto_bro.bybit import BybitDemoExecutor
 from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
@@ -22,6 +19,7 @@ from cautious_crypto_bro.domain import (
     PlannedOrder,
     Side,
     SourceMessage,
+    TradeExecutionError,
     TradingIntent,
 )
 from cautious_crypto_bro.execution import (

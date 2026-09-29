@@ -1,8 +1,6 @@
 import asyncio
 
-from cautious_crypto_bro.storage import (
-    IntentStore,
-)
+from cautious_crypto_bro.storage import IntentStore
 
 
 def test_global_and_channel_guidance(

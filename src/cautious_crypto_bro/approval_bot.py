@@ -24,32 +24,28 @@ from aiogram.utils.backoff import (
     BackoffConfig,
 )
 
-from .bybit import (
+from .domain import (
     AccountOrder,
+    AccountPnlSummary,
     AccountPosition,
     AccountStateSummary,
-    SymbolExposure,
-)
-from .domain import (
     ApprovalMode,
     EntryType,
     ExecutionOrderType,
     ExecutionPlan,
+    IntentExecutionOutcome,
     IntentStatus,
+    PositionActionExecutionOutcome,
     PositionActionIntent,
     PositionActionType,
     Side,
+    SymbolExposure,
     TakeProfitSource,
     TradingIntent,
 )
-from .execution_coordinator import (
-    ExecutionCoordinator,
-    IntentExecutionOutcome,
-    PositionActionExecutionOutcome,
-)
-from .storage import (
-    AccountPnlSummary,
-    IntentStore,
+from .ports import (
+    ApprovalBotStore,
+    ManualApprovalExecutor,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,8 +81,8 @@ class ApprovalBot:
         token: str,
         approval_chat_id: int,
         approver_user_id: int,
-        store: IntentStore,
-        coordinator: ExecutionCoordinator,
+        store: ApprovalBotStore,
+        executor: ManualApprovalExecutor,
     ) -> None:
         self._bot = Bot(token=token)
         self._dispatcher = Dispatcher()
@@ -97,7 +93,7 @@ class ApprovalBot:
         self._approval_chat_id = approval_chat_id
         self._approver_user_id = approver_user_id
         self._store = store
-        self._coordinator = coordinator
+        self._executor = executor
 
         self._router.callback_query(IntentAction.filter(F.action == "execute"))(
             self._execute
@@ -298,7 +294,7 @@ class ApprovalBot:
 
         await callback.answer("Executing on Bybit Demo…")
 
-        outcome = await self._coordinator.execute_intent(
+        outcome = await self._executor.execute_intent(
             intent_id,
             approval_mode=(ApprovalMode.MANUAL),
             user_id=(callback.from_user.id),
@@ -344,7 +340,7 @@ class ApprovalBot:
 
         await callback.answer("Executing on Bybit Demo…")
 
-        outcome = await self._coordinator.execute_position_action(
+        outcome = await self._executor.execute_position_action(
             action_id,
             approval_mode=(ApprovalMode.MANUAL),
             user_id=(callback.from_user.id),

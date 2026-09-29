@@ -8,24 +8,20 @@ from unittest.mock import patch
 import aiosqlite
 import httpx
 
-from cautious_crypto_bro.bybit import (
+from cautious_crypto_bro.bybit import BybitDemoExecutor
+from cautious_crypto_bro.domain import (
     AccountPosition,
     AccountStateSummary,
-    BybitDemoExecutor,
-    PositionActionExecutionResult,
-    PositionActionPreflightError,
-)
-from cautious_crypto_bro.domain import (
     ApprovalMode,
     IntentStatus,
+    PositionActionExecutionResult,
     PositionActionIntent,
+    PositionActionPreflightError,
     PositionActionType,
     Side,
     SourceMessage,
 )
-from cautious_crypto_bro.execution_coordinator import (
-    ExecutionCoordinator,
-)
+from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.storage import (
     LATEST_SCHEMA_VERSION,
     IntentStore,

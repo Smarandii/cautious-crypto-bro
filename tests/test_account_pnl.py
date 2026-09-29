@@ -9,9 +9,7 @@ from cautious_crypto_bro.domain import (
     ClosedPnlRecord,
     Side,
 )
-from cautious_crypto_bro.storage import (
-    IntentStore,
-)
+from cautious_crypto_bro.storage import IntentStore
 
 
 def test_account_pnl_ledger_is_idempotent(
@@ -97,9 +95,7 @@ def test_account_pnl_ledger_is_idempotent(
 
 
 def test_closed_pnl_buy_means_closed_short_position() -> None:
-    from cautious_crypto_bro.bybit import (
-        BybitDemoExecutor,
-    )
+    from cautious_crypto_bro.bybit import BybitDemoExecutor
 
     executor = BybitDemoExecutor(
         api_key="key",

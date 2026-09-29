@@ -27,6 +27,230 @@ class ClosedPnlRecord:
     updated_at: datetime
 
 
+class TradeExecutionError(RuntimeError):
+    pass
+
+
+class PositionActionPreflightError(TradeExecutionError):
+    """Validation failed before any exchange mutation was attempted."""
+
+
+class EntryPreflightError(TradeExecutionError):
+    """Entry failed before any order submission was attempted."""
+
+
+@dataclass(frozen=True, slots=True)
+class PositionExposure:
+    side: Side
+    size: Decimal
+    avg_price: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class OpenOrderExposure:
+    side: Side
+    remaining_quantity: Decimal
+    order_id: str
+    order_link_id: str
+    price: Decimal | None
+
+
+@dataclass(frozen=True, slots=True)
+class SymbolExposure:
+    symbol: str
+    positions: tuple[
+        PositionExposure,
+        ...,
+    ] = ()
+    pending_entry_orders: tuple[
+        OpenOrderExposure,
+        ...,
+    ] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PositionActionExecutionResult:
+    order_id: str
+    position_side: Side
+    position_size_before: Decimal
+    submitted_quantity: Decimal | None
+    cancelled_entry_orders: int
+    cancelled_exit_orders: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class MarketPrimaryExecutionResult:
+    order_id: str
+    average_fill_price: Decimal
+    filled_quantity: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class AccountPosition:
+    symbol: str
+    side: Side
+    size: Decimal
+    avg_price: Decimal
+    mark_price: Decimal
+    unrealised_pnl: Decimal
+    status: str
+    take_profit: Decimal | None
+    stop_loss: Decimal | None
+    break_even_price: Decimal | None = None
+    trailing_stop: Decimal | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AccountOrder:
+    symbol: str
+    side: Side
+    order_type: str
+    status: str
+    quantity: Decimal
+    remaining_quantity: Decimal
+    price: Decimal | None
+    avg_price: Decimal | None
+    order_id: str
+    order_link_id: str
+    reduce_only: bool
+    updated_at: datetime
+    stop_order_type: str = ""
+    create_type: str = ""
+    trigger_price: Decimal | None = None
+    close_on_trigger: bool = False
+    parent_order_link_id: str = ""
+    executed_quantity: Decimal = Decimal("0")
+
+    @property
+    def kind(self) -> str:
+        stop_type = self.stop_order_type
+
+        if stop_type in {
+            "TakeProfit",
+            "PartialTakeProfit",
+        }:
+            return "TP"
+
+        if stop_type in {
+            "StopLoss",
+            "PartialStopLoss",
+        }:
+            return "SL"
+
+        if stop_type == "TrailingStop":
+            return "TRAILING"
+
+        if self.reduce_only or self.close_on_trigger:
+            return "REDUCE"
+
+        if stop_type == "Stop":
+            return "CONDITIONAL"
+
+        return "ENTRY"
+
+    @property
+    def is_protective(self) -> bool:
+        return self.kind in {
+            "TP",
+            "SL",
+            "TRAILING",
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AccountStateSummary:
+    as_of: datetime
+    positions: tuple[
+        AccountPosition,
+        ...,
+    ]
+    open_orders: tuple[
+        AccountOrder,
+        ...,
+    ]
+
+    @property
+    def unrealised_pnl(
+        self,
+    ) -> Decimal:
+        return sum(
+            (position.unrealised_pnl for position in self.positions),
+            Decimal("0"),
+        )
+
+    def exposure_for(
+        self,
+        symbol: str,
+    ) -> SymbolExposure:
+        symbol = symbol.upper()
+
+        positions = tuple(
+            PositionExposure(
+                side=position.side,
+                size=position.size,
+                avg_price=(position.avg_price),
+            )
+            for position in self.positions
+            if position.symbol == symbol
+        )
+
+        pending = tuple(
+            OpenOrderExposure(
+                side=order.side,
+                remaining_quantity=(order.remaining_quantity),
+                order_id=order.order_id,
+                order_link_id=(order.order_link_id),
+                price=order.price,
+            )
+            for order in self.open_orders
+            if (
+                order.symbol == symbol
+                and order.remaining_quantity > 0
+                and not order.reduce_only
+                and order.order_link_id.startswith("ccb-")
+            )
+        )
+
+        return SymbolExposure(
+            symbol=symbol,
+            positions=positions,
+            pending_entry_orders=pending,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AccountPnlSyncState:
+    history_start_at: datetime
+    last_synced_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class AccountPnlSummary:
+    realized_pnl: Decimal
+    record_count: int
+    positive_count: int
+    negative_count: int
+    history_start_at: datetime
+    last_synced_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class IntentExecutionOutcome:
+    status: IntentStatus
+    message: str
+    intent: TradingIntent | None = None
+    plan: ExecutionPlan | None = None
+    order_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PositionActionExecutionOutcome:
+    status: IntentStatus
+    message: str
+    action: PositionActionIntent | None = None
+    result: PositionActionExecutionResult | None = None
+
+
 class EntryType(StrEnum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"

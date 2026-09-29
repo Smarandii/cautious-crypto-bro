@@ -2,31 +2,28 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from .bybit import (
-    AccountStateSummary,
-    BybitDemoExecutor,
-    EntryPreflightError,
-    PositionActionExecutionResult,
-    PositionActionPreflightError,
-)
 from .domain import (
+    AccountStateSummary,
     ApprovalMode,
+    EntryPreflightError,
     ExecutionOrderType,
-    ExecutionPlan,
+    IntentExecutionOutcome,
     IntentStatus,
     OpenRelation,
+    PositionActionExecutionOutcome,
+    PositionActionExecutionResult,
     PositionActionIntent,
+    PositionActionPreflightError,
     PositionActionType,
     StrategyStatus,
     TradingIntent,
 )
 from .execution import ExecutionPlanner
-from .storage import IntentStore
+from .ports import AccountGateway, ExecutionCoordinatorStore
 
 logger = logging.getLogger(__name__)
 
@@ -39,29 +36,12 @@ class PositionActionConfirmationError(RuntimeError):
     pass
 
 
-@dataclass(frozen=True, slots=True)
-class IntentExecutionOutcome:
-    status: IntentStatus
-    message: str
-    intent: TradingIntent | None = None
-    plan: ExecutionPlan | None = None
-    order_ids: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class PositionActionExecutionOutcome:
-    status: IntentStatus
-    message: str
-    action: PositionActionIntent | None = None
-    result: PositionActionExecutionResult | None = None
-
-
 class ExecutionCoordinator:
     def __init__(
         self,
         *,
-        store: IntentStore,
-        executor: BybitDemoExecutor,
+        store: ExecutionCoordinatorStore,
+        executor: AccountGateway,
         max_age_seconds: int,
         execution_lock: asyncio.Lock | None = None,
     ) -> None:

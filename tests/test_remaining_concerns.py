@@ -503,7 +503,7 @@ def test_manual_delivery_retries_after_restart_without_replaying_source(tmp_path
                 approval_chat_id=1,
                 approver_user_id=1,
                 store=store,
-                coordinator=coordinator,
+                executor=coordinator,
             )
             sender = AsyncMock(
                 side_effect=TelegramNetworkError(

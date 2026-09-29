@@ -17,9 +17,7 @@ from typing import Any
 import aiosqlite
 from telethon import TelegramClient
 
-from cautious_crypto_bro.bybit import (
-    BybitDemoExecutor,
-)
+from cautious_crypto_bro.bybit import BybitDemoExecutor
 from cautious_crypto_bro.config import (
     get_settings,
 )
@@ -42,9 +40,7 @@ from cautious_crypto_bro.runtime_store import (
 from cautious_crypto_bro.signal_context import (
     build_position_context,
 )
-from cautious_crypto_bro.storage import (
-    IntentStore,
-)
+from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.telegram_replay import (
     TelegramReplayError,
     cloned_telegram_session,

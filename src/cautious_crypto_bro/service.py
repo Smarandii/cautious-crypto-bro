@@ -3,51 +3,70 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
+from dataclasses import dataclass
 from datetime import (
     UTC,
     datetime,
     timedelta,
 )
 
-from .approval_bot import ApprovalBot
-from .bybit import (
-    AccountStateSummary,
-    BybitDemoExecutor,
-)
 from .domain import (
+    AccountPnlSummary,
+    AccountStateSummary,
     ApprovalMode,
     AutoApprovalMode,
     ExecutionPlan,
     IncomingPost,
+    IntentExecutionOutcome,
     IntentStatus,
     OpenRelation,
+    PositionActionExecutionOutcome,
     PositionActionIntent,
     PositionActionType,
+    SignalExtraction,
     SignalPositionContext,
+    SourceMessage,
     TradingIntent,
 )
 from .execution import ExecutionPlanner
-from .execution_coordinator import (
-    ExecutionCoordinator,
-    IntentExecutionOutcome,
-    PositionActionExecutionOutcome,
-)
+from .execution_coordinator import ExecutionCoordinator
 from .openrouter import IntentExtractor
-from .signal_context import SignalContextProvider
-from .storage import IntentStore
+from .ports import (
+    AccountGateway,
+    ApprovalSender,
+    SignalServiceStore,
+)
+from .signal_context import (
+    SignalContextProvider,
+    SignalContextSnapshot,
+)
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PlannedBatch:
+    planned: list[
+        tuple[
+            TradingIntent,
+            ExecutionPlan,
+        ]
+    ]
+    position_actions: tuple[PositionActionIntent, ...]
+    planning_errors: list[str]
+    account_state: AccountStateSummary | None
+    account_state_error: str | None
 
 
 class SignalService:
     def __init__(
         self,
         *,
-        store: IntentStore,
+        store: SignalServiceStore,
         extractor: IntentExtractor,
         planner: ExecutionPlanner,
-        executor: BybitDemoExecutor,
-        approval_bot: ApprovalBot,
+        executor: AccountGateway,
+        approval_bot: ApprovalSender,
         coordinator: ExecutionCoordinator,
         context_provider: SignalContextProvider,
         auto_approval_mode: AutoApprovalMode = (AutoApprovalMode.DISABLED),
@@ -378,6 +397,65 @@ class SignalService:
     ) -> None:
         source = post.source
 
+        claim_token = await self._claim_source_or_skip(source)
+        if claim_token is None:
+            return
+
+        batch = await self._extract_and_plan(post, claim_token)
+        if batch is None:
+            return
+
+        if not batch.planned and not batch.position_actions:
+            await self._complete_or_fail_source(
+                source,
+                claim_token,
+                batch.planning_errors,
+            )
+            return
+
+        if batch.planning_errors:
+            logger.warning(
+                "Signal batch kept %d OPEN "
+                "candidate(s) and %d position "
+                "action(s) for %s/%s; "
+                "%d OPEN candidate(s) failed",
+                len(batch.planned),
+                len(batch.position_actions),
+                source.channel_id,
+                source.message_id,
+                len(batch.planning_errors),
+            )
+
+        account_pnl, account_pnl_error = await self._sync_account_pnl_safe(source)
+
+        finalized = await self._persist_batch(
+            source,
+            claim_token,
+            batch.planned,
+            batch.position_actions,
+        )
+        if not finalized:
+            return
+
+        await self._dispatch_planned_intents(
+            batch.planned,
+            account_state=batch.account_state,
+            account_state_error=batch.account_state_error,
+            account_pnl=account_pnl,
+            account_pnl_error=account_pnl_error,
+        )
+        await self._dispatch_position_actions(
+            batch.position_actions,
+            account_state=batch.account_state,
+            account_state_error=batch.account_state_error,
+            account_pnl=account_pnl,
+            account_pnl_error=account_pnl_error,
+        )
+
+    async def _claim_source_or_skip(
+        self,
+        source: SourceMessage,
+    ) -> str | None:
         claim_token = await self._store.claim_source(
             source,
             lease_seconds=(self._source_processing_lease_seconds),
@@ -389,16 +467,21 @@ class SignalService:
                 source.channel_id,
                 source.message_id,
             )
-            return
+
+        return claim_token
+
+    async def _extract_and_plan(
+        self,
+        post: IncomingPost,
+        claim_token: str,
+    ) -> _PlannedBatch | None:
+        source = post.source
 
         try:
-            (
-                global_guidance,
-                channel_guidance,
-            ) = await self._store.get_guidance(source.channel_id)
-
+            global_guidance, channel_guidance = await self._store.get_guidance(
+                source.channel_id
+            )
             context_snapshot = await self._context_provider.snapshot(source.channel_id)
-
             signals = await self._extractor.extract(
                 post,
                 global_guidance=global_guidance,
@@ -418,107 +501,123 @@ class SignalService:
                 source.channel_id,
                 source.message_id,
             )
-            return
+            return None
 
         if not signals.actionable:
             await self._store.mark_source_completed(
                 source,
                 claim_token,
             )
-            return
+            return None
 
-        account_state = context_snapshot.account_state
-        account_state_error = context_snapshot.account_state_error
-        position_context = context_snapshot.position_context
-
-        open_counts = Counter(
-            (
-                intent.symbol,
-                intent.side,
-            )
-            for intent in signals.open_intents
+        planned, planning_errors = await self._plan_open_intents(
+            signals,
+            context_snapshot,
+        )
+        position_actions = self._build_position_actions(
+            signals,
+            account_state=(context_snapshot.account_state),
         )
 
+        return _PlannedBatch(
+            planned=planned,
+            position_actions=position_actions,
+            planning_errors=planning_errors,
+            account_state=context_snapshot.account_state,
+            account_state_error=context_snapshot.account_state_error,
+        )
+
+    async def _plan_open_intents(
+        self,
+        signals: SignalExtraction,
+        context_snapshot: SignalContextSnapshot,
+    ) -> tuple[
+        list[
+            tuple[
+                TradingIntent,
+                ExecutionPlan,
+            ]
+        ],
+        list[str],
+    ]:
         planned: list[
             tuple[
                 TradingIntent,
                 ExecutionPlan,
             ]
         ] = []
-
         planning_errors: list[str] = []
 
-        if signals.open_intents:
+        if not signals.open_intents:
+            return planned, planning_errors
+
+        account_state = context_snapshot.account_state
+        position_context = context_snapshot.position_context
+
+        open_counts = Counter(
+            (intent.symbol, intent.side) for intent in signals.open_intents
+        )
+
+        try:
+            policy = await self._store.get_execution_policy()
+            trading_capital_usdt = await self._executor.wallet_balance_usdt()
+            policy = policy.model_copy(
+                update={"trading_capital_usdt": (trading_capital_usdt)}
+            )
+
+        except Exception as exc:
+            planning_errors.append(
+                f"Execution policy/capital: {type(exc).__name__}: {exc}"
+            )
+
+            logger.exception(
+                "Execution policy/capital load failed",
+            )
+            return planned, planning_errors
+
+        for extracted_intent in signals.open_intents:
+            key = (extracted_intent.symbol, extracted_intent.side)
+
+            approval_mode = self._open_approval_mode(
+                extracted_intent,
+                position_context=(position_context),
+                account_state=(account_state),
+                duplicate_in_batch=(open_counts[key] > 1),
+            )
+
+            intent = extracted_intent.model_copy(
+                update={"approval_mode": (approval_mode)}
+            )
+
             try:
-                policy = await self._store.get_execution_policy()
-
-                trading_capital_usdt = await self._executor.wallet_balance_usdt()
-
-                policy = policy.model_copy(
-                    update={"trading_capital_usdt": (trading_capital_usdt)}
+                market_context = await self._executor.market_context(intent.symbol)
+                plan = self._planner.plan(
+                    intent,
+                    policy,
+                    market_context,
                 )
 
             except Exception as exc:
-                planning_errors.append(
-                    f"Execution policy/capital: {type(exc).__name__}: {exc}"
-                )
+                error = f"{intent.symbol}: {type(exc).__name__}: {exc}"
+                planning_errors.append(error)
 
                 logger.exception(
-                    "Execution policy/capital load failed for %s/%s",
-                    source.channel_id,
-                    source.message_id,
+                    "Execution planning failed for candidate %s",
+                    intent.symbol,
                 )
+                continue
 
-            else:
-                for extracted_intent in signals.open_intents:
-                    key = (
-                        extracted_intent.symbol,
-                        extracted_intent.side,
-                    )
+            planned.append((intent, plan))
 
-                    approval_mode = self._open_approval_mode(
-                        extracted_intent,
-                        position_context=(position_context),
-                        account_state=(account_state),
-                        duplicate_in_batch=(open_counts[key] > 1),
-                    )
+        return planned, planning_errors
 
-                    intent = extracted_intent.model_copy(
-                        update={"approval_mode": (approval_mode)}
-                    )
-
-                    try:
-                        market_context = await self._executor.market_context(
-                            intent.symbol
-                        )
-
-                        plan = self._planner.plan(
-                            intent,
-                            policy,
-                            market_context,
-                        )
-
-                    except Exception as exc:
-                        error = f"{intent.symbol}: {type(exc).__name__}: {exc}"
-
-                        planning_errors.append(error)
-
-                        logger.exception(
-                            "Execution planning failed for candidate %s from %s/%s",
-                            intent.symbol,
-                            source.channel_id,
-                            source.message_id,
-                        )
-                        continue
-
-                    planned.append(
-                        (
-                            intent,
-                            plan,
-                        )
-                    )
-
-        position_actions = tuple(
+    def _build_position_actions(
+        self,
+        signals: SignalExtraction,
+        *,
+        account_state: AccountStateSummary | None,
+    ) -> tuple[PositionActionIntent, ...]:
+        return tuple(
             action.model_copy(
                 update={
                     "approval_mode": (
@@ -532,52 +631,54 @@ class SignalService:
             for action in signals.position_actions
         )
 
-        if not planned and not position_actions:
-            if planning_errors:
-                await self._store.mark_source_failed(
-                    source,
-                    claim_token,
-                    (
-                        "No extracted OPEN "
-                        "candidate could be planned: " + " | ".join(planning_errors)
-                    ),
-                )
-            else:
-                await self._store.mark_source_completed(
-                    source,
-                    claim_token,
-                )
-
-            return
-
+    async def _complete_or_fail_source(
+        self,
+        source: SourceMessage,
+        claim_token: str,
+        planning_errors: list[str],
+    ) -> None:
         if planning_errors:
-            logger.warning(
-                "Signal batch kept %d OPEN "
-                "candidate(s) and %d position "
-                "action(s) for %s/%s; "
-                "%d OPEN candidate(s) failed",
-                len(planned),
-                len(position_actions),
-                source.channel_id,
-                source.message_id,
-                len(planning_errors),
+            await self._store.mark_source_failed(
+                source,
+                claim_token,
+                (
+                    "No extracted OPEN "
+                    "candidate could be planned: " + " | ".join(planning_errors)
+                ),
+            )
+        else:
+            await self._store.mark_source_completed(
+                source,
+                claim_token,
             )
 
-        account_pnl = None
-        account_pnl_error = None
-
+    async def _sync_account_pnl_safe(
+        self,
+        source: SourceMessage,
+    ) -> tuple[AccountPnlSummary | None, str | None]:
         try:
-            account_pnl = await self._sync_account_pnl()
+            return await self._sync_account_pnl(), None
 
         except Exception as exc:
-            account_pnl_error = f"{type(exc).__name__}: {exc}"
-
             logger.exception(
                 "Account P&L sync failed for %s/%s",
                 source.channel_id,
                 source.message_id,
             )
+            return None, f"{type(exc).__name__}: {exc}"
 
+    async def _persist_batch(
+        self,
+        source: SourceMessage,
+        claim_token: str,
+        planned: list[
+            tuple[
+                TradingIntent,
+                ExecutionPlan,
+            ]
+        ],
+        position_actions: tuple[PositionActionIntent, ...],
+    ) -> bool:
         try:
             finalized = await self._store.create_signal_batch_and_complete_source(
                 planned,
@@ -597,7 +698,7 @@ class SignalService:
                 source.channel_id,
                 source.message_id,
             )
-            return
+            return False
 
         if not finalized:
             logger.warning(
@@ -605,8 +706,24 @@ class SignalService:
                 source.channel_id,
                 source.message_id,
             )
-            return
+            return False
 
+        return True
+
+    async def _dispatch_planned_intents(
+        self,
+        planned: list[
+            tuple[
+                TradingIntent,
+                ExecutionPlan,
+            ]
+        ],
+        *,
+        account_state: AccountStateSummary | None,
+        account_state_error: str | None,
+        account_pnl: AccountPnlSummary | None,
+        account_pnl_error: str | None,
+    ) -> None:
         manual_cards_sent = 0
 
         for intent, plan in planned:
@@ -632,7 +749,6 @@ class SignalService:
                 continue
 
             exposure = None
-
             if account_state is not None:
                 exposure = account_state.exposure_for(intent.symbol)
 
@@ -657,6 +773,17 @@ class SignalService:
                 continue
 
             manual_cards_sent += int(sent)
+
+    async def _dispatch_position_actions(
+        self,
+        position_actions: tuple[PositionActionIntent, ...],
+        *,
+        account_state: AccountStateSummary | None,
+        account_state_error: str | None,
+        account_pnl: AccountPnlSummary | None,
+        account_pnl_error: str | None,
+    ) -> None:
+        manual_cards_sent = 0
 
         for action in position_actions:
             if action.approval_mode is ApprovalMode.SKIPPED:

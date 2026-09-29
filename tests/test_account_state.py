@@ -7,9 +7,7 @@ from unittest.mock import patch
 
 import httpx
 
-from cautious_crypto_bro.bybit import (
-    BybitDemoExecutor,
-)
+from cautious_crypto_bro.bybit import BybitDemoExecutor
 
 
 def test_account_state_reads_bybit_snapshot() -> None:

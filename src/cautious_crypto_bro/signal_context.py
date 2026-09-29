@@ -2,19 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .bybit import (
-    AccountStateSummary,
-    BybitDemoExecutor,
-)
 from .domain import (
     AccountPositionContext,
+    AccountStateSummary,
     IntentStatus,
     PositionActionIntent,
     SignalPositionContext,
     SourceOpenContext,
     TradingIntent,
 )
-from .storage import IntentStore
+from .ports import AccountGateway, SignalContextProviderStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,8 +127,8 @@ class SignalContextProvider:
     def __init__(
         self,
         *,
-        store: IntentStore,
-        executor: BybitDemoExecutor,
+        store: SignalContextProviderStore,
+        executor: AccountGateway,
     ) -> None:
         self._store = store
         self._executor = executor

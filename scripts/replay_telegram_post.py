@@ -4,9 +4,7 @@ import argparse
 import asyncio
 import logging
 
-from cautious_crypto_bro.bybit import (
-    BybitDemoExecutor,
-)
+from cautious_crypto_bro.bybit import BybitDemoExecutor
 from cautious_crypto_bro.config import (
     get_settings,
 )
@@ -19,9 +17,7 @@ from cautious_crypto_bro.llm_factory import (
 from cautious_crypto_bro.runtime_store import (
     RedisRuntimeStore,
 )
-from cautious_crypto_bro.storage import (
-    IntentStore,
-)
+from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.telegram_replay import (
     fetch_telegram_post,
 )

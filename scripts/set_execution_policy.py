@@ -9,9 +9,7 @@ from pathlib import Path
 from cautious_crypto_bro.domain import (
     ExecutionPolicy,
 )
-from cautious_crypto_bro.storage import (
-    IntentStore,
-)
+from cautious_crypto_bro.storage import IntentStore
 
 
 async def main() -> None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +11,8 @@ from uuid import UUID, uuid4
 import aiosqlite
 
 from .domain import (
+    AccountPnlSummary,
+    AccountPnlSyncState,
     ApprovalMode,
     ClosedPnlRecord,
     ExecutionPlan,
@@ -240,22 +241,6 @@ CREATE TABLE manual_deliveries (
     delivered_at TEXT
 );
 """
-
-
-@dataclass(frozen=True, slots=True)
-class AccountPnlSyncState:
-    history_start_at: datetime
-    last_synced_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class AccountPnlSummary:
-    realized_pnl: Decimal
-    record_count: int
-    positive_count: int
-    negative_count: int
-    history_start_at: datetime
-    last_synced_at: datetime
 
 
 class IntentStore:

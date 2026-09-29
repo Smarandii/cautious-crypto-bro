@@ -85,7 +85,7 @@ async def async_main() -> None:
         approval_chat_id=(settings.telegram_approval_chat_id),
         approver_user_id=(settings.telegram_approver_user_id),
         store=store,
-        coordinator=coordinator,
+        executor=coordinator,
     )
 
     context_provider = SignalContextProvider(
