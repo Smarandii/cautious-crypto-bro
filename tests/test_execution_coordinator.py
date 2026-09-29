@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -8,11 +8,13 @@ import pytest
 from cautious_crypto_bro.domain import (
     ApprovalMode,
     Entry,
+    EntryPreflightError,
     EntryType,
     ExecutionPlan,
     ExecutionPolicy,
     InstrumentContext,
     IntentStatus,
+    OpenRelation,
     Side,
     SourceMessage,
     StrategyStatus,
@@ -132,7 +134,8 @@ def test_historical_v1_approval_is_rejected_before_exchange(
     assert "read-only" in outcome.message
 
 
-def test_execution_outcome_persists_under_mutation_lock() -> None:
+@pytest.mark.parametrize("approval_mode", [ApprovalMode.MANUAL, ApprovalMode.AUTO])
+def test_old_entry_executes_and_persists_under_mutation_lock(approval_mode) -> None:
     now = datetime.now(UTC)
     intent = TradingIntent(
         source=SourceMessage(
@@ -150,6 +153,9 @@ def test_execution_outcome_persists_under_mutation_lock() -> None:
         take_profit=120,
         summary="Test",
         confidence=1,
+        relation=OpenRelation.NEW,
+        approval_mode=approval_mode,
+        created_at=now - timedelta(days=2),
     )
     plan = ExecutionPlanner().plan(
         intent,
@@ -163,7 +169,7 @@ def test_execution_outcome_persists_under_mutation_lock() -> None:
         ),
     )
 
-    async def run(fail: bool) -> None:
+    async def run(error: Exception | None) -> None:
         lock = asyncio.Lock()
 
         class Store:
@@ -191,7 +197,11 @@ def test_execution_outcome_persists_under_mutation_lock() -> None:
 
             async def set_position_strategy_status(self, intent_id, status):
                 assert lock.locked()
-                assert status is StrategyStatus.UNCERTAIN
+                assert status is (
+                    StrategyStatus.CLOSED
+                    if isinstance(error, EntryPreflightError)
+                    else StrategyStatus.UNCERTAIN
+                )
 
         class Executor:
             async def account_state(self):
@@ -201,8 +211,8 @@ def test_execution_outcome_persists_under_mutation_lock() -> None:
 
             async def execute(self, plan):
                 assert lock.locked()
-                if fail:
-                    raise RuntimeError("Exchange rejected order")
+                if error:
+                    raise error
                 return ("order-1",)
 
         coordinator = ExecutionCoordinator(
@@ -213,11 +223,13 @@ def test_execution_outcome_persists_under_mutation_lock() -> None:
         )
         outcome = await coordinator.execute_intent(
             intent.intent_id,
-            approval_mode=ApprovalMode.MANUAL,
+            approval_mode=approval_mode,
         )
         assert outcome.status is (
-            IntentStatus.FAILED if fail else IntentStatus.EXECUTED
+            IntentStatus.FAILED if error else IntentStatus.EXECUTED
         )
+        assert "stale" not in outcome.message
 
-    asyncio.run(run(False))
-    asyncio.run(run(True))
+    asyncio.run(run(None))
+    asyncio.run(run(RuntimeError("Exchange rejected order")))
+    asyncio.run(run(EntryPreflightError("Entry price was passed through")))

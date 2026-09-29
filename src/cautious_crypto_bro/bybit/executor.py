@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import hmac
 import json
 import logging
 import time
@@ -12,11 +11,8 @@ from datetime import (
     timedelta,
 )
 from decimal import ROUND_DOWN, Decimal
-from urllib.parse import urlencode
 
-import httpx
-
-from .domain import (
+from ..domain import (
     AccountOrder,
     AccountPosition,
     AccountStateSummary,
@@ -36,16 +32,9 @@ from .domain import (
     SymbolExposure,
     TradeExecutionError,
 )
+from .client import DEMO_BASE_URL, BybitClient
 
 logger = logging.getLogger(__name__)
-
-DEMO_BASE_URL = "https://api-demo.bybit.com"
-RECV_WINDOW_MS = 5_000
-CLOCK_SYNC_TTL_SECONDS = 300
-
-
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
 
 
 class BybitDemoExecutor:
@@ -55,16 +44,11 @@ class BybitDemoExecutor:
         api_key: str,
         api_secret: str,
     ) -> None:
-        self._api_key = api_key
-        self._api_secret = api_secret
-
-        self._client = httpx.Client(
+        self._client = BybitClient(
             base_url=DEMO_BASE_URL,
-            timeout=httpx.Timeout(10.0),
+            api_key=api_key,
+            api_secret=api_secret,
         )
-
-        self._clock_offset_ms = 0
-        self._clock_synced_at = 0.0
 
     async def market_context(
         self,
@@ -201,7 +185,7 @@ class BybitDemoExecutor:
     ) -> None:
         self._sync_clock()
 
-        response = self._private_post(
+        response = self._client.private_post(
             "/v5/order/cancel",
             {
                 "category": "linear",
@@ -241,7 +225,7 @@ class BybitDemoExecutor:
 
             body["trailingStop"] = self._fmt(trailing_distance)
 
-        self._private_post(
+        self._client.private_post(
             "/v5/position/trading-stop",
             body,
         )
@@ -261,7 +245,7 @@ class BybitDemoExecutor:
 
         side = "Sell" if position_side is Side.LONG else "Buy"
 
-        response = self._private_post(
+        response = self._client.private_post(
             "/v5/order/create",
             {
                 "category": "linear",
@@ -290,7 +274,7 @@ class BybitDemoExecutor:
     def _wallet_balance_usdt_sync(
         self,
     ) -> Decimal:
-        response = self._private_get(
+        response = self._client.private_get(
             "/v5/account/wallet-balance",
             {
                 "accountType": "UNIFIED",
@@ -321,7 +305,7 @@ class BybitDemoExecutor:
         self._sync_clock()
 
         now = datetime.now(UTC)
-        position_items = self._paginate_private_list(
+        position_items = self._client.paginate_private_list(
             "/v5/position/list",
             {
                 "category": "linear",
@@ -370,7 +354,7 @@ class BybitDemoExecutor:
                 )
             )
 
-        open_items = self._paginate_private_list(
+        open_items = self._client.paginate_private_list(
             "/v5/order/realtime",
             {
                 "category": "linear",
@@ -439,7 +423,7 @@ class BybitDemoExecutor:
                 end,
             )
 
-            items = self._paginate_private_list(
+            items = self._client.paginate_private_list(
                 "/v5/position/closed-pnl",
                 {
                     "category": "linear",
@@ -532,48 +516,6 @@ class BybitDemoExecutor:
             ),
         )
 
-    def _paginate_private_list(
-        self,
-        path: str,
-        params: dict[
-            str,
-            object,
-        ],
-    ) -> list[dict]:
-        params = dict(params)
-        items: list[dict] = []
-
-        while True:
-            response = self._private_get(
-                path,
-                params,
-            )
-
-            result = response.get("result", {})
-
-            page = result.get(
-                "list",
-                [],
-            )
-
-            items.extend(
-                item
-                for item in page
-                if isinstance(
-                    item,
-                    dict,
-                )
-            )
-
-            cursor = str(result.get("nextPageCursor") or "")
-
-            if not cursor:
-                break
-
-            params["cursor"] = cursor
-
-        return items
-
     def _account_order_from_item(
         self,
         item: dict,
@@ -626,7 +568,7 @@ class BybitDemoExecutor:
 
     def _strategy_order_sync(self, symbol: str, link_id: str) -> AccountOrder | None:
         for endpoint in ("/v5/order/realtime", "/v5/order/history"):
-            response = self._private_get(
+            response = self._client.private_get(
                 endpoint,
                 {"category": "linear", "symbol": symbol, "orderLinkId": link_id},
             )
@@ -641,7 +583,7 @@ class BybitDemoExecutor:
     ) -> SymbolExposure:
         self._sync_clock()
 
-        position_response = self._private_get(
+        position_response = self._client.private_get(
             "/v5/position/list",
             {
                 "category": "linear",
@@ -694,7 +636,7 @@ class BybitDemoExecutor:
         }
 
         while True:
-            order_response = self._private_get(
+            order_response = self._client.private_get(
                 "/v5/order/realtime",
                 order_params,
             )
@@ -846,7 +788,7 @@ class BybitDemoExecutor:
         if action.action is PositionActionType.CLOSE:
             body["closeOnTrigger"] = True
 
-        response = self._private_post(
+        response = self._client.private_post(
             "/v5/order/create",
             body,
         )
@@ -898,7 +840,7 @@ class BybitDemoExecutor:
         self,
         symbol: str,
     ) -> dict:
-        response = self._public_get(
+        response = self._client.public_get(
             "/v5/market/instruments-info",
             {
                 "category": "linear",
@@ -951,7 +893,7 @@ class BybitDemoExecutor:
     ) -> int:
         cancelled: set[str] = set()
 
-        items = self._paginate_private_list(
+        items = self._client.paginate_private_list(
             "/v5/order/realtime",
             {
                 "category": "linear",
@@ -1009,7 +951,7 @@ class BybitDemoExecutor:
                 if link_id in cancelled:
                     continue
 
-                response = self._private_post(
+                response = self._client.private_post(
                     "/v5/order/cancel",
                     {
                         "category": "linear",
@@ -1118,7 +1060,7 @@ class BybitDemoExecutor:
                 "/v5/order/realtime",
                 "/v5/order/history",
             ):
-                response = self._private_get(
+                response = self._client.private_get(
                     path,
                     params,
                 )
@@ -1186,7 +1128,7 @@ class BybitDemoExecutor:
         except Exception as exc:
             raise EntryPreflightError(str(exc)) from exc
 
-        response = self._private_post(
+        response = self._client.private_post(
             "/v5/order/create",
             {
                 "category": "linear",
@@ -1226,7 +1168,7 @@ class BybitDemoExecutor:
             )
         ]
 
-        response = self._private_post(
+        response = self._client.private_post(
             "/v5/order/create-batch",
             {
                 "category": "linear",
@@ -1253,13 +1195,27 @@ class BybitDemoExecutor:
                     "Strategy V2 MARKET plans require staged E1 execution"
                 )
             self._sync_clock()
+            market_price = self._last_price(plan.symbol)
+            if not market_price.is_finite() or market_price <= 0:
+                raise TradeExecutionError(
+                    "Bybit ticker price must be positive and finite"
+                )
+            primary = plan.orders[0].reference_price
+            if plan.side is Side.LONG and market_price < primary:
+                raise TradeExecutionError(
+                    "Market is already below the primary LONG entry"
+                )
+            if plan.side is Side.SHORT and market_price > primary:
+                raise TradeExecutionError(
+                    "Market is already above the primary SHORT entry"
+                )
             requests = [
                 self._order_params(plan, index) for index in range(len(plan.orders))
             ]
         except Exception as exc:
             raise EntryPreflightError(str(exc)) from exc
 
-        response = self._private_post(
+        response = self._client.private_post(
             "/v5/order/create-batch",
             {
                 "category": "linear",
@@ -1317,7 +1273,7 @@ class BybitDemoExecutor:
         statuses = response.get("retExtInfo", {}).get("list", [])
 
         if len(results) != len(requests) or len(statuses) != len(requests):
-            self._cancel_batch_best_effort(
+            self._client.cancel_batch_best_effort(
                 symbol,
                 [str(request["orderLinkId"]) for request in requests],
             )
@@ -1354,7 +1310,7 @@ class BybitDemoExecutor:
 
         if failures:
             if accepted_link_ids:
-                self._cancel_batch_best_effort(
+                self._client.cancel_batch_best_effort(
                     symbol,
                     accepted_link_ids,
                 )
@@ -1364,47 +1320,6 @@ class BybitDemoExecutor:
             )
 
         return tuple(order_ids)
-
-    def _cancel_batch_best_effort(
-        self,
-        symbol: str,
-        order_link_ids: list[str],
-    ) -> None:
-        if not order_link_ids:
-            return
-
-        try:
-            response = self._private_post(
-                "/v5/order/cancel-batch",
-                {
-                    "category": "linear",
-                    "request": [
-                        {
-                            "symbol": symbol,
-                            "orderLinkId": (order_link_id),
-                        }
-                        for order_link_id in order_link_ids
-                    ],
-                },
-            )
-
-            statuses = response.get(
-                "retExtInfo",
-                {},
-            ).get(
-                "list",
-                [],
-            )
-
-            failed = [status for status in statuses if str(status.get("code")) != "0"]
-
-            if failed:
-                logger.error(
-                    "Rollback cancellation returned failures: %s",
-                    failed,
-                )
-        except Exception:
-            logger.exception("Failed to roll back partially accepted Bybit batch")
 
     def _validate_market_plan(
         self,
@@ -1439,7 +1354,7 @@ class BybitDemoExecutor:
         self,
         symbol: str,
     ) -> Decimal:
-        response = self._public_get(
+        response = self._client.public_get(
             "/v5/market/tickers",
             {
                 "category": "linear",
@@ -1459,91 +1374,7 @@ class BybitDemoExecutor:
         *,
         force: bool = False,
     ) -> None:
-        if (
-            not force
-            and self._clock_synced_at
-            and (time.monotonic() - self._clock_synced_at) < CLOCK_SYNC_TTL_SECONDS
-        ):
-            return
-
-        last_error: Exception | None = None
-
-        for attempt in range(3):
-            try:
-                t0 = _wall_clock_ms()
-
-                response = self._client.get("/v5/market/time")
-
-                t1 = _wall_clock_ms()
-
-                response.raise_for_status()
-                data = response.json()
-
-                if (
-                    str(
-                        data.get(
-                            "retCode",
-                            0,
-                        )
-                    )
-                    != "0"
-                ):
-                    raise TradeExecutionError(
-                        "Bybit server-time "
-                        "request failed: "
-                        f"{data.get('retCode')} "
-                        f"{data.get('retMsg')}"
-                    )
-
-                server_ms = self._server_time_ms(data)
-
-                midpoint_ms = (t0 + t1) // 2
-
-                self._clock_offset_ms = server_ms - midpoint_ms
-
-                self._clock_synced_at = time.monotonic()
-
-                logger.info(
-                    "Bybit clock offset %+d ms (RTT %d ms)",
-                    self._clock_offset_ms,
-                    t1 - t0,
-                )
-
-                return
-
-            except Exception as exc:
-                last_error = exc
-
-                if attempt < 2:
-                    time.sleep(0.25 * (attempt + 1))
-
-        raise TradeExecutionError(
-            f"Could not synchronize clock with Bybit: {last_error}"
-        )
-
-    @staticmethod
-    def _server_time_ms(
-        data: dict,
-    ) -> int:
-        if data.get("time") is not None:
-            return int(data["time"])
-
-        result = data.get("result") or {}
-
-        if result.get("timeNano") is not None:
-            return int(result["timeNano"]) // 1_000_000
-
-        if result.get("timeSecond") is not None:
-            return int(result["timeSecond"]) * 1000
-
-        raise TradeExecutionError("Bybit server-time response contained no timestamp")
-
-    def _auth_timestamp(
-        self,
-    ) -> str:
-        self._sync_clock()
-
-        return str(_wall_clock_ms() + self._clock_offset_ms)
+        self._client.sync_clock(force=force)
 
     def _private_request(
         self,
@@ -1551,123 +1382,61 @@ class BybitDemoExecutor:
         path: str,
         payload: dict[str, object],
     ) -> dict:
-        if method == "GET":
-            encoded_payload = urlencode(
-                [(key, str(value)) for key, value in payload.items()]
-            )
-        elif method == "POST":
-            encoded_payload = json.dumps(
-                payload,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            )
-        else:
-            raise ValueError(f"Unsupported private Bybit HTTP method: {method}")
-
-        for attempt in range(2):
-            timestamp = self._auth_timestamp()
-            signature_payload = (
-                timestamp + self._api_key + str(RECV_WINDOW_MS) + encoded_payload
-            )
-            signature = hmac.new(
-                self._api_secret.encode(),
-                signature_payload.encode(),
-                hashlib.sha256,
-            ).hexdigest()
-
-            headers = {
-                "X-BAPI-API-KEY": self._api_key,
-                "X-BAPI-TIMESTAMP": timestamp,
-                "X-BAPI-RECV-WINDOW": str(RECV_WINDOW_MS),
-                "X-BAPI-SIGN": signature,
-            }
-
-            try:
-                if method == "GET":
-                    response = self._client.get(
-                        f"{path}?{encoded_payload}",
-                        headers=headers,
-                    )
-                else:
-                    headers["Content-Type"] = "application/json"
-                    response = self._client.post(
-                        path,
-                        content=encoded_payload,
-                        headers=headers,
-                    )
-
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
-                raise TradeExecutionError(f"Bybit HTTP request failed: {exc}") from exc
-
-            data = response.json()
-            code = data.get("retCode")
-
-            if str(code) == "0":
-                return data
-
-            if str(code) == "10002" and attempt == 0:
-                logger.warning(
-                    "Bybit rejected request timestamp; re-synchronizing clock"
-                )
-                self._sync_clock(force=True)
-                continue
-
-            raise TradeExecutionError(
-                f"Bybit rejected request: {code} {data.get('retMsg')}"
-            )
-
-        raise TradeExecutionError("Bybit request failed after clock re-sync")
+        return self._client.private_request(
+            method,
+            path,
+            payload,
+        )
 
     def _private_get(
         self,
         path: str,
         params: dict[str, object],
     ) -> dict:
-        return self._private_request("GET", path, params)
+        return self._client.private_get(
+            path,
+            params,
+        )
 
     def _private_post(
         self,
         path: str,
         body: dict[str, object],
     ) -> dict:
-        return self._private_request("POST", path, body)
+        return self._client.private_post(
+            path,
+            body,
+        )
 
     def _public_get(
         self,
         path: str,
-        params: dict[
-            str,
-            str,
-        ],
+        params: dict[str, str],
     ) -> dict:
-        try:
-            response = self._client.get(
-                path,
-                params=params,
-            )
+        return self._client.public_get(
+            path,
+            params,
+        )
 
-            response.raise_for_status()
+    def _paginate_private_list(
+        self,
+        path: str,
+        params: dict[str, object],
+    ) -> list[dict]:
+        return self._client.paginate_private_list(
+            path,
+            params,
+        )
 
-        except httpx.HTTPError as exc:
-            raise TradeExecutionError(f"Bybit HTTP request failed: {exc}") from exc
-
-        data = response.json()
-
-        if (
-            str(
-                data.get(
-                    "retCode",
-                    0,
-                )
-            )
-            != "0"
-        ):
-            raise TradeExecutionError(
-                f"Bybit rejected request: {data.get('retCode')} {data.get('retMsg')}"
-            )
-
-        return data
+    def _cancel_batch_best_effort(
+        self,
+        symbol: str,
+        order_link_ids: list[str],
+    ) -> None:
+        self._client.cancel_batch_best_effort(
+            symbol,
+            order_link_ids,
+        )
 
     @staticmethod
     def _decimal(

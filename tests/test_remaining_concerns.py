@@ -234,7 +234,7 @@ class Exchange:
 def executor_for(exchange):
     executor = BybitDemoExecutor(api_key="synthetic-key", api_secret="synthetic-secret")
     executor._client.close()
-    executor._client = httpx.Client(
+    executor._client._http_client = httpx.Client(
         base_url="https://api-demo.bybit.com",
         transport=httpx.MockTransport(exchange.handle),
     )

@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from unittest.mock import patch
@@ -8,7 +8,7 @@ from unittest.mock import patch
 import aiosqlite
 import httpx
 
-from cautious_crypto_bro.bybit import BybitDemoExecutor
+from cautious_crypto_bro.bybit import BybitClient, BybitDemoExecutor
 from cautious_crypto_bro.domain import (
     AccountPosition,
     AccountStateSummary,
@@ -169,7 +169,13 @@ def test_partial_reduce_uses_live_position_size() -> None:
 
     executor._client.close()
 
-    executor._client = httpx.Client(
+    executor._client = BybitClient(
+        base_url="https://api-demo.bybit.com",
+        api_key="key",
+        api_secret="secret",
+    )
+
+    executor._client._http_client = httpx.Client(
         base_url="https://api-demo.bybit.com",
         transport=httpx.MockTransport(handler),
     )
@@ -186,8 +192,8 @@ def test_partial_reduce_uses_live_position_size() -> None:
 
     try:
         with patch.object(
-            executor,
-            "_sync_clock",
+            executor._client._auth,
+            "sync_clock",
         ):
             result = executor._execute_position_action_sync(action)
 
@@ -293,7 +299,13 @@ def test_full_close_cancels_ccb_entries_first() -> None:
 
     executor._client.close()
 
-    executor._client = httpx.Client(
+    executor._client = BybitClient(
+        base_url="https://api-demo.bybit.com",
+        api_key="key",
+        api_secret="secret",
+    )
+
+    executor._client._http_client = httpx.Client(
         base_url="https://api-demo.bybit.com",
         transport=httpx.MockTransport(handler),
     )
@@ -310,10 +322,10 @@ def test_full_close_cancels_ccb_entries_first() -> None:
     try:
         with (
             patch.object(
-                executor,
-                "_sync_clock",
+                executor._client._auth,
+                "sync_clock",
             ),
-            patch("cautious_crypto_bro.bybit.time.sleep"),
+            patch("cautious_crypto_bro.bybit.executor.time.sleep"),
         ):
             result = executor._execute_position_action_sync(action)
 
@@ -457,6 +469,34 @@ def test_coordinator_waits_for_reduce_position_change(
 
         assert stored is not None
         assert stored.status is IntentStatus.EXECUTED
+
+    asyncio.run(run())
+
+
+def test_position_action_expiry_still_blocks_exchange_calls(tmp_path) -> None:
+    async def run() -> None:
+        store = IntentStore(tmp_path / "state.sqlite3")
+        await store.initialize()
+        action = await persist_reduce_action(store)
+        executor = CoordinatorExecutor([])
+        coordinator = ExecutionCoordinator(
+            store=store,
+            executor=cast(BybitDemoExecutor, executor),
+            max_age_seconds=900,
+        )
+        with (
+            patch("cautious_crypto_bro.execution_coordinator.datetime") as clock,
+            patch.object(executor, "execute_position_action") as submit,
+        ):
+            clock.now.return_value = action.created_at + timedelta(seconds=901)
+            outcome = await coordinator.execute_position_action(
+                action.action_id, approval_mode=ApprovalMode.MANUAL
+            )
+            submit.assert_not_called()
+        assert outcome.status is IntentStatus.FAILED
+        assert outcome.message == "Position action is stale (901s)"
+        stored = await store.get_position_action(action.action_id)
+        assert stored is not None and stored.status is IntentStatus.FAILED
 
     asyncio.run(run())
 

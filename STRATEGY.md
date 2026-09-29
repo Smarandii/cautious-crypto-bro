@@ -29,6 +29,11 @@ MARKET executes E1 first, confirms its fill and persists the rebased plan before
 E2/E3 submission. Adverse slippage reduces remaining allocations to stay inside
 the frozen budget. LIMIT/RANGE entries submit as a batch.
 
+OPEN approvals do not expire by age. Submission rechecks live price: MARKET must
+retain valid stop geometry and fit the frozen risk budget; LIMIT/RANGE must not
+have crossed E1 (LONG below E1 / SHORT above E1). Resting limits retain their
+original prices even when the market is far away; entries never chase it.
+
 Only one V2 strategy may own a symbol. Active strategies, positions or pending
 entry orders block another OPEN, including manual approval. Resolve existing
 ownership before adding another ladder.
@@ -60,6 +65,7 @@ This does not guarantee positive realized PnL after all costs.
 REDUCE/CLOSE require an explicit current-caption instruction. Images may identify
 symbol/side but cannot authorize an action. Explicit fractions/percentages win;
 an unspecified partial close defaults to 50%. HOLD is informational.
+`INTENT_MAX_AGE_SECONDS` limits lifecycle approvals only (default 900 seconds).
 
 Execution validates live side/size, cancels CCB entries and fixed exits, re-reads
 exposure, submits reduce-only orders, then confirms the resulting position.
