@@ -1,44 +1,19 @@
 from __future__ import annotations
 
 import json
-from typing import (
-    Protocol,
-)
 
 from redis.asyncio import (
     BlockingConnectionPool,
     Redis,
 )
 
-
-class ProviderCooldownStore(Protocol):
-    async def get_openrouter_provider_cooldowns(
-        self,
-    ) -> tuple[str, ...]: ...
-
-    async def cooldown_openrouter_provider(
-        self,
-        provider: str,
-        reason: str,
-        duration_seconds: int,
-    ) -> None: ...
+from cautious_crypto_bro.ports import (
+    EvaluationCache,
+    ProviderCooldownStore,
+)
 
 
-class EvaluationCache(Protocol):
-    async def get_evaluation(
-        self,
-        fingerprint: str,
-    ) -> str | None: ...
-
-    async def cache_evaluation(
-        self,
-        fingerprint: str,
-        payload_json: str,
-        duration_seconds: int,
-    ) -> None: ...
-
-
-class RedisRuntimeStore:
+class RedisRuntimeStore(ProviderCooldownStore, EvaluationCache):
     def __init__(
         self,
         redis_url: str,

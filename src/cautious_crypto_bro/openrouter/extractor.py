@@ -29,7 +29,7 @@ from ..llm_provider import (
     LLMRequest,
     LLMResponseValidationError,
 )
-from ..runtime_store import EvaluationCache
+from ..ports import EvaluationCache
 from ._shared import DEFAULT_REDUCTION_PCT
 
 logger = logging.getLogger(__name__)

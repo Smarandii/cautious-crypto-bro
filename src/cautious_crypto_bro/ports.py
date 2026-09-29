@@ -211,6 +211,33 @@ class SignalContextProvider(Protocol):
     ) -> SignalContextSnapshot: ...
 
 
+class ProviderCooldownStore(Protocol):
+    async def get_openrouter_provider_cooldowns(
+        self,
+    ) -> tuple[str, ...]: ...
+
+    async def cooldown_openrouter_provider(
+        self,
+        provider: str,
+        reason: str,
+        duration_seconds: int,
+    ) -> None: ...
+
+
+class EvaluationCache(Protocol):
+    async def get_evaluation(
+        self,
+        fingerprint: str,
+    ) -> str | None: ...
+
+    async def cache_evaluation(
+        self,
+        fingerprint: str,
+        payload_json: str,
+        duration_seconds: int,
+    ) -> None: ...
+
+
 # ---------------------------------------------------------------------------
 # Repository role protocols
 # ---------------------------------------------------------------------------

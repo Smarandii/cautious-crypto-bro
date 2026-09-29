@@ -13,7 +13,7 @@ from ..llm_provider import (
     LLMResponse,
     LLMResponseValidationError,
 )
-from ..runtime_store import ProviderCooldownStore
+from ..ports import ProviderCooldownStore
 from ._shared import STATIC_IGNORED_PROVIDERS, OpenRouterProviderFailure
 
 logger = logging.getLogger(__name__)
