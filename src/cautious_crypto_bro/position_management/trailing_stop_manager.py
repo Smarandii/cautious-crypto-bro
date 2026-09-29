@@ -20,7 +20,7 @@ class TrailingStopManager:
         self._executor = executor
 
     @staticmethod
-    def _verify_protection(
+    def verify_protection(
         position: AccountPosition,
         stop_loss: Decimal,
         trailing_distance: Decimal | None,
@@ -45,7 +45,7 @@ class TrailingStopManager:
             )
 
     @staticmethod
-    def _protected_stop(
+    def protected_stop(
         plan: ExecutionPlan,
         position: AccountPosition,
         context: InstrumentContext,
@@ -99,7 +99,7 @@ class TrailingStopManager:
         return result
 
     @staticmethod
-    def _trailing_distance(
+    def trailing_distance(
         plan: ExecutionPlan,
         position: AccountPosition,
         context: InstrumentContext,

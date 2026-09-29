@@ -52,7 +52,7 @@ class ExitInstaller:
         context = await self._executor.market_context(state.symbol)
 
         trailing_distance = (
-            self._trailing_stop_manager._trailing_distance(
+            self._trailing_stop_manager.trailing_distance(
                 plan,
                 position,
                 context,
@@ -62,7 +62,7 @@ class ExitInstaller:
         )
 
         protected_stop = (
-            self._trailing_stop_manager._protected_stop(
+            self._trailing_stop_manager.protected_stop(
                 plan,
                 position,
                 context,
@@ -119,12 +119,12 @@ class ExitInstaller:
         live_position = _find_position(state, verified)
         if live_position is None:
             raise RuntimeError("Position disappeared during protection handoff")
-        self._trailing_stop_manager._verify_protection(
+        self._trailing_stop_manager.verify_protection(
             live_position,
             protected_stop,
             trailing_distance,
         )
-        await self._handoff_partial_stops(
+        await self.handoff_partial_stops(
             state.model_copy(
                 update={
                     "protected_stop_loss": protected_stop,
@@ -247,7 +247,7 @@ class ExitInstaller:
                     )
                     continue
 
-                link_id = self._fill_detector._exit_link_id(state, index)
+                link_id = self._fill_detector.exit_link_id(state, index)
                 expected_exits[link_id] = (quantity, price)
                 existing = [
                     order
@@ -281,7 +281,7 @@ class ExitInstaller:
         verified_position = _find_position(state, verified)
         if verified_position is None:
             raise RuntimeError("Position disappeared while installing exits")
-        self._trailing_stop_manager._verify_protection(
+        self._trailing_stop_manager.verify_protection(
             verified_position,
             protected_stop,
             trailing_distance,
@@ -322,7 +322,7 @@ class ExitInstaller:
             and order.price == price
         )
 
-    def _partial_stops(
+    def partial_stops(
         self,
         state: PositionStrategy,
         plan: ExecutionPlan,
@@ -331,7 +331,7 @@ class ExitInstaller:
         """Select attached stops by their verified parent entry link."""
         expected_side = Side.SHORT if state.side is Side.LONG else Side.LONG
         expected_parents = {
-            self._fill_detector._entry_link_id(state, order.name)
+            self._fill_detector.entry_link_id(state, order.name)
             for order in plan.orders
         }
         return tuple(
@@ -348,14 +348,14 @@ class ExitInstaller:
             )
         )
 
-    async def _handoff_partial_stops(
+    async def handoff_partial_stops(
         self,
         state: PositionStrategy,
         plan: ExecutionPlan,
         position: AccountPosition,
         account: AccountStateSummary,
     ) -> AccountStateSummary:
-        partial_ids = self._partial_stops(state, plan, account)
+        partial_ids = self.partial_stops(state, plan, account)
         if not partial_ids:
             return account
 
@@ -380,7 +380,7 @@ class ExitInstaller:
             if live_position is None:
                 raise RuntimeError("Position disappeared during protection handoff")
 
-        self._trailing_stop_manager._verify_protection(
+        self._trailing_stop_manager.verify_protection(
             live_position,
             expected_stop,
             state.trailing_distance if state.trailing_active else None,
@@ -391,12 +391,12 @@ class ExitInstaller:
         live_position = _find_position(state, account)
         if live_position is None:
             return account
-        self._trailing_stop_manager._verify_protection(
+        self._trailing_stop_manager.verify_protection(
             live_position,
             expected_stop,
             state.trailing_distance if state.trailing_active else None,
         )
-        remaining_ids = set(self._partial_stops(state, plan, account))
+        remaining_ids = set(self.partial_stops(state, plan, account))
         for order_id in partial_ids:
             if order_id in remaining_ids:
                 await self._executor.cancel_order(state.symbol, order_id)

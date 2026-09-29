@@ -28,7 +28,7 @@ class FillDetector:
         for index in range(1, 4):
             if done[index - 1]:
                 continue
-            link = self._exit_link_id(state, index)
+            link = self.exit_link_id(state, index)
             order = next(
                 (
                     o
@@ -51,14 +51,14 @@ class FillDetector:
         ), filled
 
     @staticmethod
-    def _entry_link_id(
+    def entry_link_id(
         state: PositionStrategy,
         name: str,
     ) -> str:
         return f"ccb-v2-{state.strategy_id.hex[:20]}-{name.lower()}"
 
     @staticmethod
-    def _exit_link_id(
+    def exit_link_id(
         state: PositionStrategy,
         index: int,
     ) -> str:

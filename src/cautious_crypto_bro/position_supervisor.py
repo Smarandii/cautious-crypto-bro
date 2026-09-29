@@ -224,8 +224,8 @@ class PositionSupervisor:
 
         # Complete interrupted protection handoffs even when the exit
         # revision was persisted on a previous reconciliation.
-        if self._exit_installer._partial_stops(state, plan, account):
-            account = await self._exit_installer._handoff_partial_stops(
+        if self._exit_installer.partial_stops(state, plan, account):
+            account = await self._exit_installer.handoff_partial_stops(
                 state,
                 plan,
                 position,
@@ -607,13 +607,13 @@ class PositionSupervisor:
             await self._executor.cancel_pending_entries(state.symbol)
             context = await self._executor.market_context(state.symbol)
 
-            trailing_distance = self._trailing_stop_manager._trailing_distance(
+            trailing_distance = self._trailing_stop_manager.trailing_distance(
                 plan,
                 current_position,
                 context,
             )
 
-            protected_stop = self._trailing_stop_manager._protected_stop(
+            protected_stop = self._trailing_stop_manager.protected_stop(
                 plan,
                 current_position,
                 context,
@@ -639,7 +639,7 @@ class PositionSupervisor:
                 )
                 return account
 
-            self._trailing_stop_manager._verify_protection(
+            self._trailing_stop_manager.verify_protection(
                 verified_position,
                 protected_stop,
                 trailing_distance,
@@ -676,7 +676,7 @@ class PositionSupervisor:
         # Bybit carries the originating entry's orderLinkId on attached
         # TP/SL orders. Stop price and side alone cannot prove ownership.
         expected_parents = {
-            self._fill_detector._entry_link_id(state, order.name)
+            self._fill_detector.entry_link_id(state, order.name)
             for order in plan.orders
         }
         if any(
@@ -690,7 +690,7 @@ class PositionSupervisor:
 
         if not state.entry_frozen:
             expected = {
-                self._fill_detector._entry_link_id(
+                self._fill_detector.entry_link_id(
                     state,
                     planned.name,
                 ): planned
@@ -747,7 +747,7 @@ class PositionSupervisor:
             and position.stop_loss != state.protected_stop_loss
             and not (
                 position.stop_loss is None
-                and self._exit_installer._partial_stops(state, plan, account)
+                and self._exit_installer.partial_stops(state, plan, account)
             )
         ):
             return (
