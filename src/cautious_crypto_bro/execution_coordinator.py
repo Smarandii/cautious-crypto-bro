@@ -42,6 +42,7 @@ class ExecutionCoordinator:
         *,
         store: ExecutionCoordinatorStore,
         executor: AccountGateway,
+        planner: ExecutionPlanner,
         max_age_seconds: int,
         execution_lock: asyncio.Lock | None = None,
     ) -> None:
@@ -50,6 +51,7 @@ class ExecutionCoordinator:
 
         self._store = store
         self._executor = executor
+        self._planner = planner
         self._max_age_seconds = max_age_seconds
 
         # Serialize every account mutation, including
@@ -338,7 +340,7 @@ class ExecutionCoordinator:
 
                     context = await self._executor.market_context(plan.symbol)
 
-                    effective_plan = ExecutionPlanner().rebase_market_plan(
+                    effective_plan = self._planner.rebase_market_plan(
                         plan,
                         fill_price=(primary.average_fill_price),
                         filled_quantity=(primary.filled_quantity),

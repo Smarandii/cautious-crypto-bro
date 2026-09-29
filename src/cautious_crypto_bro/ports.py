@@ -24,6 +24,7 @@ from .domain import (
     PositionActionIntent,
     PositionStrategy,
     Side,
+    SignalContextSnapshot,
     SignalExtraction,
     SignalPositionContext,
     SourceMessage,
@@ -177,6 +178,37 @@ class IntentExtractor(Protocol):
         channel_guidance: str | None = None,
         position_context: SignalPositionContext | None = None,
     ) -> SignalExtraction: ...
+
+
+class ExecutionCoordinator(Protocol):
+    def auto_open_safety_reason(
+        self,
+        intent: TradingIntent,
+        account_state: AccountStateSummary,
+    ) -> str | None: ...
+
+    async def execute_intent(
+        self,
+        intent_id: UUID,
+        *,
+        approval_mode: ApprovalMode,
+        user_id: int | None = None,
+    ) -> IntentExecutionOutcome: ...
+
+    async def execute_position_action(
+        self,
+        action_id: UUID,
+        *,
+        approval_mode: ApprovalMode,
+        user_id: int | None = None,
+    ) -> PositionActionExecutionOutcome: ...
+
+
+class SignalContextProvider(Protocol):
+    async def snapshot(
+        self,
+        channel_id: int,
+    ) -> SignalContextSnapshot: ...
 
 
 # ---------------------------------------------------------------------------

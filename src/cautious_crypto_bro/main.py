@@ -70,6 +70,7 @@ async def async_main() -> None:
     coordinator = ExecutionCoordinator(
         store=store,
         executor=executor,
+        planner=planner,
         max_age_seconds=(settings.intent_max_age_seconds),
         execution_lock=(account_mutation_lock),
     )

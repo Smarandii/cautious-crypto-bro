@@ -21,6 +21,7 @@ from cautious_crypto_bro.domain import (
     Side,
     SourceMessage,
 )
+from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.storage import (
     LATEST_SCHEMA_VERSION,
@@ -444,6 +445,7 @@ def test_coordinator_waits_for_reduce_position_change(
                 BybitDemoExecutor,
                 executor,
             ),
+            planner=ExecutionPlanner(),
             max_age_seconds=3600,
         )
 
@@ -482,6 +484,7 @@ def test_position_action_expiry_still_blocks_exchange_calls(tmp_path) -> None:
         coordinator = ExecutionCoordinator(
             store=store,
             executor=cast(BybitDemoExecutor, executor),
+            planner=ExecutionPlanner(),
             max_age_seconds=900,
         )
         with (
@@ -523,6 +526,7 @@ def test_coordinator_marks_unconfirmed_reduce_uncertain(
                 BybitDemoExecutor,
                 executor,
             ),
+            planner=ExecutionPlanner(),
             max_age_seconds=3600,
         )
 
@@ -582,6 +586,7 @@ def test_transport_timeout_after_accepted_reduce_quarantines_strategy(tmp_path) 
         coordinator = ExecutionCoordinator(
             store=store,
             executor=cast(BybitDemoExecutor, executor),
+            planner=ExecutionPlanner(),
             max_age_seconds=3600,
         )
         outcome = await coordinator.execute_position_action(
@@ -627,6 +632,7 @@ def test_ambiguous_submission_without_order_id_is_quarantined(tmp_path) -> None:
         coordinator = ExecutionCoordinator(
             store=store,
             executor=cast(BybitDemoExecutor, executor),
+            planner=ExecutionPlanner(),
             max_age_seconds=3600,
         )
         outcome = await coordinator.execute_position_action(
@@ -669,6 +675,7 @@ def test_preflight_failure_is_distinguished_from_ambiguous_submission(tmp_path) 
         coordinator = ExecutionCoordinator(
             store=store,
             executor=cast(BybitDemoExecutor, executor),
+            planner=ExecutionPlanner(),
             max_age_seconds=3600,
         )
         outcome = await coordinator.execute_position_action(
@@ -694,6 +701,7 @@ def test_confirmed_reduce_atomically_requests_rebalance(tmp_path) -> None:
         coordinator = ExecutionCoordinator(
             store=store,
             executor=cast(BybitDemoExecutor, executor),
+            planner=ExecutionPlanner(),
             max_age_seconds=3600,
         )
         outcome = await coordinator.execute_position_action(

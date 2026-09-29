@@ -409,6 +409,13 @@ class SignalPositionContext(BaseModel):
         return False
 
 
+@dataclass(frozen=True, slots=True)
+class SignalContextSnapshot:
+    position_context: SignalPositionContext
+    account_state: AccountStateSummary | None
+    account_state_error: str | None
+
+
 class SourceMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

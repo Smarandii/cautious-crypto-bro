@@ -286,7 +286,11 @@ async def prepare(
     await store.create_signal_batch_and_complete_source(((intent, plan),), (), claim)
     lock = asyncio.Lock()
     coordinator = ExecutionCoordinator(
-        store=store, executor=executor, max_age_seconds=3600, execution_lock=lock
+        store=store,
+        executor=executor,
+        planner=planner,
+        max_age_seconds=3600,
+        execution_lock=lock,
     )
     supervisor = PositionSupervisor(store=store, executor=executor, mutation_lock=lock)
     return store, intent, plan, coordinator, supervisor

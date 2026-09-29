@@ -115,6 +115,7 @@ def test_historical_v1_approval_is_rejected_before_exchange(
     coordinator = ExecutionCoordinator(
         store=store,
         executor=NoExchangeCalls(),
+        planner=ExecutionPlanner(),
         max_age_seconds=300,
     )
 
@@ -208,6 +209,7 @@ def test_execution_outcome_persists_under_mutation_lock() -> None:
         coordinator = ExecutionCoordinator(
             store=Store(),
             executor=Executor(),
+            planner=ExecutionPlanner(),
             max_age_seconds=3600,
             execution_lock=lock,
         )

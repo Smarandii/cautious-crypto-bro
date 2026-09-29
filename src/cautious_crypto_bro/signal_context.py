@@ -1,24 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from .domain import (
     AccountPositionContext,
     AccountStateSummary,
     IntentStatus,
     PositionActionIntent,
+    SignalContextSnapshot,
     SignalPositionContext,
     SourceOpenContext,
     TradingIntent,
 )
 from .ports import AccountGateway, SignalContextProviderStore
-
-
-@dataclass(frozen=True, slots=True)
-class SignalContextSnapshot:
-    position_context: SignalPositionContext
-    account_state: AccountStateSummary | None
-    account_state_error: str | None
 
 
 def build_position_context(

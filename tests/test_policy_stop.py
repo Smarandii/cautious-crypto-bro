@@ -248,6 +248,7 @@ def test_policy_stop_survives_storage_execution_and_restart(tmp_path, side, expe
             coordinator = ExecutionCoordinator(
                 store=store,
                 executor=executor,
+                planner=ExecutionPlanner(),
                 max_age_seconds=3600,
                 execution_lock=asyncio.Lock(),
             )
