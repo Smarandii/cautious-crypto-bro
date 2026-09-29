@@ -16,16 +16,14 @@ from cautious_crypto_bro.domain import (
     ExecutionOrderType,
     ExecutionPlan,
     ExecutionPolicy,
+    InstrumentContext,
     PlannedOrder,
     Side,
     SourceMessage,
     TradeExecutionError,
     TradingIntent,
 )
-from cautious_crypto_bro.execution import (
-    ExecutionPlanner,
-    InstrumentContext,
-)
+from cautious_crypto_bro.execution import ExecutionPlanner
 
 
 def policy() -> ExecutionPolicy:

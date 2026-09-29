@@ -18,16 +18,14 @@ from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
     ExecutionPolicy,
+    InstrumentContext,
     PositionStrategy,
     Side,
     SourceMessage,
     StrategyStatus,
     TradingIntent,
 )
-from cautious_crypto_bro.execution import (
-    ExecutionPlanner,
-    InstrumentContext,
-)
+from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.position_supervisor import (
     PositionSupervisor,
 )

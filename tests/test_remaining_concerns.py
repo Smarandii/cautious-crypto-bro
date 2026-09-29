@@ -20,6 +20,7 @@ from cautious_crypto_bro.domain import (
     EntryType,
     ExecutionPolicy,
     IncomingPost,
+    InstrumentContext,
     IntentExtraction,
     IntentStatus,
     Side,
@@ -27,7 +28,7 @@ from cautious_crypto_bro.domain import (
     SourceMessage,
     TradingIntent,
 )
-from cautious_crypto_bro.execution import ExecutionPlanner, InstrumentContext
+from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.openrouter import _signals_from_extraction
 from cautious_crypto_bro.position_supervisor import PositionSupervisor

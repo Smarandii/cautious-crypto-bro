@@ -15,6 +15,8 @@ from .domain import (
     ClosedPnlRecord,
     ExecutionPlan,
     ExecutionPolicy,
+    IncomingPost,
+    InstrumentContext,
     IntentExecutionOutcome,
     MarketPrimaryExecutionResult,
     PositionActionExecutionOutcome,
@@ -22,12 +24,13 @@ from .domain import (
     PositionActionIntent,
     PositionStrategy,
     Side,
+    SignalExtraction,
+    SignalPositionContext,
     SourceMessage,
     StrategyStatus,
     SymbolExposure,
     TradingIntent,
 )
-from .execution import InstrumentContext
 
 # ---------------------------------------------------------------------------
 # Infrastructure ports
@@ -163,6 +166,17 @@ class ManualApprovalExecutor(Protocol):
         approval_mode: ApprovalMode,
         user_id: int | None = None,
     ) -> PositionActionExecutionOutcome: ...
+
+
+class IntentExtractor(Protocol):
+    async def extract(
+        self,
+        post: IncomingPost,
+        *,
+        global_guidance: str | None = None,
+        channel_guidance: str | None = None,
+        position_context: SignalPositionContext | None = None,
+    ) -> SignalExtraction: ...
 
 
 # ---------------------------------------------------------------------------

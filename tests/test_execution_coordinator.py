@@ -11,13 +11,14 @@ from cautious_crypto_bro.domain import (
     EntryType,
     ExecutionPlan,
     ExecutionPolicy,
+    InstrumentContext,
     IntentStatus,
     Side,
     SourceMessage,
     StrategyStatus,
     TradingIntent,
 )
-from cautious_crypto_bro.execution import ExecutionPlanner, InstrumentContext
+from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 
 

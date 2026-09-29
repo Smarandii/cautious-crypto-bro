@@ -30,10 +30,10 @@ from .domain import (
 )
 from .execution import ExecutionPlanner
 from .execution_coordinator import ExecutionCoordinator
-from .openrouter import IntentExtractor
 from .ports import (
     AccountGateway,
     ApprovalSender,
+    IntentExtractor,
     SignalServiceStore,
 )
 from .signal_context import (

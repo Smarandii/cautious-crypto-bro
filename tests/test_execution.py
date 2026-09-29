@@ -10,6 +10,7 @@ from cautious_crypto_bro.domain import (
     ExecutionOrderType,
     ExecutionPlan,
     ExecutionPolicy,
+    InstrumentContext,
     Side,
     SourceMessage,
     TakeProfitSource,
@@ -18,7 +19,6 @@ from cautious_crypto_bro.domain import (
 from cautious_crypto_bro.execution import (
     ExecutionPlanner,
     ExecutionPlanningError,
-    InstrumentContext,
 )
 
 

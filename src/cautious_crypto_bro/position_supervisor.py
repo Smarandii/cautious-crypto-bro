@@ -19,13 +19,13 @@ from .domain import (
     AccountPosition,
     AccountStateSummary,
     ExecutionPlan,
+    InstrumentContext,
     PositionStrategy,
     Side,
     StrategyStatus,
     StrategyV2Policy,
     TakeProfitSource,
 )
-from .execution import InstrumentContext
 from .ports import AccountGateway, PositionSupervisorStore
 
 logger = logging.getLogger(__name__)

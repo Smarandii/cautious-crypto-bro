@@ -16,11 +16,12 @@ from test_remaining_concerns import (
 from cautious_crypto_bro.bybit import EntryPreflightError
 from cautious_crypto_bro.domain import (
     ApprovalMode,
+    InstrumentContext,
     IntentExtraction,
     IntentStatus,
     StrategyStatus,
 )
-from cautious_crypto_bro.execution import ExecutionPlanner, InstrumentContext
+from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.openrouter import _signals_from_extraction
 
 

@@ -14,6 +14,7 @@ from .domain import (
     ExecutionOrderType,
     ExecutionPlan,
     ExecutionPolicy,
+    InstrumentContext,
     PlannedOrder,
     PlannedTakeProfit,
     Side,
@@ -26,15 +27,6 @@ from .domain import (
 
 class ExecutionPlanningError(RuntimeError):
     pass
-
-
-@dataclass(frozen=True, slots=True)
-class InstrumentContext:
-    market_price: Decimal
-    tick_size: Decimal
-    qty_step: Decimal
-    min_qty: Decimal
-    min_notional: Decimal
 
 
 @dataclass(frozen=True, slots=True)

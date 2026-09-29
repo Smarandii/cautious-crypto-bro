@@ -12,6 +12,7 @@ from cautious_crypto_bro.domain import (
     ExecutionOrderType,
     ExecutionPlan,
     ExecutionPolicy,
+    InstrumentContext,
     IntentExtraction,
     IntentStatus,
     OpenRelation,
@@ -25,7 +26,7 @@ from cautious_crypto_bro.domain import (
     StrategyStatus,
     TradingIntent,
 )
-from cautious_crypto_bro.execution import ExecutionPlanner, InstrumentContext
+from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.openrouter import (
     _signals_from_extraction,

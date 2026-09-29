@@ -7,6 +7,7 @@ from test_execution import policy, source
 
 from cautious_crypto_bro.domain import (
     ExecutionPlan,
+    InstrumentContext,
     IntentExtraction,
     StopLossSource,
     StrategyV2Policy,
@@ -16,7 +17,6 @@ from cautious_crypto_bro.domain import (
 from cautious_crypto_bro.execution import (
     ExecutionPlanner,
     ExecutionPlanningError,
-    InstrumentContext,
 )
 from cautious_crypto_bro.openrouter import _signals_from_extraction
 

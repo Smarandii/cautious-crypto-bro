@@ -27,6 +27,15 @@ class ClosedPnlRecord:
     updated_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class InstrumentContext:
+    market_price: Decimal
+    tick_size: Decimal
+    qty_step: Decimal
+    min_qty: Decimal
+    min_notional: Decimal
+
+
 class TradeExecutionError(RuntimeError):
     pass
 

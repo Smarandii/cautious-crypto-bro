@@ -24,6 +24,7 @@ from .domain import (
     EntryPreflightError,
     ExecutionOrderType,
     ExecutionPlan,
+    InstrumentContext,
     MarketPrimaryExecutionResult,
     OpenOrderExposure,
     PositionActionExecutionResult,
@@ -35,7 +36,6 @@ from .domain import (
     SymbolExposure,
     TradeExecutionError,
 )
-from .execution import InstrumentContext
 
 logger = logging.getLogger(__name__)
 
