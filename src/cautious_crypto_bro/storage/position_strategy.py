@@ -6,8 +6,9 @@ from uuid import UUID
 
 import aiosqlite
 
-from ..domain import ExecutionPlan, PositionStrategy, StrategyStatus, TradingIntent
+from ..domain import ExecutionPlan, PositionStrategy, StrategyStatus
 from ._connection import _Store
+from ._plan_payload import load_strategy_plan
 
 
 class PositionStrategyRepositoryImpl(_Store):
@@ -97,19 +98,13 @@ class PositionStrategyRepositoryImpl(_Store):
             row_factory=True,
         )
 
-        records = []
-        for row in rows:
-            plan = ExecutionPlan.model_validate_json(row["plan_json"])
-            # Older plans only retained the policy's last target, losing distant
-            # trader caps. Recover the original absolute cap from the saved signal.
-            if plan.trader_take_profit is None and row["intent_json"] is not None:
-                intent = TradingIntent.model_validate_json(row["intent_json"])
-                if intent.take_profit is not None:
-                    plan = plan.model_copy(
-                        update={"trader_take_profit": Decimal(str(intent.take_profit))}
-                    )
-            records.append((self._position_strategy_from_row(row), plan))
-        return tuple(records)
+        return tuple(
+            (
+                self._position_strategy_from_row(row),
+                load_strategy_plan(row["plan_json"], row["intent_json"]),
+            )
+            for row in rows
+        )
 
     async def save_position_strategy(
         self,
