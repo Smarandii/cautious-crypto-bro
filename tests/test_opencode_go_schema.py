@@ -3,8 +3,8 @@ from copy import deepcopy
 from cautious_crypto_bro.domain import (
     IntentExtraction,
 )
-from cautious_crypto_bro.opencode_go import (
-    _strict_response_schema,
+from cautious_crypto_bro.llm_provider import (
+    strict_response_schema,
 )
 
 
@@ -24,7 +24,7 @@ def test_intent_schema_is_normalized_for_strict_responses() -> None:
     original = IntentExtraction.model_json_schema()
     before = deepcopy(original)
 
-    normalized = _strict_response_schema(original)
+    normalized = strict_response_schema(original)
     assert original == before
 
     objects = [

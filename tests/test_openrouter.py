@@ -60,6 +60,54 @@ def source() -> SourceMessage:
     )
 
 
+@pytest.mark.parametrize("model", ["openai/gpt-5.6-luna", "test/model"])
+def test_model_payload_preserves_strict_schema_without_unsupported_temperature(model):
+    import asyncio
+    import json
+
+    import httpx
+
+    from cautious_crypto_bro.llm_provider import LLMRequest
+
+    async def run():
+        def handler(request):
+            body = json.loads(request.content)
+            assert ("temperature" in body) == (model != "openai/gpt-5.6-luna")
+            assert body["provider"]["require_parameters"] is True
+            assert body["response_format"]["json_schema"]["strict"] is True
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [{"finish_reason": "stop", "message": {"content": "{}"}}]
+                },
+            )
+
+        provider = OpenRouterProvider(
+            api_key="test", model=model, base_url="https://openrouter.test"
+        )
+        await provider._client.aclose()
+        provider._client = httpx.AsyncClient(
+            base_url="https://openrouter.test", transport=httpx.MockTransport(handler)
+        )
+        try:
+            await provider.complete(
+                LLMRequest(
+                    system_prompt="Test",
+                    user_text="Test",
+                    response_schema_name="test",
+                    response_schema={
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                )
+            )
+        finally:
+            await provider.close()
+
+    asyncio.run(run())
+
+
 def test_intent_extractor_accepts_generic_provider() -> None:
     import asyncio
     import json

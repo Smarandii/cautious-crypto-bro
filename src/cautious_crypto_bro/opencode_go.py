@@ -13,6 +13,7 @@ from .llm_provider import (
     LLMRequest,
     LLMResponse,
     LLMResponseValidationError,
+    strict_response_schema,
 )
 
 logger = logging.getLogger(__name__)
@@ -20,32 +21,6 @@ logger = logging.getLogger(__name__)
 SUPPORTED_OPENCODE_GO_MODELS = {
     "gpt-5.6-luna",
 }
-
-
-def _strict_response_schema(
-    schema: dict[str, object],
-) -> dict[str, object]:
-    """Normalize Pydantic JSON Schema for strict Responses output."""
-
-    def normalize(value: object) -> object:
-        if isinstance(value, list):
-            return [normalize(item) for item in value]
-        if not isinstance(value, dict):
-            return value
-
-        result = {
-            key: normalize(item) for key, item in value.items() if key != "default"
-        }
-        properties = result.get("properties")
-        if isinstance(properties, dict):
-            result["required"] = list(properties)
-            result["additionalProperties"] = False
-        return result
-
-    normalized = normalize(schema)
-    if not isinstance(normalized, dict):
-        raise TypeError("Response schema must normalize to an object")
-    return normalized
 
 
 def _response_text(
@@ -179,7 +154,7 @@ class OpenCodeGoProvider:
                 "format": {
                     "type": "json_schema",
                     "name": (request.response_schema_name),
-                    "schema": _strict_response_schema(request.response_schema),
+                    "schema": strict_response_schema(request.response_schema),
                     "strict": True,
                 }
             },

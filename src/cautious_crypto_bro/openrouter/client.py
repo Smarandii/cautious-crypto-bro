@@ -12,6 +12,7 @@ from ..llm_provider import (
     LLMRequest,
     LLMResponse,
     LLMResponseValidationError,
+    strict_response_schema,
 )
 from ..ports import ProviderCooldownStore
 from ._shared import STATIC_IGNORED_PROVIDERS, OpenRouterProviderFailure
@@ -209,7 +210,6 @@ class OpenRouterProvider:
                     "content": self._user_content(request),
                 },
             ],
-            "temperature": request.temperature,
             "max_tokens": request.max_tokens,
             "reasoning": {
                 "effort": "none",
@@ -225,10 +225,16 @@ class OpenRouterProvider:
                 "json_schema": {
                     "name": request.response_schema_name,
                     "strict": True,
-                    "schema": request.response_schema,
+                    "schema": strict_response_schema(request.response_schema)
+                    if self._model == "openai/gpt-5.6-luna"
+                    else request.response_schema,
                 },
             },
         }
+
+        # Luna does not support temperature; strict routing rejects that parameter.
+        if self._model != "openai/gpt-5.6-luna":
+            payload["temperature"] = request.temperature
 
         last_error: Exception | None = None
 

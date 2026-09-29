@@ -239,30 +239,6 @@ class ExecutionCoordinator:
                 plan=plan,
             )
 
-        age = (datetime.now(UTC) - intent.created_at).total_seconds()
-
-        if age > self._max_age_seconds:
-            claimed = await self._store.claim_for_execution(
-                intent_id,
-                user_id,
-                expected_approval_mode=(approval_mode),
-            )
-
-            message = f"Intent is stale ({int(age)}s)"
-
-            if claimed:
-                await self._store.mark_failed(
-                    intent_id,
-                    message,
-                )
-
-            return IntentExecutionOutcome(
-                status=IntentStatus.FAILED,
-                message=message,
-                intent=intent,
-                plan=plan,
-            )
-
         claimed = await self._store.claim_for_execution(
             intent_id,
             user_id,

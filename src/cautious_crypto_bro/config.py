@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     )
 
     openrouter_api_key: str | None = None
-    openrouter_model: str = "google/gemma-4-26b-a4b-it"
+    openrouter_model: str = "openai/gpt-5.6-luna"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_inference_timeout_seconds: float = Field(
         default=60,
@@ -108,6 +108,7 @@ class Settings(BaseSettings):
         ge=60,
         le=3600,
     )
+    # Kept for env compatibility; applies only to position actions, not OPEN.
     intent_max_age_seconds: int = Field(default=900, gt=0)
 
     auto_approval_mode: AutoApprovalMode = AutoApprovalMode.DISABLED
