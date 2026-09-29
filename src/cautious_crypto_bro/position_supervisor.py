@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import (
@@ -22,6 +21,7 @@ from .domain import (
     InstrumentContext,
     PositionStrategy,
     Side,
+    StoreError,
     StrategyStatus,
     StrategyV2Policy,
     TakeProfitSource,
@@ -135,7 +135,7 @@ class PositionSupervisor:
 
                 try:
                     account = await self._reconcile(state, plan, account)
-                except sqlite3.Error:
+                except StoreError:
                     # All strategies share durable storage; no further trading
                     # is safe when its state cannot be read or committed.
                     raise

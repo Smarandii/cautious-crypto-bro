@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import sqlite3
 from dataclasses import replace
 from datetime import (
     UTC,
@@ -22,6 +21,7 @@ from cautious_crypto_bro.domain import (
     PositionStrategy,
     Side,
     SourceMessage,
+    StoreError,
     StrategyStatus,
     TradingIntent,
 )
@@ -834,7 +834,7 @@ def test_supervisor_does_not_continue_after_global_failure(
             store, "get_active_position_strategies", AsyncMock(side_effect=error)
         )
     elif failure == "store_write":
-        error = sqlite3.OperationalError("database or disk is full")
+        error = StoreError("database or disk is full")
         monkeypatch.setattr(
             store, "save_position_strategy", AsyncMock(side_effect=error)
         )

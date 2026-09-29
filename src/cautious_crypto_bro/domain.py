@@ -48,6 +48,10 @@ class EntryPreflightError(TradeExecutionError):
     """Entry failed before any order submission was attempted."""
 
 
+class StoreError(RuntimeError):
+    """Durable storage operation failed."""
+
+
 @dataclass(frozen=True, slots=True)
 class PositionExposure:
     side: Side
