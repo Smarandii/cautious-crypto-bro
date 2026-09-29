@@ -95,6 +95,14 @@ class SignalService:
         return True
 
     async def recover_manual_deliveries(self) -> None:
+        requeued, stale = await self._store.reconcile_manual_deliveries()
+        if requeued or stale:
+            logger.info(
+                "Manual delivery reconciliation: %d requeued, %d stale failed",
+                requeued,
+                stale,
+            )
+
         for record_id, kind in await self._store.pending_manual_deliveries():
             if kind == "OPEN":
                 signal = await self._store.get_intent(record_id)

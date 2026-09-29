@@ -28,9 +28,14 @@ def test_initial_reconciliation_precedes_any_execution(
         events.append("store.quarantine")
         return (), ()
 
+    async def reset_stale(_lease_seconds: int):
+        events.append("store.reset_stale")
+        return 0
+
     store = SimpleNamespace(
         initialize=step("store.initialize"),
         quarantine_interrupted_executions=quarantine,
+        reset_stale_processing_sources=reset_stale,
     )
     runtime_store = SimpleNamespace(
         initialize=step("runtime.initialize"),
@@ -101,14 +106,16 @@ def test_initial_reconciliation_precedes_any_execution(
             asyncio.run(app.async_main())
 
         assert events.count("supervisor.reconcile") == failed_reconciliation
-        assert events.index("store.quarantine") < events.index("supervisor.reconcile")
+        assert events.index("store.quarantine") < events.index("store.reset_stale")
+        assert events.index("store.reset_stale") < events.index("supervisor.reconcile")
         assert ("service.recover" in events) is (failed_reconciliation == 2)
         assert "bot.run" not in events
         assert "source.start" not in events
     else:
         asyncio.run(app.async_main())
 
-        assert events.index("store.quarantine") < events.index("supervisor.reconcile")
+        assert events.index("store.quarantine") < events.index("store.reset_stale")
+        assert events.index("store.reset_stale") < events.index("supervisor.reconcile")
         assert events.index("bot.recovery_warning") < events.index(
             "supervisor.reconcile"
         )

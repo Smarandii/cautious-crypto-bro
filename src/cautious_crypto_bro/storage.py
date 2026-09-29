@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -1095,6 +1095,107 @@ class IntentStore:
                 raise
 
         return intent_ids, action_ids
+
+    async def reset_stale_processing_sources(
+        self,
+        lease_seconds: int,
+    ) -> int:
+        """Fail source messages stuck in PROCESSING beyond their lease."""
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE source_messages
+                SET
+                    status = ?,
+                    last_error = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE
+                    status = 'PROCESSING'
+                    AND updated_at <= datetime('now', ?)
+                """,
+                (
+                    "FAILED",
+                    "Source processing lease expired during previous run",
+                    f"-{lease_seconds} seconds",
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount
+
+    async def reconcile_manual_deliveries(
+        self,
+        *,
+        stale_after_seconds: float = 86400,
+    ) -> tuple[int, int]:
+        """Re-queue recent missing manual deliveries; fail stale orphans."""
+        if stale_after_seconds <= 0:
+            raise ValueError("stale_after_seconds must be positive")
+
+        cutoff = datetime.now(UTC) - timedelta(seconds=stale_after_seconds)
+
+        async with aiosqlite.connect(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT i.intent_id, 'OPEN', i.created_at
+                FROM intents i
+                LEFT JOIN manual_deliveries d ON d.record_id = i.intent_id
+                WHERE i.status = ?
+                  AND i.approval_mode = ?
+                  AND d.record_id IS NULL
+                UNION ALL
+                SELECT a.action_id, 'ACTION', a.created_at
+                FROM position_actions a
+                LEFT JOIN manual_deliveries d ON d.record_id = a.action_id
+                WHERE a.status = ?
+                  AND a.approval_mode = ?
+                  AND d.record_id IS NULL
+                """,
+                (
+                    IntentStatus.PENDING.value,
+                    ApprovalMode.MANUAL.value,
+                    IntentStatus.PENDING.value,
+                    ApprovalMode.MANUAL.value,
+                ),
+            )
+            orphaned = await cursor.fetchall()
+
+            requeued = 0
+            failed = 0
+            for record_id, kind, created_at in orphaned:
+                if datetime.fromisoformat(created_at) < cutoff:
+                    table = "intents" if kind == "OPEN" else "position_actions"
+                    id_column = "intent_id" if kind == "OPEN" else "action_id"
+                    await db.execute(
+                        f"""
+                        UPDATE {table}
+                        SET
+                            status = ?,
+                            error = ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE {id_column} = ?
+                        """,
+                        (
+                            IntentStatus.FAILED.value,
+                            "Stale manual approval request; delivery queue was lost",
+                            record_id,
+                        ),
+                    )
+                    failed += 1
+                else:
+                    await db.execute(
+                        """
+                        INSERT INTO manual_deliveries(record_id, kind)
+                        VALUES (?, ?)
+                        """,
+                        (record_id, kind),
+                    )
+                    requeued += 1
+
+            await db.commit()
+            return requeued, failed
 
     async def _get_pending_auto_ids(
         self,

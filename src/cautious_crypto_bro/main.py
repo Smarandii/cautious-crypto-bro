@@ -36,6 +36,14 @@ async def async_main() -> None:
         interrupted_intents,
         interrupted_actions,
     ) = await store.quarantine_interrupted_executions()
+    stale_sources = await store.reset_stale_processing_sources(
+        settings.source_processing_lease_seconds,
+    )
+    if stale_sources:
+        logging.getLogger(__name__).warning(
+            "Reset %d stale source message(s) stuck in PROCESSING",
+            stale_sources,
+        )
 
     runtime_store = RedisRuntimeStore(
         settings.redis_url,
