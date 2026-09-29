@@ -49,6 +49,7 @@ class OpenRelation(StrEnum):
 class ApprovalMode(StrEnum):
     MANUAL = "MANUAL"
     AUTO = "AUTO"
+    SKIPPED = "SKIPPED"
 
 
 class AutoApprovalMode(StrEnum):

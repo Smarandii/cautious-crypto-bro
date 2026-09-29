@@ -248,9 +248,6 @@ class SignalService:
         *,
         account_state: AccountStateSummary | None,
     ) -> ApprovalMode:
-        if self._auto_approval_mode is not AutoApprovalMode.ALL:
-            return ApprovalMode.MANUAL
-
         if account_state is None:
             return self._manual(
                 "Position action %s %s remains "
@@ -262,37 +259,28 @@ class SignalService:
 
         if action.action is PositionActionType.CANCEL_ENTRIES:
             # Execution resolves ownership from durable source records, not position count.
-            return ApprovalMode.AUTO
-
-        positions = tuple(
-            position
-            for position in account_state.positions
-            if position.symbol == action.symbol
-        )
-
-        if len(positions) != 1:
-            return self._manual(
-                "Position action %s %s remains "
-                "MANUAL because live position "
-                "count is %d",
-                action.action.value,
-                action.symbol,
-                len(positions),
+            executable = True
+        else:
+            positions = tuple(
+                position
+                for position in account_state.positions
+                if position.symbol == action.symbol
+            )
+            executable = len(positions) == 1 and (
+                action.expected_side is None
+                or action.expected_side is positions[0].side
             )
 
-        position = positions[0]
-
-        if (
-            action.expected_side is not None
-            and action.expected_side is not position.side
-        ):
-            return self._manual(
-                "Position action %s %s remains "
-                "MANUAL because expected side "
-                "does not match live position",
+        if not executable:
+            logger.info(
+                "Position action %s %s skipped; no matching live position",
                 action.action.value,
                 action.symbol,
             )
+            return ApprovalMode.SKIPPED
+
+        if self._auto_approval_mode is not AutoApprovalMode.ALL:
+            return ApprovalMode.MANUAL
 
         return ApprovalMode.AUTO
 
@@ -671,6 +659,9 @@ class SignalService:
             manual_cards_sent += int(sent)
 
         for action in position_actions:
+            if action.approval_mode is ApprovalMode.SKIPPED:
+                continue
+
             if action.approval_mode is ApprovalMode.AUTO:
                 outcome = await self._coordinator.execute_position_action(
                     action.action_id,

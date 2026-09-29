@@ -486,6 +486,8 @@ def test_manual_delivery_retries_after_restart_without_replaying_source(tmp_path
                 existing.intent_id, token, delivered=True
             )
             signals = normalize("Close 25% of BTC position now.")
+            # Ensure a live position exists so REDUCE actions are deliverable.
+            exchange.size = D("1")
             if kind == "OPEN":
                 new_intent = make_intent().model_copy(
                     update={"source": source("Open BTC", 2)}

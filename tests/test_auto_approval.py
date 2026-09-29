@@ -459,3 +459,45 @@ def test_service_auto_routing_requires_trusted_state() -> None:
         )
         is ApprovalMode.AUTO
     )
+
+
+def test_position_action_without_live_position_is_skipped() -> None:
+    common = {
+        "store": object(),
+        "extractor": object(),
+        "planner": object(),
+        "executor": object(),
+        "approval_bot": object(),
+        "coordinator": object(),
+        "context_provider": object(),
+    }
+
+    service = SignalService(
+        **common,
+        auto_approval_mode=(AutoApprovalMode.ALL),
+    )
+
+    action = PositionActionIntent(
+        source=_source(),
+        symbol="BTCUSDT",
+        action=PositionActionType.CLOSE,
+        expected_side=Side.LONG,
+        summary="Close BTC",
+        confidence=1,
+    )
+
+    assert (
+        service._position_action_approval_mode(
+            action,
+            account_state=_state(),
+        )
+        is ApprovalMode.SKIPPED
+    )
+
+    assert (
+        service._position_action_approval_mode(
+            action,
+            account_state=_state(_position(Side.SHORT)),
+        )
+        is ApprovalMode.SKIPPED
+    )
