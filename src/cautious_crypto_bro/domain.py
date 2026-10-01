@@ -169,6 +169,16 @@ class AccountOrder:
             "TRAILING",
         }
 
+    @property
+    def is_v2_take_profit(self) -> bool:
+        """Strategy V2 exits are reduce-only limits, so `kind` sees them as REDUCE."""
+        return (
+            self.reduce_only
+            and self.order_type == "Limit"
+            and self.order_link_id.startswith("ccb-v2-")
+            and "-t" in self.order_link_id
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class AccountStateSummary:

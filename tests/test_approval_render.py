@@ -1,11 +1,19 @@
+from dataclasses import replace
 from datetime import (
     UTC,
     datetime,
 )
 from decimal import Decimal
 
-from cautious_crypto_bro.approval_presenter import render
+from cautious_crypto_bro.approval_presenter import (
+    render,
+    render_account_state,
+    render_position_protection,
+)
 from cautious_crypto_bro.domain import (
+    AccountOrder,
+    AccountPosition,
+    AccountStateSummary,
     Entry,
     EntryType,
     ExecutionOrderType,
@@ -106,3 +114,121 @@ def test_render_contains_execution_policy() -> None:
     assert "Trader &amp; Co" in rendered
     assert "Confidence:" not in rendered
     assert "Published:" not in rendered
+
+
+def test_account_card_shows_v2_take_profits_and_position_trailing_stop() -> None:
+    now = datetime.now(UTC)
+    position = AccountPosition(
+        symbol="NEARUSDT",
+        side=Side.SHORT,
+        size=Decimal("109.7"),
+        avg_price=Decimal("5.09"),
+        mark_price=Decimal("4.9"),
+        unrealised_pnl=Decimal("20"),
+        status="Normal",
+        take_profit=None,
+        stop_loss=Decimal("5.144"),
+        trailing_stop=Decimal("0.148"),
+    )
+    exit_order = AccountOrder(
+        symbol="NEARUSDT",
+        side=Side.LONG,
+        order_type="Limit",
+        status="New",
+        quantity=Decimal("36.5"),
+        remaining_quantity=Decimal("36.5"),
+        price=Decimal("4.5"),
+        avg_price=None,
+        order_id="tp2",
+        order_link_id="ccb-v2-01f16f999d7c42658f44-t2r3",
+        reduce_only=True,
+        updated_at=now,
+    )
+    exits = (
+        exit_order,
+        replace(
+            exit_order,
+            order_id="tp3",
+            order_link_id="ccb-v2-01f16f999d7c42658f44-t3r3",
+            price=Decimal("4.2"),
+            status="PartiallyFilled",
+        ),
+    )
+    rendered = render_account_state(
+        AccountStateSummary(as_of=now, positions=(position,), open_orders=exits)
+    )
+    assert "Protection: SL 5.144 · TP 4.2 / 4.5 · Trailing stop active" in rendered
+
+    # V2 TP ladder orders count as protective, not as reduce/close orders.
+    assert (
+        "Pending orders: <b>0</b> entry · <b>2</b> protective · <b>0</b> reduce"
+        in rendered
+    )
+
+    # Genuine reduce-only close orders stay in the reduce/close bucket.
+    closing = replace(
+        exit_order,
+        order_id="close",
+        order_link_id="ccb-action-0123456789abcdef01234567",
+        order_type="Market",
+        price=None,
+    )
+    counted = render_account_state(
+        AccountStateSummary(
+            as_of=now,
+            positions=(position,),
+            open_orders=(*exits, closing),
+        )
+    )
+    assert (
+        "Pending orders: <b>0</b> entry · <b>2</b> protective · <b>1</b> reduce"
+        in counted
+    )
+
+    # Long positions also use opposite-side reduce-only limits.
+    long_position = replace(position, side=Side.LONG)
+    long_exit = replace(exit_order, side=Side.SHORT, price=Decimal("6"))
+    assert "TP 6" in render_position_protection(long_position, (long_exit,))
+
+    # Orders unrelated to the live V2 TP ladder must not imply protection.
+    for changes in (
+        {"symbol": "BTCUSDT"},
+        {"side": Side.SHORT},
+        {"order_type": "Market"},
+        {"reduce_only": False},
+        {"order_link_id": "ccb-v2-01f16f999d7c42658f44-e1"},
+        {"order_link_id": "manual-t2r3"},
+        {"status": "Cancelled"},
+        {"status": "Filled"},
+        {"remaining_quantity": Decimal("0")},
+        {"price": None},
+    ):
+        assert "TP —" in render_position_protection(
+            position, (replace(exit_order, **changes),)
+        ), changes
+
+    trailing_only = replace(position, stop_loss=None)
+    assert render_position_protection(trailing_only, ()) == (
+        "Protection: SL — · TP — · Trailing stop active"
+    )
+    for trailing in (None, Decimal("0")):
+        assert (
+            render_position_protection(
+                replace(trailing_only, trailing_stop=trailing), ()
+            )
+            == "⚠️ No SL/TP protection detected"
+        )
+
+    # Existing attached TP/SL and order-derived trailing presentation still works.
+    attached = replace(exit_order, order_link_id="")
+    attached_orders = (
+        replace(attached, stop_order_type="TakeProfit", trigger_price=Decimal("4.5")),
+        replace(attached, stop_order_type="StopLoss", trigger_price=Decimal("5.144")),
+        replace(attached, stop_order_type="TrailingStop"),
+    )
+    assert (
+        render_position_protection(
+            replace(position, stop_loss=None, trailing_stop=None), attached_orders
+        )
+        == "Protection: SL 5.144 · TP 4.5 · Trailing stop active"
+    )

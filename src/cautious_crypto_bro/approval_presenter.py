@@ -277,7 +277,7 @@ def render_position_protection(
 ) -> str:
     stop_prices: set[Decimal] = set()
     take_profit_prices: set[Decimal] = set()
-    trailing_stop = False
+    trailing_stop = bool(position.trailing_stop)
 
     if position.stop_loss is not None:
         stop_prices.add(position.stop_loss)
@@ -288,6 +288,16 @@ def render_position_protection(
     for order in open_orders:
         if order.symbol != position.symbol:
             continue
+
+        # V2 take profits are standalone reduce-only limits, not attached TP orders.
+        if (
+            order.is_v2_take_profit
+            and order.side is not position.side
+            and order.status in {"New", "PartiallyFilled"}
+            and order.remaining_quantity > 0
+            and order.price is not None
+        ):
+            take_profit_prices.add(order.price)
 
         if not order.is_protective:
             continue
@@ -473,9 +483,17 @@ def render_account_state(
         }
     )
 
-    protective_count = sum(1 for order in state.open_orders if order.is_protective)
+    protective_count = sum(
+        1
+        for order in state.open_orders
+        if order.is_protective or order.is_v2_take_profit
+    )
 
-    reduce_count = sum(1 for order in state.open_orders if order.kind == "REDUCE")
+    reduce_count = sum(
+        1
+        for order in state.open_orders
+        if order.kind == "REDUCE" and not order.is_v2_take_profit
+    )
 
     lines.extend(
         [
