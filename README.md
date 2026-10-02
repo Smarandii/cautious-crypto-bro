@@ -33,6 +33,8 @@ recovered actions. Preview failures do not suppress the execution result.
 
 - OPEN needs symbol, direction and explicit MARKET/LIMIT/RANGE semantics.
   Missing stops use a deterministic 2% fallback; missing targets use policy exits.
+- Entries copy explicit trader leverage from text/images, with a 10x fallback.
+  Bybit must accept the leverage before entry orders are submitted.
 - Profit/holding updates do not authorize new entries. REDUCE/CLOSE require
   explicit current-caption evidence; images can identify symbol/side.
 - CANCEL_ENTRIES withdraws earlier pending entries from the same Telegram source

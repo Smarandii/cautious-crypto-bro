@@ -190,10 +190,13 @@ def test_clock_sync_compensates_for_local_drift() -> None:
 @pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
 @pytest.mark.parametrize("entry_type", [EntryType.LIMIT, EntryType.RANGE])
 @pytest.mark.parametrize("resting_distance", ["0", "0.1", "50"])
+@pytest.mark.parametrize("leverage", ["10", "25"])
 def test_priced_entries_recheck_market_without_chasing(
-    side: Side, entry_type: EntryType, resting_distance: str
+    side: Side, entry_type: EntryType, resting_distance: str, leverage: str
 ) -> None:
-    plan = v2_range_plan(side, entry_type)
+    plan = v2_range_plan(side, entry_type).model_copy(
+        update={"leverage": Decimal(leverage)}
+    )
     market_price = plan.orders[0].reference_price + Decimal(resting_distance) * (
         1 if side is Side.LONG else -1
     )
@@ -211,6 +214,14 @@ def test_priced_entries_recheck_market_without_chasing(
                     "result": {"list": [{"lastPrice": str(market_price)}]},
                 },
             )
+        if request.url.path == "/v5/position/set-leverage":
+            assert json.loads(request.content) == {
+                "category": "linear",
+                "symbol": plan.symbol,
+                "buyLeverage": leverage,
+                "sellLeverage": leverage,
+            }
+            return httpx.Response(200, json={"retCode": 0, "result": {}})
         assert request.url.path == "/v5/order/create-batch"
 
         body = request.read().decode()
@@ -280,7 +291,11 @@ def test_priced_entries_recheck_market_without_chasing(
             "b",
             "c",
         )
-        assert calls == ["/v5/market/tickers", "/v5/order/create-batch"]
+        assert calls == [
+            "/v5/market/tickers",
+            "/v5/position/set-leverage",
+            "/v5/order/create-batch",
+        ]
 
     finally:
         executor.close()
@@ -529,8 +544,9 @@ def test_v2_market_direct_batch_execution_is_rejected() -> None:
         executor.close()
 
 
-def test_v2_market_primary_fill_precedes_scale_ins() -> None:
-    plan = v2_market_plan()
+@pytest.mark.parametrize("leverage_code", [0, 110043, "110043"])
+def test_v2_market_primary_fill_precedes_scale_ins(leverage_code) -> None:
+    plan = v2_market_plan().model_copy(update={"leverage": Decimal("7.5")})
 
     calls: list[str] = []
     batch_request = None
@@ -556,6 +572,15 @@ def test_v2_market_primary_fill_precedes_scale_ins() -> None:
                     },
                 },
             )
+
+        if request.url.path == "/v5/position/set-leverage":
+            assert json.loads(request.content) == {
+                "category": "linear",
+                "symbol": plan.symbol,
+                "buyLeverage": "7.5",
+                "sellLeverage": "7.5",
+            }
+            return httpx.Response(200, json={"retCode": leverage_code, "result": {}})
 
         if request.url.path == "/v5/order/create":
             body = json.loads(request.read().decode())
@@ -674,6 +699,7 @@ def test_v2_market_primary_fill_precedes_scale_ins() -> None:
         assert primary.order_id == "e1-live"
 
         assert primary.average_fill_price == Decimal("121")
+        assert rebased.leverage == Decimal("7.5")
 
         assert remaining == (
             "e2-live",
@@ -707,6 +733,10 @@ def test_v2_market_primary_fill_precedes_scale_ins() -> None:
         ]
 
         assert calls.index("/v5/order/realtime") < calls.index("/v5/order/create-batch")
+        assert calls.index("/v5/position/set-leverage") < calls.index(
+            "/v5/order/create"
+        )
+        assert calls.count("/v5/position/set-leverage") == 1
 
     finally:
         executor.close()
@@ -771,3 +801,62 @@ def test_priced_entry_invalid_ticker_rejects_before_submission(
             submit.assert_not_called()
     finally:
         executor.close()
+
+
+@pytest.mark.parametrize(
+    "entry_type", [EntryType.MARKET, EntryType.LIMIT, EntryType.RANGE]
+)
+@pytest.mark.parametrize("failure", [110013, 110038, "timeout"])
+def test_leverage_failure_blocks_entry_submission(entry_type, failure) -> None:
+    plan = (
+        v2_market_plan()
+        if entry_type is EntryType.MARKET
+        else v2_range_plan(entry_type=entry_type)
+    )
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        assert request.url.path == "/v5/position/set-leverage"
+        if failure == "timeout":
+            raise httpx.ReadTimeout("Leverage request timed out", request=request)
+        return httpx.Response(
+            200, json={"retCode": failure, "retMsg": "Cannot set requested leverage"}
+        )
+
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
+    executor._client.close()
+    executor._client._http_client = httpx.Client(
+        base_url="https://api-demo.bybit.com", transport=httpx.MockTransport(handler)
+    )
+    try:
+        with (
+            patch.object(executor._client._auth, "sync_clock"),
+            patch.object(executor, "_last_price", return_value=Decimal("120")),
+            pytest.raises(EntryPreflightError, match="[Ll]everage"),
+        ):
+            if entry_type is EntryType.MARKET:
+                executor._execute_market_primary_sync(plan)
+            else:
+                executor._execute_sync(plan)
+        assert calls == ["/v5/position/set-leverage"]
+    finally:
+        executor.close()
+
+
+def test_unchanged_leverage_code_is_not_success_for_order_submission() -> None:
+    client = BybitClient(
+        base_url="https://api-demo.bybit.com", api_key="key", api_secret="secret"
+    )
+    client.close()
+    client._http_client = httpx.Client(
+        base_url="https://api-demo.bybit.com",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"retCode": 110043})
+        ),
+    )
+    try:
+        with pytest.raises(TradeExecutionError, match="110043"):
+            client.private_post("/v5/order/create", {})
+    finally:
+        client.close()

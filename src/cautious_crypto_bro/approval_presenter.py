@@ -667,6 +667,8 @@ def render(
         f"{html.escape(intent.symbol)}</b>\n\n"
         f"{exposure_block}"
         f"Entry: <b>{html.escape(signal_entry)}</b>\n"
+        f"Leverage: <b>{fmt_decimal(plan.leverage)}x</b> "
+        f"({'Trader' if intent.leverage is not None else 'Default'})\n"
         f"SL: <b>{fmt_decimal(plan.stop_loss)}</b> "
         f"({plan.stop_loss_source.value})\n"
         f"{tp_block}\n\n"

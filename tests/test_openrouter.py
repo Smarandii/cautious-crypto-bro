@@ -812,6 +812,7 @@ def test_market_string_with_price_is_normalized_safely() -> None:
                     "side": "LONG",
                     "entry": "MARKET",
                     "price": 2.3,
+                    "leverage": 20,
                     "stop_loss": 2.221,
                     "take_profit": None,
                     "summary": "NEAR long",
@@ -833,6 +834,7 @@ def test_market_string_with_price_is_normalized_safely() -> None:
 
     assert intent.entry.type is EntryType.MARKET
     assert intent.entry.price is None
+    assert intent.leverage == 20
 
 
 def test_hold_with_open_fields_is_non_executable() -> None:
@@ -854,6 +856,7 @@ def test_hold_with_open_fields_is_non_executable() -> None:
                     "action": "HOLD",
                     "side": "LONG",
                     "entry": "MARKET",
+                    "leverage": 20,
                     "stop_loss": 2.221,
                     "take_profit": None,
                     "close_pct": None,
@@ -873,7 +876,11 @@ def test_hold_with_open_fields_is_non_executable() -> None:
     assert signals.position_actions == ()
 
 
-def test_invalid_open_candidate_does_not_drop_valid_close() -> None:
+@pytest.mark.parametrize(
+    "invalid_fields",
+    [{"stop_loss": 0}, {"leverage": 0}, {"leverage": float("inf")}],
+)
+def test_invalid_open_candidate_does_not_drop_valid_close(invalid_fields) -> None:
     from cautious_crypto_bro.domain import (
         IntentExtraction,
         PositionActionType,
@@ -891,7 +898,7 @@ def test_invalid_open_candidate_does_not_drop_valid_close() -> None:
                     "symbol": "BTCUSDT",
                     "side": "LONG",
                     "entry": "MARKET",
-                    "stop_loss": 0,
+                    **invalid_fields,
                     "take_profit": None,
                     "summary": "Invalid BTC",
                     "confidence": 1,

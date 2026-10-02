@@ -4,6 +4,9 @@ from datetime import (
 )
 from decimal import Decimal
 
+import pytest
+from pydantic import ValidationError
+
 from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
@@ -113,6 +116,32 @@ def policy(
         risk_per_trade_pct=Decimal(risk),
         range_order_count=3,
     )
+
+
+def test_plan_matches_trader_leverage_without_changing_risk_sizing() -> None:
+    planner = ExecutionPlanner()
+    original = planner.plan(market_intent(), policy(), context())
+    matched = planner.plan(
+        market_intent().model_copy(update={"leverage": 2.5}),
+        policy(),
+        context(),
+    )
+
+    assert original.leverage == Decimal("10")
+    assert matched.leverage == Decimal("2.5")
+    assert matched.orders == original.orders
+    assert matched.planned_max_loss_usdt == original.planned_max_loss_usdt
+    restored = ExecutionPlan.model_validate_json(matched.model_dump_json())
+    assert restored.leverage == Decimal("2.5")
+
+
+@pytest.mark.parametrize("leverage", ["0", "0.5", "NaN", "Infinity"])
+def test_plan_rejects_invalid_leverage(leverage) -> None:
+    payload = ExecutionPlanner().plan(market_intent(), policy(), context()).model_dump()
+    payload["leverage"] = leverage
+
+    with pytest.raises(ValidationError, match="leverage"):
+        ExecutionPlan.model_validate(payload)
 
 
 def test_range_plan_has_weighted_entries_independent_exits_and_runner() -> None:
@@ -305,6 +334,7 @@ def test_historical_v1_plan_still_parses() -> None:
     plan = ExecutionPlan.model_validate(historical)
 
     assert plan.strategy_version == 1
+    assert plan.leverage == Decimal("10")
     assert plan.runner_pct == 0
     assert plan.orders[0].name == "ENTRY"
     assert plan.orders[0].risk_pct is None
@@ -394,7 +424,7 @@ def test_market_plan_rebases_scale_ins_from_actual_fill() -> None:
     planner = ExecutionPlanner()
 
     initial = planner.plan(
-        market_intent(),
+        market_intent().model_copy(update={"leverage": 25}),
         policy(),
         context(),
     )
@@ -407,6 +437,7 @@ def test_market_plan_rebases_scale_ins_from_actual_fill() -> None:
     )
 
     assert rebased.orders[0].reference_price == Decimal("121")
+    assert rebased.leverage == Decimal("25")
 
     assert rebased.orders[0].quantity == initial.orders[0].quantity
 

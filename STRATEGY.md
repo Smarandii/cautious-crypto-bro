@@ -10,6 +10,13 @@ Each plan freezes Unified Account `totalWalletBalance`:
 Unrealized PnL is not used as capital. Later wallet changes do not resize the plan.
 The budget covers entry-to-stop price loss, not fees, funding or stop slippage.
 
+Plans freeze explicit trader leverage from text/images, or 10x when unspecified.
+Leverage does not multiply the risk-sized order quantities. Before MARKET E1 or
+the LIMIT/RANGE batch, Bybit must accept that leverage for both sides of the
+one-way symbol. An already-matching setting succeeds; unsupported leverage or
+other setting failures reject the entry without submitting orders. E2/E3 retain
+the leverage applied before E1. Historical plans without leverage default to 10x.
+
 Trader stops take precedence. Otherwise a 2% fallback uses the MARKET snapshot,
 LIMIT price, or adverse RANGE edge (LONG lower / SHORT upper). Stops round outward
 to ticks and must remain positive. Plans persist the concrete stop and

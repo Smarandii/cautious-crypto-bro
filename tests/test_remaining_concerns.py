@@ -180,6 +180,8 @@ class Exchange:
                     o for o in orders if o["orderStatus"] in ("New", "PartiallyFilled")
                 ]
             result = {"list": orders, "nextPageCursor": ""}
+        elif path == "/v5/position/set-leverage":
+            assert body["buyLeverage"] == body["sellLeverage"] == "10"
         elif path == "/v5/order/create":
             return httpx.Response(200, json=self.create(body))
         elif path == "/v5/order/create-batch":

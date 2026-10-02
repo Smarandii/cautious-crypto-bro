@@ -5,6 +5,8 @@ from datetime import (
 )
 from decimal import Decimal
 
+import pytest
+
 from cautious_crypto_bro.approval_presenter import (
     render,
     render_account_state,
@@ -26,7 +28,8 @@ from cautious_crypto_bro.domain import (
 )
 
 
-def test_render_contains_execution_policy() -> None:
+@pytest.mark.parametrize("leverage", [None, 20])
+def test_render_contains_execution_policy(leverage) -> None:
     intent = TradingIntent(
         source=SourceMessage(
             channel_id=-100123,
@@ -61,6 +64,7 @@ def test_render_contains_execution_policy() -> None:
         ),
         stop_loss=3900,
         take_profit=4300,
+        leverage=leverage,
         summary=("Bounce from support."),
         confidence=0.9,
     )
@@ -75,6 +79,7 @@ def test_render_contains_execution_policy() -> None:
         intent_id=intent.intent_id,
         symbol=intent.symbol,
         side=intent.side,
+        leverage=Decimal(leverage if leverage is not None else 10),
         orders=(
             PlannedOrder(
                 order_type=(ExecutionOrderType.LIMIT),
@@ -109,6 +114,11 @@ def test_render_contains_execution_policy() -> None:
     assert "LONG ETHUSDT" in rendered
     assert "Orders: 3 · total 0.6" in rendered
     assert "Risk: <b>≤ 66 USDT</b> (1% policy)" in rendered
+    assert (
+        "Leverage: <b>20x</b> (Trader)"
+        if leverage is not None
+        else "Leverage: <b>10x</b> (Default)"
+    ) in rendered
     assert "R:R:" in rendered
     assert "Open source message" in rendered
     assert "Trader &amp; Co" in rendered

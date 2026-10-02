@@ -137,6 +137,11 @@ class ExecutionPlanner:
             intent_id=intent.intent_id,
             symbol=intent.symbol,
             side=intent.side,
+            leverage=(
+                Decimal(str(intent.leverage))
+                if intent.leverage is not None
+                else Decimal("10")
+            ),
             orders=orders,
             stop_loss=stop_loss,
             stop_loss_source=stop_source,

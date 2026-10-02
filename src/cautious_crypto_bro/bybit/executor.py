@@ -1115,6 +1115,18 @@ class BybitDemoExecutor:
 
         raise TradeExecutionError("Timed out confirming V2 MARKET E1 fill")
 
+    def _set_leverage_sync(self, plan: ExecutionPlan) -> None:
+        leverage = self._fmt(plan.leverage)
+        self._client.private_post(
+            "/v5/position/set-leverage",
+            {
+                "category": "linear",
+                "symbol": plan.symbol,
+                "buyLeverage": leverage,
+                "sellLeverage": leverage,
+            },
+        )
+
     def _execute_market_primary_sync(
         self,
         plan: ExecutionPlan,
@@ -1125,6 +1137,7 @@ class BybitDemoExecutor:
             market_price = self._last_price(plan.symbol)
             self._validate_market_plan(plan, market_price)
             request = self._order_params(plan, 0)
+            self._set_leverage_sync(plan)
         except Exception as exc:
             raise EntryPreflightError(str(exc)) from exc
 
@@ -1212,6 +1225,7 @@ class BybitDemoExecutor:
             requests = [
                 self._order_params(plan, index) for index in range(len(plan.orders))
             ]
+            self._set_leverage_sync(plan)
         except Exception as exc:
             raise EntryPreflightError(str(exc)) from exc
 

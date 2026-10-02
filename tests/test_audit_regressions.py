@@ -25,7 +25,9 @@ from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.openrouter import _signals_from_extraction
 
 
-@pytest.mark.parametrize("stage", ["before_submit", "accepted_timeout", "after_fill"])
+@pytest.mark.parametrize(
+    "stage", ["before_submit", "leverage_timeout", "accepted_timeout", "after_fill"]
+)
 def test_entry_failure_only_closes_strategy_before_submission(tmp_path, stage):
     async def run():
         path = tmp_path / "state.db"
@@ -36,9 +38,16 @@ def test_entry_failure_only_closes_strategy_before_submission(tmp_path, stage):
             )
             original_post = executor._client.private_post
 
-            def accepted_timeout(*args, **kwargs):
-                original_post(*args, **kwargs)
-                raise TimeoutError("Response lost after acceptance")
+            def accepted_timeout(path, body):
+                response = original_post(path, body)
+                target = (
+                    "/v5/position/set-leverage"
+                    if stage == "leverage_timeout"
+                    else "/v5/order/create"
+                )
+                if path == target:
+                    raise TimeoutError("Response lost after acceptance")
+                return response
 
             if stage == "before_submit":
                 exchange.mark = D("200")
@@ -49,7 +58,9 @@ def test_entry_failure_only_closes_strategy_before_submission(tmp_path, stage):
             with patch.object(
                 executor._client,
                 "private_post",
-                accepted_timeout if stage == "accepted_timeout" else original_post,
+                accepted_timeout
+                if stage in ("accepted_timeout", "leverage_timeout")
+                else original_post,
             ):
                 result = await coordinator.execute_intent(
                     intent.intent_id, approval_mode=ApprovalMode.MANUAL
@@ -59,9 +70,10 @@ def test_entry_failure_only_closes_strategy_before_submission(tmp_path, stage):
                 status = db.execute(
                     "SELECT status FROM position_strategies"
                 ).fetchone()[0]
-            assert status == ("CLOSED" if stage == "before_submit" else "UNCERTAIN")
-            assert len(exchange.orders) == (0 if stage == "before_submit" else 1)
-            if stage == "before_submit":
+            before_submit = stage in ("before_submit", "leverage_timeout")
+            assert status == ("CLOSED" if before_submit else "UNCERTAIN")
+            assert len(exchange.orders) == (0 if before_submit else 1)
+            if before_submit:
                 assert not await store.get_active_position_strategies()
                 exchange.mark = D("100")
                 retry = make_intent().model_copy(

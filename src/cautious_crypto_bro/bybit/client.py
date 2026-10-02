@@ -119,6 +119,14 @@ class BybitClient:
             if str(code) == "0":
                 return data
 
+            if (
+                method == "POST"
+                and path == "/v5/position/set-leverage"
+                and str(code) == "110043"
+            ):
+                # Bybit reports unchanged leverage as an error; it already matches.
+                return data
+
             if str(code) == "10002" and attempt == 0:
                 logger.warning(
                     "Bybit rejected request timestamp; re-synchronizing clock"

@@ -81,6 +81,10 @@ OPEN trade rules:
   explicit entry semantics; stop loss and take profit are optional
 - UPDATE_EXISTING may omit entry or stop loss because it is informational
 - omit missing stop loss and take profit; the execution planner supplies policy defaults
+- leverage is the trader's explicitly stated multiplier (20x means leverage=20),
+  from current text/caption or the matching position in an exchange screenshot
+- omit leverage when missing, ambiguous, conflicting, or given as a range;
+  never infer it from ROI, PnL, margin, position size, or another position
 - symbol and direction alone, market commentary, or possible future areas without
   a clear entry instruction are not executable OPEN candidates
 - MARKET when the author clearly says enter now/at market, clearly states
@@ -911,6 +915,7 @@ def _signals_from_extraction(
                 entry=entry,
                 stop_loss=raw.stop_loss,
                 take_profit=raw.take_profit,
+                leverage=raw.leverage,
                 summary=raw.summary,
                 confidence=raw.confidence,
                 relation=relation,

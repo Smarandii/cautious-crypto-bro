@@ -560,6 +560,7 @@ class ExtractedIntent(BaseModel):
 
     stop_loss: float | None = None
     take_profit: float | None = None
+    leverage: float | None = None
 
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
@@ -599,6 +600,7 @@ class ExtractedPositionAction(BaseModel):
     range_high: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
+    leverage: float | None = None
 
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
@@ -644,6 +646,7 @@ class TradingIntent(BaseModel):
     entry: Entry
     stop_loss: float | None = Field(default=None, gt=0)
     take_profit: float | None = Field(default=None, gt=0)
+    leverage: float | None = Field(default=None, ge=1, allow_inf_nan=False)
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
 
@@ -1129,6 +1132,8 @@ class ExecutionPlan(BaseModel):
     intent_id: UUID
     symbol: str
     side: Side
+    # Plans saved before leverage support use the 10x fallback.
+    leverage: Decimal = Field(default=Decimal("10"), ge=1, allow_inf_nan=False)
     orders: tuple[
         PlannedOrder,
         ...,
