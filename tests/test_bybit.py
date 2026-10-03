@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import (
     UTC,
     datetime,
@@ -107,7 +108,7 @@ def v2_range_plan(
     )
 
 
-def v2_market_plan() -> ExecutionPlan:
+def v2_market_plan(side: Side = Side.LONG) -> ExecutionPlan:
     now = datetime.now(UTC)
     return ExecutionPlanner().plan(
         TradingIntent(
@@ -120,19 +121,72 @@ def v2_market_plan() -> ExecutionPlan:
                 text="test",
             ),
             symbol="BTCUSDT",
-            side=Side.LONG,
+            side=side,
             entry=Entry(type=EntryType.MARKET),
-            stop_loss=90,
+            stop_loss=90 if side is Side.LONG else 120,
             take_profit=None,
             summary="test",
             confidence=1,
         ),
         policy(),
         InstrumentContext(
-            market_price=Decimal("120"),
+            market_price=Decimal("120" if side is Side.LONG else "90"),
             tick_size=Decimal("0.1"),
             qty_step=Decimal("0.001"),
             min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+
+def instrument_info(context: InstrumentContext) -> dict:
+    return {
+        "priceFilter": {"tickSize": str(context.tick_size)},
+        "lotSizeFilter": {
+            "qtyStep": str(context.qty_step),
+            "minOrderQty": str(context.min_qty),
+            "minNotionalValue": str(context.min_notional),
+        },
+    }
+
+
+def market_context(price: str = "120") -> InstrumentContext:
+    return InstrumentContext(
+        market_price=Decimal(price),
+        tick_size=Decimal("0.1"),
+        qty_step=Decimal("0.001"),
+        min_qty=Decimal("0.001"),
+        min_notional=Decimal("5"),
+    )
+
+
+def pepe_market_plan() -> ExecutionPlan:
+    now = datetime.now(UTC)
+    return ExecutionPlanner().plan(
+        TradingIntent(
+            source=SourceMessage(
+                channel_id=1,
+                channel_title="Test",
+                message_id=3315,
+                published_at=now,
+                received_at=now,
+                text="PEPE long from current prices, add lower, stop 0.0037644",
+            ),
+            symbol="1000PEPEUSDT",
+            side=Side.LONG,
+            entry=Entry(type=EntryType.MARKET),
+            stop_loss=Decimal("0.0037644"),
+            take_profit=None,
+            leverage=Decimal("50"),
+            summary="test",
+            confidence=1,
+        ),
+        policy().model_copy(update={"trading_capital_usdt": Decimal("7339.16545066")}),
+        InstrumentContext(
+            market_price=Decimal("0.004243"),
+            tick_size=Decimal("0.000001"),
+            qty_step=Decimal("100"),
+            min_qty=Decimal("100"),
             min_notional=Decimal("5"),
         ),
     )
@@ -558,6 +612,15 @@ def test_v2_market_primary_fill_precedes_scale_ins(leverage_code) -> None:
 
         calls.append(request.url.path)
 
+        if request.url.path == "/v5/market/instruments-info":
+            return httpx.Response(
+                200,
+                json={
+                    "retCode": 0,
+                    "result": {"list": [instrument_info(market_context())]},
+                },
+            )
+
         if request.url.path == "/v5/market/tickers":
             return httpx.Response(
                 200,
@@ -742,6 +805,202 @@ def test_v2_market_primary_fill_precedes_scale_ins(leverage_code) -> None:
         executor.close()
 
 
+@pytest.mark.parametrize(
+    "symbol,side,quote,expected_quantity,fill_price",
+    [
+        ("1000PEPEUSDT", Side.LONG, "0.004244", "91700", "0.004245"),
+        ("BTCUSDT", Side.LONG, "121", "1.316", "121.1"),
+        ("BTCUSDT", Side.SHORT, "89", "1.316", "88.9"),
+        ("BTCUSDT", Side.LONG, "119", "1.36", "119.1"),
+        ("BTCUSDT", Side.SHORT, "91", "1.36", "90.9"),
+    ],
+    ids=[
+        "pepe-regression",
+        "long-adverse",
+        "short-adverse",
+        "long-favorable",
+        "short-favorable",
+    ],
+)
+def test_v2_market_refresh_resizes_before_submission(
+    symbol: str,
+    side: Side,
+    quote: str,
+    expected_quantity: str,
+    fill_price: str,
+) -> None:
+    plan = pepe_market_plan() if symbol == "1000PEPEUSDT" else v2_market_plan(side)
+    context = (
+        InstrumentContext(
+            market_price=Decimal(quote),
+            tick_size=Decimal("0.000001"),
+            qty_step=Decimal("100"),
+            min_qty=Decimal("100"),
+            min_notional=Decimal("5"),
+        )
+        if symbol == "1000PEPEUSDT"
+        else market_context(quote)
+    )
+    original = plan.model_dump()
+    calls: list[str] = []
+    orders: list[dict] = []
+
+    if symbol == "1000PEPEUSDT":
+        assert plan.stop_loss == Decimal("0.003764")
+        assert [order.quantity for order in plan.orders] == [
+            Decimal("91900"),
+            Decimal("57100"),
+            Decimal("67500"),
+        ]
+        assert plan.planned_max_loss_usdt == Decimal("73.3517")
+        assert plan.policy.risk_budget_usdt == Decimal("73.3916545066")
+        assert plan.leverage == Decimal("50")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/v5/market/instruments-info":
+            assert request.url.params["symbol"] == symbol
+            result = {"list": [instrument_info(context)]}
+        elif request.url.path == "/v5/market/tickers":
+            assert request.url.params["symbol"] == symbol
+            result = {"list": [{"lastPrice": quote}]}
+        elif request.url.path == "/v5/position/set-leverage":
+            body = json.loads(request.content)
+            assert Decimal(body["buyLeverage"]) == plan.leverage
+            assert Decimal(body["sellLeverage"]) == plan.leverage
+            result = {}
+        elif request.url.path == "/v5/order/create":
+            body = json.loads(request.content)
+            orders.append(body)
+            assert body["symbol"] == symbol
+            assert body["side"] == ("Buy" if side is Side.LONG else "Sell")
+            assert body["orderType"] == "Market"
+            assert Decimal(body["qty"]) == Decimal(expected_quantity)
+            assert Decimal(body["stopLoss"]) == plan.stop_loss
+            assert body["orderLinkId"].endswith("-e1")
+            result = {"orderId": "refreshed-e1"}
+        elif request.url.path == "/v5/order/realtime":
+            assert request.url.params["orderId"] == "refreshed-e1"
+            result = {
+                "list": [
+                    {
+                        "orderId": "refreshed-e1",
+                        "orderStatus": "Filled",
+                        "avgPrice": fill_price,
+                        "cumExecQty": expected_quantity,
+                        "leavesQty": "0",
+                    }
+                ]
+            }
+        else:
+            raise AssertionError(f"Unexpected request: {request.url}")
+        return httpx.Response(200, json={"retCode": 0, "result": result})
+
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
+    executor._client.close()
+    executor._client._http_client = httpx.Client(
+        base_url="https://api-demo.bybit.com", transport=httpx.MockTransport(handler)
+    )
+    try:
+        with patch.object(executor._client._auth, "sync_clock"):
+            primary = executor._execute_market_primary_sync(plan)
+        assert calls == [
+            "/v5/market/instruments-info",
+            "/v5/market/tickers",
+            "/v5/position/set-leverage",
+            "/v5/order/create",
+            "/v5/order/realtime",
+        ]
+        assert len(orders) == 1
+        assert primary.filled_quantity == Decimal(expected_quantity)
+        assert primary.average_fill_price == Decimal(fill_price)
+        assert primary.filled_quantity <= plan.orders[0].quantity
+        nominal_primary_budget = (
+            plan.policy.risk_budget_usdt
+            * plan.policy.strategy_v2.primary_entry_risk_pct
+            / Decimal("100")
+        )
+        assert (
+            primary.filled_quantity * abs(Decimal(quote) - plan.stop_loss)
+            <= nominal_primary_budget
+        )
+        rebased = ExecutionPlanner().rebase_market_plan(
+            plan,
+            fill_price=primary.average_fill_price,
+            filled_quantity=primary.filled_quantity,
+            context=replace(context, market_price=Decimal(fill_price)),
+        )
+        actual_risk = sum(
+            order.quantity * abs(order.reference_price - plan.stop_loss)
+            for order in rebased.orders
+        )
+        assert actual_risk == rebased.planned_max_loss_usdt
+        assert actual_risk <= plan.policy.risk_budget_usdt
+        assert plan.model_dump() == original
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize(
+    "context_update,error",
+    [
+        ({"market_price": Decimal("0")}, "positive and finite"),
+        ({"market_price": Decimal("-1")}, "positive and finite"),
+        ({"market_price": Decimal("NaN")}, "positive and finite"),
+        ({"market_price": Decimal("Infinity")}, "positive and finite"),
+        ({"market_price": Decimal("-Infinity")}, "positive and finite"),
+        ({"market_price": Decimal("90")}, "geometry"),
+        ({"min_qty": Decimal("2")}, "minimum quantity"),
+        ({"min_qty": Decimal("1")}, "minimum quantity"),
+        ({"min_notional": Decimal("1000")}, "minimum notional"),
+    ],
+)
+def test_market_refresh_preflight_failure_does_not_mutate_exchange_or_plan(
+    context_update: dict, error: str
+) -> None:
+    plan = v2_market_plan()
+    original = plan.model_dump()
+    context = replace(market_context(), **context_update)
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
+    try:
+        with (
+            patch.object(executor._client._auth, "sync_clock"),
+            patch.object(
+                executor, "_instrument_info", return_value=instrument_info(context)
+            ),
+            patch.object(executor, "_last_price", return_value=context.market_price),
+            patch.object(executor._client, "private_post") as submit,
+        ):
+            with pytest.raises(EntryPreflightError, match=error):
+                executor._execute_market_primary_sync(plan)
+            submit.assert_not_called()
+        assert plan.model_dump() == original
+    finally:
+        executor.close()
+
+
+def test_market_refresh_ticker_failure_rejects_before_mutation() -> None:
+    executor = BybitDemoExecutor(api_key="key", api_secret="secret")
+    try:
+        with (
+            patch.object(executor._client._auth, "sync_clock"),
+            patch.object(
+                executor,
+                "_instrument_info",
+                return_value=instrument_info(market_context()),
+            ),
+            patch.object(
+                executor, "_last_price", side_effect=httpx.ReadTimeout("ticker")
+            ),
+            patch.object(executor._client, "private_post") as submit,
+        ):
+            with pytest.raises(EntryPreflightError, match="ticker"):
+                executor._execute_market_primary_sync(v2_market_plan())
+            submit.assert_not_called()
+    finally:
+        executor.close()
+
+
 @pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
 @pytest.mark.parametrize("entry_type", [EntryType.LIMIT, EntryType.RANGE])
 def test_priced_entry_passed_since_planning_rejects_before_submission(
@@ -832,6 +1091,11 @@ def test_leverage_failure_blocks_entry_submission(entry_type, failure) -> None:
     try:
         with (
             patch.object(executor._client._auth, "sync_clock"),
+            patch.object(
+                executor,
+                "_instrument_info",
+                return_value=instrument_info(market_context()),
+            ),
             patch.object(executor, "_last_price", return_value=Decimal("120")),
             pytest.raises(EntryPreflightError, match="[Ll]everage"),
         ):

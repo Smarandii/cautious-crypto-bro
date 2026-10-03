@@ -32,6 +32,7 @@ from ..domain import (
     SymbolExposure,
     TradeExecutionError,
 )
+from ..execution import ExecutionPlanner
 from .client import DEMO_BASE_URL, BybitClient
 
 logger = logging.getLogger(__name__)
@@ -990,8 +991,8 @@ class BybitDemoExecutor:
         self,
         symbol: str,
     ) -> InstrumentContext:
-        market_price = self._last_price(symbol)
         instrument = self._instrument_info(symbol)
+        market_price = self._last_price(symbol)
 
         lot = instrument["lotSizeFilter"]
         price_filter = instrument["priceFilter"]
@@ -1134,9 +1135,20 @@ class BybitDemoExecutor:
         try:
             self._validate_staged_market_plan(plan)
             self._sync_clock()
-            market_price = self._last_price(plan.symbol)
-            self._validate_market_plan(plan, market_price)
-            request = self._order_params(plan, 0)
+            context = self._market_context_sync(plan.symbol)
+            refreshed = ExecutionPlanner().refresh_market_plan(plan, context)
+            self._validate_market_plan(refreshed, context.market_price)
+            request = self._order_params(refreshed, 0)
+            logger.info(
+                "Refreshed V2 MARKET E1 for %s: quote=%s old_qty=%s qty=%s "
+                "planned_risk=%s budget=%s",
+                plan.intent_id,
+                context.market_price,
+                plan.orders[0].quantity,
+                refreshed.orders[0].quantity,
+                refreshed.planned_max_loss_usdt,
+                plan.policy.risk_budget_usdt,
+            )
             self._set_leverage_sync(plan)
         except Exception as exc:
             raise EntryPreflightError(str(exc)) from exc
@@ -1361,7 +1373,9 @@ class BybitDemoExecutor:
         if current_risk > plan.policy.risk_budget_usdt:
             raise TradeExecutionError(
                 "Market moved enough that Strategy V2 execution "
-                "would exceed the risk budget"
+                "would exceed the risk budget: "
+                f"quote={market_price}, risk={current_risk}, "
+                f"budget={plan.policy.risk_budget_usdt}"
             )
 
     def _last_price(

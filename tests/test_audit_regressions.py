@@ -19,10 +19,89 @@ from cautious_crypto_bro.domain import (
     InstrumentContext,
     IntentExtraction,
     IntentStatus,
+    OpenRelation,
     StrategyStatus,
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.openrouter import _signals_from_extraction
+from cautious_crypto_bro.position_supervisor import PositionSupervisor
+from cautious_crypto_bro.storage import IntentStore
+
+
+@pytest.mark.parametrize("mode", [ApprovalMode.AUTO, ApprovalMode.MANUAL])
+def test_resized_market_entry_persists_actual_fill_before_scale_ins(tmp_path, mode):
+    async def run():
+        exchange = Exchange()
+        with executor_for(exchange) as executor:
+            new_intent = make_intent(mode=mode).model_copy(
+                update={"relation": OpenRelation.NEW}
+            )
+            with patch("test_remaining_concerns.make_intent", return_value=new_intent):
+                store, intent, initial, coordinator, _ = await prepare(
+                    tmp_path / "state.db", exchange, executor, mode=mode
+                )
+            exchange.mark = D("100.1")
+            exchange.fill_price = D("100.2")
+            submit_remaining = executor.execute_remaining_entries
+
+            async def check_persisted(plan):
+                saved = await store.get_execution_plan(intent.intent_id)
+                assert saved == plan
+                assert plan.orders[0].quantity == exchange.size
+                assert plan.orders[0].quantity < initial.orders[0].quantity
+                assert plan.orders[0].reference_price == exchange.fill_price
+                assert plan.policy == initial.policy
+                assert plan.planned_max_loss_usdt <= initial.policy.risk_budget_usdt
+                return await submit_remaining(plan)
+
+            with patch.object(
+                executor, "execute_remaining_entries", side_effect=check_persisted
+            ) as remaining:
+                outcome = await coordinator.execute_intent(
+                    intent.intent_id, approval_mode=mode
+                )
+            assert outcome.status is IntentStatus.EXECUTED
+            remaining.assert_awaited_once()
+            assert len(exchange.orders) == 3
+            assert exchange.stop == initial.stop_loss
+
+    asyncio.run(run())
+
+
+def test_restart_protects_resized_primary_before_plan_was_persisted(tmp_path):
+    async def run():
+        path = tmp_path / "state.db"
+        exchange = Exchange()
+        with executor_for(exchange) as executor:
+            store, intent, initial, _, _ = await prepare(
+                path, exchange, executor, mode=ApprovalMode.AUTO
+            )
+            assert await store.claim_for_execution(
+                intent.intent_id, None, expected_approval_mode=ApprovalMode.AUTO
+            )
+            await store.ensure_position_strategy(initial)
+            exchange.mark = exchange.fill_price = D("100.1")
+            primary = await executor.execute_market_primary(initial)
+            assert primary.filled_quantity < initial.orders[0].quantity
+
+            restarted_store = IntentStore(path)
+            await restarted_store.quarantine_interrupted_executions()
+            supervisor = PositionSupervisor(
+                store=restarted_store, executor=executor, mutation_lock=asyncio.Lock()
+            )
+            await supervisor.reconcile_once()
+
+            assert (await restarted_store.get_intent(intent.intent_id)).status is (
+                IntentStatus.UNCERTAIN
+            )
+            entries = [o for o in exchange.orders.values() if not o["reduceOnly"]]
+            assert len(entries) == 1
+            exits = [o for o in exchange.orders.values() if o["reduceOnly"]]
+            assert len(exits) == 3
+            assert sum(D(o["qty"]) for o in exits) < primary.filled_quantity
+            assert exchange.stop == initial.stop_loss
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(
@@ -50,7 +129,7 @@ def test_entry_failure_only_closes_strategy_before_submission(tmp_path, stage):
                 return response
 
             if stage == "before_submit":
-                exchange.mark = D("200")
+                exchange.mark = plan.stop_loss
             elif stage == "after_fill":
                 executor.execute_remaining_entries = AsyncMock(
                     side_effect=EntryPreflightError("Remaining legs failed validation")

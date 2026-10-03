@@ -463,3 +463,47 @@ def test_market_plan_rebases_scale_ins_from_actual_fill() -> None:
     assert rebased.planned_max_loss_usdt <= rebased.policy.risk_budget_usdt
 
     assert rebased.take_profit_targets != initial.take_profit_targets
+
+
+@pytest.mark.parametrize("stop", [None, 90])
+@pytest.mark.parametrize("quote", ["121", "150"])
+def test_market_refresh_preserves_frozen_policy_stop_and_trader_target(
+    stop, quote
+) -> None:
+    planner = ExecutionPlanner()
+    initial = planner.plan(
+        market_intent().model_copy(
+            update={"stop_loss": stop, "take_profit": 180, "leverage": 50}
+        ),
+        policy("2"),
+        context(),
+    )
+    snapshot = initial.model_dump_json()
+
+    refreshed = planner.refresh_market_plan(initial, context(quote))
+
+    assert refreshed.orders[0].quantity < initial.orders[0].quantity
+    assert refreshed.orders[0].reference_price == Decimal(quote)
+    assert refreshed.policy == initial.policy
+    assert refreshed.stop_loss == initial.stop_loss
+    assert refreshed.stop_loss_source == initial.stop_loss_source
+    assert refreshed.leverage == initial.leverage
+    assert refreshed.trader_take_profit == initial.trader_take_profit
+    assert refreshed.take_profit <= initial.trader_take_profit
+    assert refreshed.intent_id == initial.intent_id
+    assert refreshed.created_at == initial.created_at
+    assert refreshed.planned_max_loss_usdt <= initial.policy.risk_budget_usdt
+    assert initial.model_dump_json() == snapshot
+
+
+@pytest.mark.parametrize("target", [140, 180])
+def test_market_refresh_rejects_price_beyond_trader_target(target) -> None:
+    planner = ExecutionPlanner()
+    initial = planner.plan(
+        market_intent().model_copy(update={"take_profit": target}),
+        policy(),
+        context(),
+    )
+
+    with pytest.raises(ExecutionPlanningError, match="Trader take profit"):
+        planner.refresh_market_plan(initial, context("220"))

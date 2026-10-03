@@ -195,6 +195,58 @@ class ExecutionPlanner:
             )
         return stop, source
 
+    def refresh_market_plan(
+        self,
+        plan: ExecutionPlan,
+        context: InstrumentContext,
+    ) -> ExecutionPlan:
+        """Downsize E1 at the submission quote, keeping the frozen stop and budget."""
+        if (
+            plan.strategy_version != 2
+            or plan.orders[0].order_type is not ExecutionOrderType.MARKET
+        ):
+            raise ExecutionPlanningError(
+                "Only Strategy V2 MARKET plans can be refreshed"
+            )
+
+        price = context.market_price
+        if not price.is_finite() or price <= 0:
+            raise ExecutionPlanningError("Market price must be positive and finite")
+        if (plan.side is Side.LONG and price <= plan.stop_loss) or (
+            plan.side is Side.SHORT and price >= plan.stop_loss
+        ):
+            raise ExecutionPlanningError("Market moved outside V2 stop geometry")
+
+        primary_budget = (
+            plan.policy.risk_budget_usdt
+            * plan.policy.strategy_v2.primary_entry_risk_pct
+            / Decimal("100")
+        )
+        quantity = self._round_down(
+            min(
+                plan.orders[0].quantity,
+                primary_budget / abs(price - plan.stop_loss),
+            ),
+            context.qty_step,
+        )
+        if quantity <= 0 or quantity < context.min_qty:
+            raise ExecutionPlanningError(
+                "Refreshed E1 rounds below Bybit minimum quantity"
+            )
+        if context.min_notional and quantity * price < context.min_notional:
+            raise ExecutionPlanningError(
+                "Refreshed E1 rounds below Bybit minimum notional"
+            )
+
+        # Validate the prospective scale-ins and exits before submitting E1.
+        # The coordinator repeats this calculation with the actual fill.
+        return self.rebase_market_plan(
+            plan,
+            fill_price=price,
+            filled_quantity=quantity,
+            context=context,
+        )
+
     def rebase_market_plan(
         self,
         plan: ExecutionPlan,
@@ -389,14 +441,19 @@ class ExecutionPlanner:
                 "Actual-fill weighted entry has no stop distance"
             )
 
+        trader_target = plan.trader_take_profit or (
+            plan.take_profit
+            if plan.take_profit_source is TakeProfitSource.TRADER
+            else None
+        )
         target_tuple, take_profit_source = self._build_take_profit_targets(
             plan.side,
             strategy,
             weighted_entry,
             risk_distance,
             context.tick_size,
-            plan.take_profit
-            if plan.take_profit_source is TakeProfitSource.TRADER
+            self._round_price(trader_target, context.tick_size)
+            if trader_target is not None
             else None,
             trader_target_error="Trader take profit became too close after actual E1 fill",
             collapsed_targets_error="Actual-fill V2 take-profit levels collapse after rounding",
@@ -424,14 +481,7 @@ class ExecutionPlanner:
                 "take_profit": (target_tuple[-1].price),
                 "take_profit_targets": (target_tuple),
                 "take_profit_source": (take_profit_source),
-                "trader_take_profit": (
-                    plan.trader_take_profit
-                    or (
-                        plan.take_profit
-                        if plan.take_profit_source is TakeProfitSource.TRADER
-                        else None
-                    )
-                ),
+                "trader_take_profit": trader_target,
                 "planned_max_loss_usdt": (planned_max_loss),
             }
         )

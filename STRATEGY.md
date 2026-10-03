@@ -32,7 +32,10 @@ RANGE uses near edge, midpoint and far edge in execution order.
 Each quantity is leg risk divided by distance to stop, rounded down to quantity step.
 Reject plans below exchange minimums or unable to support a partial exit and runner.
 
-MARKET executes E1 first, confirms its fill and persists the rebased plan before
+MARKET refreshes sizing at the submission quote, reducing E1 quantity when needed
+to fit its frozen risk allocation; it never increases the original E1 quantity.
+The refreshed ladder must pass stop, exchange-minimum and exit-capacity checks.
+It executes E1 first, confirms its fill and persists the rebased plan before
 E2/E3 submission. Adverse slippage reduces remaining allocations to stay inside
 the frozen budget. LIMIT/RANGE entries submit as a batch.
 
