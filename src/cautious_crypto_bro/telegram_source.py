@@ -12,7 +12,7 @@ from datetime import (
     datetime,
     timedelta,
 )
-from typing import Any
+from typing import Any, cast
 
 from telethon import (
     TelegramClient,
@@ -96,14 +96,16 @@ async def telegram_messages_to_post(
                 "Failed to download image from Telegram message %s",
                 message.id,
             )
-            return None
+            raise
 
         if not data:
             logger.warning(
                 "Telegram returned empty image for message %s",
                 message.id,
             )
-            return None
+            raise RuntimeError(
+                f"Telegram returned empty image for message {message.id}"
+            )
 
         images.append(
             ImageAttachment(
@@ -249,6 +251,45 @@ def _group_telegram_messages(
     return tuple(tuple(group) for group in groups)
 
 
+async def telegram_message_group(
+    client: TelegramClient,
+    entity: Any,
+    messages: Sequence[Message],
+) -> tuple[Message, ...]:
+    """Resolve an album from any member, including a partial live event."""
+    first = min(messages, key=lambda message: message.id)
+    grouped_id = getattr(first, "grouped_id", None)
+    if grouped_id is None:
+        return tuple(messages)
+
+    # Let a newly published album settle before fetching its adjacent members.
+    # Bound the wait even when the source/server clock is ahead of ours.
+    newest_date = max(
+        (_as_utc(message.date) for message in messages if message.date is not None),
+        default=None,
+    )
+    if newest_date is not None:
+        delay = min(2.0, (newest_date - datetime.now(UTC)).total_seconds() + 2.0)
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+    # Reuse replay's bounded neighborhood: Telegram albums have at most ten
+    # adjacent items. This also finds the canonical head from a trailing item.
+    candidates = cast(
+        Sequence[Message | None],
+        await client.get_messages(
+            entity, ids=list(range(max(1, first.id - 12), first.id + 13))
+        ),
+    )
+    grouped = {message.id: message for message in messages}
+    grouped.update(
+        (message.id, message)
+        for message in candidates
+        if message is not None and getattr(message, "grouped_id", None) == grouped_id
+    )
+    return tuple(sorted(grouped.values(), key=lambda message: message.id))
+
+
 class TelegramSource:
     def __init__(
         self,
@@ -279,11 +320,17 @@ class TelegramSource:
         self._startup_lookback_hours = startup_lookback_hours
         self._catchup_interval_seconds = catchup_interval_seconds
         self._entities: list[Any] = []
-        # Highest message id already fed per chat. Live updates and the
-        # catch-up poll both advance it; the poll only fills the gaps.
+        # Only chronological history reconciliation may advance this cursor.
+        # A newer live delivery says nothing about earlier missed messages.
         self._watermarks: dict[int, int] = {}
+        self._history_cutoff: datetime | None = None
 
     async def start(self) -> None:
+        # Keep this boundary fixed through startup and failed seeding retries.
+        # Telegram dates have second precision, so include the starting second.
+        self._history_cutoff = datetime.now(UTC).replace(microsecond=0) - timedelta(
+            hours=self._startup_lookback_hours
+        )
         await self._client.start()  # pyright: ignore[reportGeneralTypeIssues]
 
         entities: list[Any] = []
@@ -329,10 +376,7 @@ class TelegramSource:
 
             await self._handle_messages((event.message,))
 
-        if self._startup_lookback_hours:
-            await self._run_startup_lookback(entities)
-
-        await self._seed_watermarks(entities)
+        await self.poll_once()
 
         logger.info("Telegram startup complete; listening for live updates")
 
@@ -340,22 +384,26 @@ class TelegramSource:
         self,
         entities: list[Any],
     ) -> None:
-        # The lookback already consumed everything down to its cutoff, so
-        # the newest message per channel is a safe place to start polling.
+        assert self._history_cutoff is not None
         for entity in entities:
-            newest: Sequence[Message] = ()
+            chat_id = _telegram_chat_id(entity)
+            if chat_id in self._watermarks:
+                continue
 
             try:
-                fetched = await self._client.get_messages(
-                    entity,
-                    limit=1,
-                )
-
-                if isinstance(
-                    fetched,
-                    Sequence,
-                ):
-                    newest = fetched
+                watermark = 0
+                last_group = None
+                # Find the last message outside the fixed startup window.
+                # Include an entire album if it straddles the time boundary.
+                async for message in self._client.iter_messages(entity):
+                    grouped_id = getattr(message, "grouped_id", None)
+                    if _as_utc(message.date) < self._history_cutoff and (
+                        grouped_id is None or grouped_id != last_group
+                    ):
+                        watermark = message.id
+                        break
+                    last_group = grouped_id
+                self._watermarks[chat_id] = watermark
             except Exception:
                 logger.exception(
                     "Failed to seed Telegram catch-up watermark for %s",
@@ -365,15 +413,6 @@ class TelegramSource:
                         entity,
                     ),
                 )
-                continue
-
-            if not newest:
-                continue
-
-            self._advance_watermark(
-                newest[-1].chat_id,
-                newest[-1].id,
-            )
 
     async def run_catchup(
         self,
@@ -389,31 +428,33 @@ class TelegramSource:
     async def poll_once(
         self,
     ) -> None:
+        await self._seed_watermarks(self._entities)
         for entity in self._entities:
-            watermark = self._watermarks.get(_telegram_chat_id(entity), 0)
+            chat_id = _telegram_chat_id(entity)
+            watermark = self._watermarks.get(chat_id)
 
-            if not watermark:
-                # Seeding failed. Polling from zero would walk the whole
-                # channel and replay history; the lookback owns that gap.
-                logger.warning(
-                    "Skipping Telegram catch-up for %s: no watermark",
-                    getattr(
-                        entity,
-                        "title",
-                        entity,
-                    ),
-                )
+            if watermark is None:
+                # Retry seeding next time; zero is valid for an empty channel.
                 continue
 
-            messages = [
-                message
+            messages: list[Message] = []
+            try:
                 async for message in self._client.iter_messages(
                     entity,
                     min_id=watermark,
                     reverse=True,
-                    limit=200,
-                )
-            ]
+                ):
+                    # Bound work per channel, but finish the boundary album.
+                    if len(messages) >= 200:
+                        last_group = getattr(messages[-1], "grouped_id", None)
+                        if last_group is None or last_group != getattr(
+                            message, "grouped_id", None
+                        ):
+                            break
+                    messages.append(message)
+            except Exception:
+                logger.exception("Failed to fetch Telegram catch-up for %s", chat_id)
+                continue
 
             if not messages:
                 continue
@@ -434,104 +475,16 @@ class TelegramSource:
                         group,
                         chat=entity,
                     )
+                    self._watermarks[chat_id] = max(message.id for message in group)
                 except Exception:
                     logger.exception(
                         "Failed to process Telegram catch-up post starting at %s/%s",
                         group[0].chat_id,
                         group[0].id,
                     )
-
-    def _advance_watermark(
-        self,
-        chat_id: int | None,
-        message_id: int,
-    ) -> None:
-        if chat_id is None:
-            return
-
-        if message_id > self._watermarks.get(chat_id, 0):
-            self._watermarks[chat_id] = message_id
-
-    async def _run_startup_lookback(
-        self,
-        entities: list[Any],
-    ) -> None:
-        cutoff = datetime.now(UTC) - timedelta(hours=(self._startup_lookback_hours))
-
-        logger.info(
-            "Scanning Telegram history for the previous %d hour(s)",
-            self._startup_lookback_hours,
-        )
-
-        for entity in entities:
-            messages: list[Message] = []
-
-            last_included_group: int | None = None
-
-            try:
-                # Telethon history is newest-first.
-                async for message in self._client.iter_messages(entity):
-                    grouped_id = getattr(
-                        message,
-                        "grouped_id",
-                        None,
-                    )
-
-                    if _as_utc(message.date) < cutoff:
-                        # If the lookback boundary falls in
-                        # the middle of an album, finish
-                        # collecting that album.
-                        if (
-                            last_included_group is not None
-                            and grouped_id == last_included_group
-                        ):
-                            messages.append(message)
-                            continue
-
-                        break
-
-                    messages.append(message)
-
-                    last_included_group = grouped_id
-
-            except Exception:
-                logger.exception(
-                    "Failed to fetch Telegram startup lookback for %s",
-                    getattr(
-                        entity,
-                        "title",
-                        entity,
-                    ),
-                )
-                continue
-
-            posts = _group_telegram_messages(messages)
-
-            logger.info(
-                "Startup lookback found %d message(s) / %d post(s) in %s",
-                len(messages),
-                len(posts),
-                getattr(
-                    entity,
-                    "title",
-                    entity,
-                ),
-            )
-
-            for group in posts:
-                try:
-                    await self._handle_messages(
-                        group,
-                        chat=entity,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to process Telegram "
-                        "startup lookback post "
-                        "starting at %s/%s",
-                        group[0].chat_id,
-                        group[0].id,
-                    )
+                    # Never advance over a failed post, including startup
+                    # downloads. Other channels can still make progress.
+                    break
 
     async def _handle_messages(
         self,
@@ -539,20 +492,21 @@ class TelegramSource:
         *,
         chat: object | None = None,
     ) -> None:
+        messages = await telegram_message_group(
+            self._client, chat if chat is not None else messages[0].chat_id, messages
+        )
         post = await telegram_messages_to_post(
             messages,
             chat=chat,
         )
 
-        # Advance even when the post carries no text or image: the poll
-        # must not keep re-reading a message it can never handle.
-        for message in messages:
-            self._advance_watermark(
-                message.chat_id,
-                message.id,
-            )
-
         if post is not None:
+            logger.info(
+                "Delivering Telegram post %s/%s (%d image(s))",
+                post.source.channel_id,
+                post.source.message_id,
+                len(post.images),
+            )
             await self._on_message(post)
 
     async def run_until_disconnected(

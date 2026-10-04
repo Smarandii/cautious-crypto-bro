@@ -5,7 +5,7 @@ import tempfile
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 from urllib.parse import urlparse
 
 from telethon import TelegramClient
@@ -14,7 +14,7 @@ from telethon.tl.custom.message import (
 )
 
 from .domain import IncomingPost
-from .telegram_source import telegram_messages_to_post
+from .telegram_source import telegram_message_group, telegram_messages_to_post
 
 
 class TelegramReplayError(RuntimeError):
@@ -92,78 +92,6 @@ def parse_telegram_post_url(
     )
 
 
-async def _replay_message_group(
-    client: TelegramClient,
-    entity: Any,
-    message: Message,
-) -> tuple[
-    Message,
-    ...,
-]:
-    grouped_id = getattr(
-        message,
-        "grouped_id",
-        None,
-    )
-
-    if grouped_id is None:
-        return (message,)
-
-    # Telegram media groups contain at most a small
-    # number of adjacent channel messages. Fetch a
-    # bounded neighborhood around whichever album
-    # item the replay URL references.
-    radius = 12
-
-    first_id = max(
-        1,
-        message.id - radius,
-    )
-
-    ids = list(
-        range(
-            first_id,
-            message.id + radius + 1,
-        )
-    )
-
-    candidates = cast(
-        Any,
-        await client.get_messages(
-            entity,
-            ids=ids,
-        ),
-    )
-
-    grouped: dict[
-        int,
-        Message,
-    ] = {
-        candidate.id: candidate
-        for candidate in candidates
-        if (
-            candidate is not None
-            and getattr(
-                candidate,
-                "grouped_id",
-                None,
-            )
-            == grouped_id
-        )
-    }
-
-    # Keep the requested message even if Telegram's
-    # neighborhood result is unexpectedly incomplete.
-    grouped[message.id] = message
-
-    return tuple(
-        sorted(
-            grouped.values(),
-            key=lambda item: item.id,
-        )
-    )
-
-
 async def fetch_telegram_post(
     *,
     url: str,
@@ -209,10 +137,10 @@ async def fetch_telegram_post(
                     "the configured account"
                 )
 
-            messages = await _replay_message_group(
+            messages = await telegram_message_group(
                 client,
                 entity,
-                message,
+                (message,),
             )
 
             post = await telegram_messages_to_post(
