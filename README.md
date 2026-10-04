@@ -22,6 +22,11 @@ docker compose logs -f app
 Fill `.env` with credentials and account/channel IDs from [.env.example](.env.example).
 The dialog helper authorizes the Telegram session.
 
+Live Telegram pushes are dropped often enough to lose real signals, so the source
+also reconciles each channel against history every
+`TELEGRAM_CATCHUP_INTERVAL_SECONDS` and replays anything the pushes missed.
+Startup lookback covers downtime before the first poll.
+
 `AUTO_APPROVAL_MODE` defaults to `disabled`; `open_only` enables eligible OPEN
 signals, and `all` also enables eligible REDUCE/CLOSE/CANCEL_ENTRIES actions. Both manual and
 AUTO entries reject symbols already controlled by an active strategy or live

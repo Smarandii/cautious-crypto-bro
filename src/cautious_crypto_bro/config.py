@@ -26,6 +26,13 @@ class Settings(BaseSettings):
         ge=0,
         le=168,
     )
+    # Live Telegram pushes are dropped often enough to miss real signals,
+    # so a poll reconciles each channel against history.
+    telegram_catchup_interval_seconds: int = Field(
+        default=60,
+        ge=15,
+        le=3600,
+    )
 
     telegram_bot_token: str
     telegram_approver_user_id: int

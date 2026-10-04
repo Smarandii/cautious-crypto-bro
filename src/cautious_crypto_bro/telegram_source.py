@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import (
     Awaitable,
@@ -171,6 +172,14 @@ async def telegram_messages_to_post(
     )
 
 
+def _telegram_chat_id(
+    entity: Any,
+) -> int:
+    # Telethon exposes the raw channel id; SourceMessage uses the
+    # -100<id> form that Message.chat_id already carries.
+    return -int("100" + str(entity.id))
+
+
 def telegram_image_media_type(
     message: Message,
 ) -> str | None:
@@ -250,9 +259,13 @@ class TelegramSource:
         channels: list[str | int],
         on_message: MessageHandler,
         startup_lookback_hours: int = 0,
+        catchup_interval_seconds: int = 60,
     ) -> None:
         if startup_lookback_hours < 0:
             raise ValueError("startup_lookback_hours must not be negative")
+
+        if catchup_interval_seconds <= 0:
+            raise ValueError("catchup_interval_seconds must be positive")
 
         self._client = TelegramClient(
             session_name,
@@ -264,6 +277,11 @@ class TelegramSource:
         self._on_message = on_message
 
         self._startup_lookback_hours = startup_lookback_hours
+        self._catchup_interval_seconds = catchup_interval_seconds
+        self._entities: list[Any] = []
+        # Highest message id already fed per chat. Live updates and the
+        # catch-up poll both advance it; the poll only fills the gaps.
+        self._watermarks: dict[int, int] = {}
 
     async def start(self) -> None:
         await self._client.start()  # pyright: ignore[reportGeneralTypeIssues]
@@ -279,6 +297,8 @@ class TelegramSource:
                 "Watching Telegram source: %s",
                 channel,
             )
+
+        self._entities = entities
 
         # Albums are handled as one logical Telegram post.
         @self._client.on(events.Album(chats=entities))
@@ -312,7 +332,125 @@ class TelegramSource:
         if self._startup_lookback_hours:
             await self._run_startup_lookback(entities)
 
+        await self._seed_watermarks(entities)
+
         logger.info("Telegram startup complete; listening for live updates")
+
+    async def _seed_watermarks(
+        self,
+        entities: list[Any],
+    ) -> None:
+        # The lookback already consumed everything down to its cutoff, so
+        # the newest message per channel is a safe place to start polling.
+        for entity in entities:
+            newest: Sequence[Message] = ()
+
+            try:
+                fetched = await self._client.get_messages(
+                    entity,
+                    limit=1,
+                )
+
+                if isinstance(
+                    fetched,
+                    Sequence,
+                ):
+                    newest = fetched
+            except Exception:
+                logger.exception(
+                    "Failed to seed Telegram catch-up watermark for %s",
+                    getattr(
+                        entity,
+                        "title",
+                        entity,
+                    ),
+                )
+                continue
+
+            if not newest:
+                continue
+
+            self._advance_watermark(
+                newest[-1].chat_id,
+                newest[-1].id,
+            )
+
+    async def run_catchup(
+        self,
+    ) -> None:
+        while True:
+            await asyncio.sleep(self._catchup_interval_seconds)
+
+            try:
+                await self.poll_once()
+            except Exception:
+                logger.exception("Telegram catch-up poll failed")
+
+    async def poll_once(
+        self,
+    ) -> None:
+        for entity in self._entities:
+            watermark = self._watermarks.get(_telegram_chat_id(entity), 0)
+
+            if not watermark:
+                # Seeding failed. Polling from zero would walk the whole
+                # channel and replay history; the lookback owns that gap.
+                logger.warning(
+                    "Skipping Telegram catch-up for %s: no watermark",
+                    getattr(
+                        entity,
+                        "title",
+                        entity,
+                    ),
+                )
+                continue
+
+            messages = [
+                message
+                async for message in self._client.iter_messages(
+                    entity,
+                    min_id=watermark,
+                    reverse=True,
+                    limit=200,
+                )
+            ]
+
+            if not messages:
+                continue
+
+            logger.info(
+                "Telegram catch-up replaying %d message(s) in %s",
+                len(messages),
+                getattr(
+                    entity,
+                    "title",
+                    entity,
+                ),
+            )
+
+            for group in _group_telegram_messages(messages):
+                try:
+                    await self._handle_messages(
+                        group,
+                        chat=entity,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to process Telegram catch-up post starting at %s/%s",
+                        group[0].chat_id,
+                        group[0].id,
+                    )
+
+    def _advance_watermark(
+        self,
+        chat_id: int | None,
+        message_id: int,
+    ) -> None:
+        if chat_id is None:
+            return
+
+        if message_id > self._watermarks.get(chat_id, 0):
+            self._watermarks[chat_id] = message_id
 
     async def _run_startup_lookback(
         self,
@@ -405,6 +543,14 @@ class TelegramSource:
             messages,
             chat=chat,
         )
+
+        # Advance even when the post carries no text or image: the poll
+        # must not keep re-reading a message it can never handle.
+        for message in messages:
+            self._advance_watermark(
+                message.chat_id,
+                message.id,
+            )
 
         if post is not None:
             await self._on_message(post)

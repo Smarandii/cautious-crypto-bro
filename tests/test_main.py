@@ -65,6 +65,7 @@ def test_initial_reconciliation_precedes_any_execution(
     source = SimpleNamespace(
         start=step("source.start"),
         run_until_disconnected=step("source.run"),
+        run_catchup=step("source.catchup"),
         disconnect=step("source.disconnect"),
     )
     settings = SimpleNamespace(
@@ -86,6 +87,7 @@ def test_initial_reconciliation_precedes_any_execution(
         telegram_session_name="test",
         telegram_source_channels=(),
         telegram_startup_lookback_hours=1,
+        telegram_catchup_interval_seconds=60,
     )
 
     monkeypatch.setattr(app, "get_settings", lambda: settings)
@@ -127,6 +129,10 @@ def test_initial_reconciliation_precedes_any_execution(
         ) < events.index("source.start")
         assert events.index("service.recover") < events.index("bot.run")
         assert events.index("service.recover") < events.index("supervisor.run")
+        # The catch-up poll must run alongside the live listener, or
+        # dropped Telegram pushes stay dropped.
+        assert "source.catchup" in events
+        assert events.index("source.start") < events.index("source.catchup")
 
     assert events[-5:] == [
         "source.disconnect",

@@ -113,6 +113,7 @@ async def async_main() -> None:
         channels=(settings.telegram_source_channels),
         on_message=(service.on_message),
         startup_lookback_hours=(settings.telegram_startup_lookback_hours),
+        catchup_interval_seconds=(settings.telegram_catchup_interval_seconds),
     )
 
     try:
@@ -144,6 +145,7 @@ async def async_main() -> None:
             await source.start()
 
             tg.create_task(source.run_until_disconnected())
+            tg.create_task(source.run_catchup())
     finally:
         await source.disconnect()
         await bot.close()

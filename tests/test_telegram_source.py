@@ -48,6 +48,7 @@ class FakeTelegramClient:
         self.messages = messages
 
         self.entity = SimpleNamespace(
+            id=1234567890,
             title="Test trader",
             username=None,
         )
@@ -63,6 +64,19 @@ class FakeTelegramClient:
     ):
         return self.entity
 
+    async def get_messages(
+        self,
+        entity,
+        *,
+        limit=None,
+    ):
+        return list(
+            sorted(
+                self.messages,
+                key=lambda message: message.id,
+            )
+        )[-limit:]
+
     def on(
         self,
         event,
@@ -76,9 +90,24 @@ class FakeTelegramClient:
     def iter_messages(
         self,
         entity,
+        *,
+        min_id=0,
+        reverse=False,
+        limit=None,
     ):
         async def iterator():
-            for message in self.messages:
+            selected = sorted(
+                (message for message in self.messages if message.id > min_id),
+                key=lambda message: message.id,
+            )
+
+            if limit is not None:
+                selected = selected[:limit]
+
+            if not reverse:
+                selected = list(reversed(selected))
+
+            for message in selected:
                 yield message
 
         return iterator()
@@ -186,6 +215,112 @@ def test_startup_lookback_processes_recent_messages_oldest_first(
         assert processed == [
             2,
             3,
+        ]
+
+    asyncio.run(run())
+
+
+def test_catchup_poll_replays_messages_the_live_push_dropped(
+    monkeypatch,
+) -> None:
+    async def run() -> None:
+        now = datetime.now(UTC)
+
+        fake_client = FakeTelegramClient(
+            [
+                FakeMessage(
+                    message_id=1,
+                    published_at=(now - timedelta(hours=6)),
+                    text="live",
+                ),
+                # Never reached the dispatcher, exactly like the
+                # 2026-10-03 posts the audit found missing.
+                FakeMessage(
+                    message_id=2,
+                    published_at=(now - timedelta(minutes=20)),
+                    text="dropped",
+                ),
+                FakeMessage(
+                    message_id=3,
+                    published_at=(now - timedelta(minutes=10)),
+                    text="album head",
+                    grouped_id=9,
+                    image=b"first",
+                ),
+                FakeMessage(
+                    message_id=4,
+                    published_at=(now - timedelta(minutes=9)),
+                    grouped_id=9,
+                    image=b"second",
+                ),
+            ]
+        )
+
+        monkeypatch.setattr(
+            telegram_source,
+            "TelegramClient",
+            lambda *args, **kwargs: fake_client,
+        )
+
+        processed: list[tuple[int, int]] = []
+
+        async def on_message(
+            post,
+        ) -> None:
+            processed.append(
+                (
+                    post.source.message_id,
+                    len(post.images),
+                )
+            )
+
+        source = telegram_source.TelegramSource(
+            api_id=1,
+            api_hash="hash",
+            session_name="session",
+            channels=[-1001234567890],
+            on_message=on_message,
+            startup_lookback_hours=0,
+        )
+
+        # Startup seeds the watermark at the newest message, so the poll
+        # starts from "now" and would see nothing new.
+        await source.start()
+
+        assert processed == []
+
+        fake_client.messages.append(
+            FakeMessage(
+                message_id=5,
+                published_at=(now - timedelta(minutes=1)),
+                text="missed while running",
+            )
+        )
+
+        await source.poll_once()
+
+        assert processed == [
+            (5, 0),
+        ]
+
+        # Watermark advanced, so a second poll adds nothing new.
+        await source.poll_once()
+
+        assert processed == [
+            (5, 0),
+        ]
+
+        # Messages the live push dropped are still in history, so a
+        # watermark that never advanced replays them oldest first.
+        source._watermarks[-1001234567890] = 1
+
+        await source.poll_once()
+
+        assert processed == [
+            (5, 0),
+            (2, 0),
+            (3, 2),
+            (5, 0),
         ]
 
     asyncio.run(run())
