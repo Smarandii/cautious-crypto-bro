@@ -255,90 +255,25 @@ class ExecutionPlanner:
         filled_quantity: Decimal,
         context: InstrumentContext,
     ) -> ExecutionPlan:
-        if plan.strategy_version < 2:
-            raise ExecutionPlanningError("Only Strategy V2 plans can be rebased")
-
-        if len(plan.orders) != 3:
-            raise ExecutionPlanningError("Strategy V2 requires three entry legs")
-
-        if plan.orders[0].order_type is not ExecutionOrderType.MARKET:
-            raise ExecutionPlanningError("Only MARKET-primary V2 plans can be rebased")
-
-        if any(
-            order.order_type is not ExecutionOrderType.LIMIT
-            for order in plan.orders[1:]
-        ):
-            raise ExecutionPlanningError("V2 MARKET scale-ins must be LIMIT orders")
-
-        if fill_price <= 0:
-            raise ExecutionPlanningError("Actual E1 fill price must be positive")
-
-        if filled_quantity <= 0:
-            raise ExecutionPlanningError("Actual E1 fill quantity must be positive")
+        self._validate_rebase_inputs(plan, fill_price, filled_quantity)
 
         stop_loss = plan.stop_loss
         strategy = plan.policy.strategy_v2
-
-        if plan.side is Side.LONG and fill_price <= stop_loss:
-            raise ExecutionPlanningError("Actual LONG E1 fill is outside stop geometry")
-
-        if plan.side is Side.SHORT and fill_price >= stop_loss:
-            raise ExecutionPlanningError(
-                "Actual SHORT E1 fill is outside stop geometry"
-            )
-
-        primary_distance = abs(fill_price - stop_loss)
-
-        direction = Decimal("-1") if plan.side is Side.LONG else Decimal("1")
-
-        second_price = self._round_price(
-            fill_price
-            + (direction * strategy.secondary_entry_depth_r * primary_distance),
-            context.tick_size,
-        )
-
-        third_price = self._round_price(
-            fill_price
-            + (direction * strategy.tertiary_entry_depth_r * primary_distance),
-            context.tick_size,
-        )
-
-        reference_prices = (
-            fill_price,
-            second_price,
-            third_price,
-        )
-
-        self._validate_entry_geometry(
-            plan.side,
-            reference_prices,
-            stop_loss,
-        )
-
         risk_budget = plan.policy.risk_budget_usdt
 
-        primary_risk = filled_quantity * primary_distance
-
-        if primary_risk >= risk_budget:
-            raise ExecutionPlanningError(
-                "Actual E1 fill consumes the full Strategy V2 risk budget"
-            )
-
-        nominal_remaining_budget = (
-            risk_budget
-            * (strategy.secondary_entry_risk_pct + strategy.tertiary_entry_risk_pct)
-            / Decimal("100")
+        primary_distance, second_price, third_price = self._rebase_reference_prices(
+            plan,
+            fill_price,
+            stop_loss,
+            strategy,
+            context,
         )
 
-        available_remaining_budget = risk_budget - primary_risk
-
-        remaining_scale = min(
-            Decimal("1"),
-            (available_remaining_budget / nominal_remaining_budget),
+        remaining_scale = self._rebase_remaining_scale(
+            plan,
+            filled_quantity,
+            primary_distance,
         )
-
-        if remaining_scale <= 0:
-            raise ExecutionPlanningError("No risk budget remains for V2 scale-ins")
 
         primary = plan.orders[0].model_copy(
             update={
@@ -434,6 +369,146 @@ class ExecutionPlanner:
             / total_quantity
         )
 
+        target_tuple, take_profit_source, trader_target = self._resolve_rebase_targets(
+            plan,
+            strategy,
+            weighted_entry,
+            stop_loss,
+            primary,
+            context,
+        )
+
+        return self._rebuild_rebased_plan(
+            plan,
+            orders,
+            target_tuple,
+            take_profit_source,
+            trader_target,
+            planned_max_loss,
+        )
+
+    def _validate_rebase_inputs(
+        self,
+        plan: ExecutionPlan,
+        fill_price: Decimal,
+        filled_quantity: Decimal,
+    ) -> None:
+        if plan.strategy_version < 2:
+            raise ExecutionPlanningError("Only Strategy V2 plans can be rebased")
+
+        if len(plan.orders) != 3:
+            raise ExecutionPlanningError("Strategy V2 requires three entry legs")
+
+        if plan.orders[0].order_type is not ExecutionOrderType.MARKET:
+            raise ExecutionPlanningError("Only MARKET-primary V2 plans can be rebased")
+
+        if any(
+            order.order_type is not ExecutionOrderType.LIMIT
+            for order in plan.orders[1:]
+        ):
+            raise ExecutionPlanningError("V2 MARKET scale-ins must be LIMIT orders")
+
+        if fill_price <= 0:
+            raise ExecutionPlanningError("Actual E1 fill price must be positive")
+
+        if filled_quantity <= 0:
+            raise ExecutionPlanningError("Actual E1 fill quantity must be positive")
+
+        stop_loss = plan.stop_loss
+
+        if plan.side is Side.LONG and fill_price <= stop_loss:
+            raise ExecutionPlanningError("Actual LONG E1 fill is outside stop geometry")
+
+        if plan.side is Side.SHORT and fill_price >= stop_loss:
+            raise ExecutionPlanningError(
+                "Actual SHORT E1 fill is outside stop geometry"
+            )
+
+    def _rebase_reference_prices(
+        self,
+        plan: ExecutionPlan,
+        fill_price: Decimal,
+        stop_loss: Decimal,
+        strategy: StrategyV2Policy,
+        context: InstrumentContext,
+    ) -> tuple[Decimal, Decimal, Decimal]:
+        primary_distance = abs(fill_price - stop_loss)
+
+        direction = Decimal("-1") if plan.side is Side.LONG else Decimal("1")
+
+        second_price = self._round_price(
+            fill_price
+            + (direction * strategy.secondary_entry_depth_r * primary_distance),
+            context.tick_size,
+        )
+
+        third_price = self._round_price(
+            fill_price
+            + (direction * strategy.tertiary_entry_depth_r * primary_distance),
+            context.tick_size,
+        )
+
+        reference_prices = (
+            fill_price,
+            second_price,
+            third_price,
+        )
+
+        self._validate_entry_geometry(
+            plan.side,
+            reference_prices,
+            stop_loss,
+        )
+
+        return primary_distance, second_price, third_price
+
+    def _rebase_remaining_scale(
+        self,
+        plan: ExecutionPlan,
+        filled_quantity: Decimal,
+        primary_distance: Decimal,
+    ) -> Decimal:
+        risk_budget = plan.policy.risk_budget_usdt
+        strategy = plan.policy.strategy_v2
+
+        primary_risk = filled_quantity * primary_distance
+
+        if primary_risk >= risk_budget:
+            raise ExecutionPlanningError(
+                "Actual E1 fill consumes the full Strategy V2 risk budget"
+            )
+
+        nominal_remaining_budget = (
+            risk_budget
+            * (strategy.secondary_entry_risk_pct + strategy.tertiary_entry_risk_pct)
+            / Decimal("100")
+        )
+
+        available_remaining_budget = risk_budget - primary_risk
+
+        remaining_scale = min(
+            Decimal("1"),
+            (available_remaining_budget / nominal_remaining_budget),
+        )
+
+        if remaining_scale <= 0:
+            raise ExecutionPlanningError("No risk budget remains for V2 scale-ins")
+
+        return remaining_scale
+
+    def _resolve_rebase_targets(
+        self,
+        plan: ExecutionPlan,
+        strategy: StrategyV2Policy,
+        weighted_entry: Decimal,
+        stop_loss: Decimal,
+        primary: PlannedOrder,
+        context: InstrumentContext,
+    ) -> tuple[
+        tuple[PlannedTakeProfit, PlannedTakeProfit, PlannedTakeProfit],
+        TakeProfitSource,
+        Decimal | None,
+    ]:
         risk_distance = abs(weighted_entry - stop_loss)
 
         if risk_distance <= 0:
@@ -455,8 +530,12 @@ class ExecutionPlanner:
             self._round_price(trader_target, context.tick_size)
             if trader_target is not None
             else None,
-            trader_target_error="Trader take profit became too close after actual E1 fill",
-            collapsed_targets_error="Actual-fill V2 take-profit levels collapse after rounding",
+            trader_target_error=(
+                "Trader take profit became too close after actual E1 fill"
+            ),
+            collapsed_targets_error=(
+                "Actual-fill V2 take-profit levels collapse after rounding"
+            ),
         )
 
         self._validate_target_geometry(
@@ -473,6 +552,17 @@ class ExecutionPlanner:
             context,
         )
 
+        return target_tuple, take_profit_source, trader_target
+
+    def _rebuild_rebased_plan(
+        self,
+        plan: ExecutionPlan,
+        orders: tuple[PlannedOrder, PlannedOrder, PlannedOrder],
+        target_tuple: tuple[PlannedTakeProfit, PlannedTakeProfit, PlannedTakeProfit],
+        take_profit_source: TakeProfitSource,
+        trader_target: Decimal | None,
+        planned_max_loss: Decimal,
+    ) -> ExecutionPlan:
         payload = plan.model_dump()
 
         payload.update(

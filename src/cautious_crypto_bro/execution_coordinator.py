@@ -11,6 +11,7 @@ from .domain import (
     ApprovalMode,
     EntryPreflightError,
     ExecutionOrderType,
+    ExecutionPlan,
     IntentExecutionOutcome,
     IntentStatus,
     OpenRelation,
@@ -214,6 +215,101 @@ class ExecutionCoordinator:
         approval_mode: ApprovalMode,
         user_id: int | None = None,
     ) -> IntentExecutionOutcome:
+        prepared = await self._prepare_execution(
+            intent_id,
+            approval_mode,
+            user_id,
+        )
+        if isinstance(prepared, IntentExecutionOutcome):
+            return prepared
+        intent, plan = prepared
+
+        effective_plan = plan
+
+        async with self._execution_lock:
+            current = await self._store.get_intent(intent_id)
+            if current is not None and current.status is IntentStatus.SKIPPED:
+                return IntentExecutionOutcome(
+                    status=current.status,
+                    message="Entry withdrawn by source",
+                    intent=current,
+                    plan=plan,
+                )
+            strategy_created = False
+            primary_filled = False
+            try:
+                await self._assert_open_preflight(intent, plan, approval_mode)
+
+                await self._store.ensure_position_strategy(plan)
+                strategy_created = True
+
+                staged_market = plan.orders[0].order_type is ExecutionOrderType.MARKET
+
+                if staged_market:
+                    primary = await self._executor.execute_market_primary(plan)
+                    primary_filled = True
+
+                    context = await self._executor.market_context(plan.symbol)
+
+                    effective_plan = self._planner.rebase_market_plan(
+                        plan,
+                        fill_price=(primary.average_fill_price),
+                        filled_quantity=(primary.filled_quantity),
+                        context=context,
+                    )
+
+                    # Persist the fill-derived geometry
+                    # before E2/E3 are submitted. The
+                    # supervisor shares this mutation lock,
+                    # so it can never observe the new orders
+                    # against the old snapshot plan.
+                    await self._store.update_execution_plan(effective_plan)
+
+                    remaining_ids = await self._executor.execute_remaining_entries(
+                        effective_plan
+                    )
+
+                    order_ids = (
+                        primary.order_id,
+                        *remaining_ids,
+                    )
+
+                else:
+                    order_ids = await self._executor.execute(plan)
+
+                await self._store.mark_executed(
+                    intent_id,
+                    order_ids,
+                )
+
+            except Exception as exc:
+                logger.exception(
+                    "Execution failed for %s",
+                    intent_id,
+                )
+                return await self._execution_failure_outcome(
+                    intent_id,
+                    exc,
+                    strategy_created=strategy_created,
+                    primary_filled=primary_filled,
+                    intent=intent,
+                    effective_plan=effective_plan,
+                )
+
+        return IntentExecutionOutcome(
+            status=IntentStatus.EXECUTED,
+            message="Executed on Bybit Demo",
+            intent=intent,
+            plan=effective_plan,
+            order_ids=order_ids,
+        )
+
+    async def _prepare_execution(
+        self,
+        intent_id: UUID,
+        approval_mode: ApprovalMode,
+        user_id: int | None,
+    ) -> tuple[TradingIntent, ExecutionPlan] | IntentExecutionOutcome:
         intent = await self._store.get_intent(intent_id)
 
         if intent is None:
@@ -269,118 +365,66 @@ class ExecutionCoordinator:
                 plan=plan,
             )
 
-        effective_plan = plan
+        return intent, plan
 
-        async with self._execution_lock:
-            current = await self._store.get_intent(intent_id)
-            if current is not None and current.status is IntentStatus.SKIPPED:
-                return IntentExecutionOutcome(
-                    status=current.status,
-                    message="Entry withdrawn by source",
-                    intent=current,
-                    plan=plan,
-                )
-            strategy_created = False
-            primary_filled = False
-            try:
-                active = await self._store.get_active_position_strategies()
-                if any(state.symbol == plan.symbol for state, _ in active):
-                    raise EntryPreflightError(
-                        f"Existing strategy owns {plan.symbol}; resolve it before opening another"
-                    )
-                live_state = await self._executor.account_state()
-                # V2 owns a whole net position. Manual approval cannot make two
-                # independent entry/exit ladders safe on the same symbol.
-                conflict = self.auto_open_safety_reason(
-                    intent.model_copy(update={"relation": OpenRelation.NEW}), live_state
-                )
-                if conflict is not None:
-                    raise EntryPreflightError(conflict)
-                if approval_mode is ApprovalMode.AUTO:
-                    safety_reason = self.auto_open_safety_reason(
-                        intent,
-                        live_state,
-                    )
+    async def _assert_open_preflight(
+        self,
+        intent: TradingIntent,
+        plan: ExecutionPlan,
+        approval_mode: ApprovalMode,
+    ) -> None:
+        active = await self._store.get_active_position_strategies()
+        if any(state.symbol == plan.symbol for state, _ in active):
+            raise EntryPreflightError(
+                f"Existing strategy owns {plan.symbol}; resolve it before opening another"
+            )
+        live_state = await self._executor.account_state()
+        # V2 owns a whole net position. Manual approval cannot make two
+        # independent entry/exit ladders safe on the same symbol.
+        conflict = self.auto_open_safety_reason(
+            intent.model_copy(update={"relation": OpenRelation.NEW}), live_state
+        )
+        if conflict is not None:
+            raise EntryPreflightError(conflict)
+        if approval_mode is ApprovalMode.AUTO:
+            safety_reason = self.auto_open_safety_reason(
+                intent,
+                live_state,
+            )
 
-                    if safety_reason is not None:
-                        raise AutoExecutionSafetyError(safety_reason)
+            if safety_reason is not None:
+                raise AutoExecutionSafetyError(safety_reason)
 
-                await self._store.ensure_position_strategy(plan)
-                strategy_created = True
+    async def _execution_failure_outcome(
+        self,
+        intent_id: UUID,
+        exc: Exception,
+        *,
+        strategy_created: bool,
+        primary_filled: bool,
+        intent: TradingIntent,
+        effective_plan: ExecutionPlan,
+    ) -> IntentExecutionOutcome:
+        message = f"{type(exc).__name__}: {exc}"
 
-                staged_market = plan.orders[0].order_type is ExecutionOrderType.MARKET
+        await self._store.mark_failed(
+            intent_id,
+            message,
+        )
 
-                if staged_market:
-                    primary = await self._executor.execute_market_primary(plan)
-                    primary_filled = True
-
-                    context = await self._executor.market_context(plan.symbol)
-
-                    effective_plan = self._planner.rebase_market_plan(
-                        plan,
-                        fill_price=(primary.average_fill_price),
-                        filled_quantity=(primary.filled_quantity),
-                        context=context,
-                    )
-
-                    # Persist the fill-derived geometry
-                    # before E2/E3 are submitted. The
-                    # supervisor shares this mutation lock,
-                    # so it can never observe the new orders
-                    # against the old snapshot plan.
-                    await self._store.update_execution_plan(effective_plan)
-
-                    remaining_ids = await self._executor.execute_remaining_entries(
-                        effective_plan
-                    )
-
-                    order_ids = (
-                        primary.order_id,
-                        *remaining_ids,
-                    )
-
-                else:
-                    order_ids = await self._executor.execute(plan)
-
-                await self._store.mark_executed(
-                    intent_id,
-                    order_ids,
-                )
-
-            except Exception as exc:
-                logger.exception(
-                    "Execution failed for %s",
-                    intent_id,
-                )
-
-                message = f"{type(exc).__name__}: {exc}"
-
-                await self._store.mark_failed(
-                    intent_id,
-                    message,
-                )
-
-                if strategy_created:
-                    await self._store.set_position_strategy_status(
-                        intent_id,
-                        StrategyStatus.CLOSED
-                        if isinstance(exc, EntryPreflightError) and not primary_filled
-                        else StrategyStatus.UNCERTAIN,
-                    )
-
-                return IntentExecutionOutcome(
-                    status=IntentStatus.FAILED,
-                    message=message,
-                    intent=intent,
-                    plan=effective_plan,
-                )
+        if strategy_created:
+            await self._store.set_position_strategy_status(
+                intent_id,
+                StrategyStatus.CLOSED
+                if isinstance(exc, EntryPreflightError) and not primary_filled
+                else StrategyStatus.UNCERTAIN,
+            )
 
         return IntentExecutionOutcome(
-            status=IntentStatus.EXECUTED,
-            message="Executed on Bybit Demo",
+            status=IntentStatus.FAILED,
+            message=message,
             intent=intent,
             plan=effective_plan,
-            order_ids=order_ids,
         )
 
     async def execute_position_action(

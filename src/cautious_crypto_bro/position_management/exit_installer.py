@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         AccountPosition,
         AccountStateSummary,
         ExecutionPlan,
+        InstrumentContext,
         PositionStrategy,
     )
     from ..ports import AccountGateway, PositionSupervisorStore
@@ -49,6 +50,56 @@ class ExitInstaller:
         Decimal,
         Decimal | None,
     ]:
+        context, protected_stop, trailing_distance = await self._resolve_protection(
+            state,
+            plan,
+            position,
+            enable_trailing,
+        )
+        await self._save_installing_snapshot(
+            state,
+            position,
+            protected_stop,
+            trailing_distance,
+            enable_trailing,
+        )
+        await self._apply_protection(
+            state,
+            position,
+            protected_stop,
+            trailing_distance,
+        )
+        await self._cancel_stale_exits(state, account)
+        await self._confirm_protection_and_handoff(
+            state,
+            plan,
+            protected_stop,
+            trailing_distance,
+            enable_trailing,
+        )
+        expected_exits = await self._install_take_profit_exits(
+            state,
+            plan,
+            position,
+            account,
+            context,
+        )
+        verified = await self._verify_installation(
+            state,
+            position,
+            protected_stop,
+            trailing_distance,
+            expected_exits,
+        )
+        return (verified, protected_stop, trailing_distance)
+
+    async def _resolve_protection(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        position: AccountPosition,
+        enable_trailing: bool,
+    ) -> tuple[InstrumentContext, Decimal, Decimal | None]:
         context = await self._executor.market_context(state.symbol)
 
         trailing_distance = (
@@ -80,6 +131,16 @@ class ExitInstaller:
             )
         if state.trailing_active:
             trailing_distance = state.trailing_distance or trailing_distance
+        return context, protected_stop, trailing_distance
+
+    async def _save_installing_snapshot(
+        self,
+        state: PositionStrategy,
+        position: AccountPosition,
+        protected_stop: Decimal,
+        trailing_distance: Decimal | None,
+        enable_trailing: bool,
+    ) -> None:
         await self._save(
             state.model_copy(
                 update={
@@ -93,6 +154,13 @@ class ExitInstaller:
             )
         )
 
+    async def _apply_protection(
+        self,
+        state: PositionStrategy,
+        position: AccountPosition,
+        protected_stop: Decimal,
+        trailing_distance: Decimal | None,
+    ) -> None:
         if (
             position.stop_loss != protected_stop
             or position.trailing_stop != trailing_distance
@@ -103,6 +171,11 @@ class ExitInstaller:
                 trailing_distance=trailing_distance,
             )
 
+    async def _cancel_stale_exits(
+        self,
+        state: PositionStrategy,
+        account: AccountStateSummary,
+    ) -> None:
         # The new revision is durable before replacing older owned exits.
         prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-t"
         for order in account.open_orders:
@@ -114,6 +187,14 @@ class ExitInstaller:
             ):
                 await self._executor.cancel_order(state.symbol, order.order_id)
 
+    async def _confirm_protection_and_handoff(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        protected_stop: Decimal,
+        trailing_distance: Decimal | None,
+        enable_trailing: bool,
+    ) -> None:
         # Never cancel partial protection until Bybit confirms the full stop.
         verified = await self._executor.account_state()
         live_position = _find_position(state, verified)
@@ -137,6 +218,14 @@ class ExitInstaller:
             verified,
         )
 
+    async def _install_take_profit_exits(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        position: AccountPosition,
+        account: AccountStateSummary,
+        context: InstrumentContext,
+    ) -> dict[str, tuple[Decimal, Decimal]]:
         done = (
             state.tp1_done,
             state.tp2_done,
@@ -158,125 +247,166 @@ class ExitInstaller:
             if plan.take_profit_source is TakeProfitSource.TRADER
             else None
         )
-        target_rs = [target.r_multiple for target in plan.take_profit_targets]
-        if cap is not None:
-            cap_r = (
-                (cap - position.avg_price)
-                if position.side is Side.LONG
-                else (position.avg_price - cap)
-            ) / risk_distance
-            if cap_r <= 0:
-                raise RuntimeError("Trader TP cap is no longer beyond the live entry")
-            if cap_r < target_rs[-1]:
-                if cap_r > target_rs[0]:
-                    target_rs = [target_rs[0], (target_rs[0] + cap_r) / 2, cap_r]
-                else:
-                    target_rs = [r * cap_r / target_rs[-1] for r in target_rs]
+        target_rs = self._resolve_target_rs(plan, position, risk_distance, cap)
 
         expected_exits: dict[str, tuple[Decimal, Decimal]] = {}
+        if remaining_weight <= 0:
+            return expected_exits
 
-        if remaining_weight > 0:
-            for index, target in enumerate(
-                plan.take_profit_targets,
-                start=1,
+        for index, target in enumerate(
+            plan.take_profit_targets,
+            start=1,
+        ):
+            if done[index - 1]:
+                continue
+
+            quantity = _round_down(
+                (position.size * target.close_pct / remaining_weight),
+                context.qty_step,
+            )
+
+            if quantity <= 0 or quantity < context.min_qty:
+                logger.warning(
+                    "%s TP%s rounds below "
+                    "minimum quantity; leaving "
+                    "that share in the runner",
+                    state.symbol,
+                    index,
+                )
+                continue
+
+            price = self._compute_exit_price(
+                position,
+                target_rs[index - 1],
+                risk_distance,
+                cap,
+                context,
+            )
+
+            if (
+                price <= position.avg_price
+                if position.side is Side.LONG
+                else price >= position.avg_price
             ):
-                if done[index - 1]:
-                    continue
-
-                quantity = _round_down(
-                    (position.size * target.close_pct / remaining_weight),
-                    context.qty_step,
+                raise RuntimeError(
+                    "Trader TP geometry cannot fit profitable exchange ticks"
+                )
+            if price in [p for _, p in expected_exits.values()]:
+                raise RuntimeError(
+                    "Trader TP geometry cannot fit distinct exchange ticks"
                 )
 
-                if quantity <= 0 or quantity < context.min_qty:
-                    logger.warning(
-                        "%s TP%s rounds below "
-                        "minimum quantity; leaving "
-                        "that share in the runner",
-                        state.symbol,
-                        index,
-                    )
-                    continue
-
-                if position.side is Side.LONG:
-                    raw_price = position.avg_price + (
-                        target_rs[index - 1] * risk_distance
-                    )
-                else:
-                    raw_price = position.avg_price - (
-                        target_rs[index - 1] * risk_distance
-                    )
-
-                price = _round_price(
-                    raw_price,
-                    context.tick_size,
+            if context.min_notional and (quantity * price < context.min_notional):
+                logger.warning(
+                    "%s TP%s rounds below "
+                    "minimum notional; leaving "
+                    "that share in the runner",
+                    state.symbol,
+                    index,
                 )
+                continue
 
-                if cap is not None:
-                    rounding = (
-                        ROUND_FLOOR if position.side is Side.LONG else ROUND_CEILING
-                    )
-                    cap_price = (cap / context.tick_size).to_integral_value(
-                        rounding=rounding
-                    ) * context.tick_size
-                    price = (
-                        min(price, cap_price)
-                        if position.side is Side.LONG
-                        else max(price, cap_price)
-                    )
-                if (
-                    price <= position.avg_price
-                    if position.side is Side.LONG
-                    else price >= position.avg_price
+            link_id = self._fill_detector.exit_link_id(state, index)
+            expected_exits[link_id] = (quantity, price)
+            existing = await self._find_existing_exit(state, link_id, account)
+            if existing:
+                if len(existing) != 1 or not self._matching_exit(
+                    existing[0], position.side, quantity, price
                 ):
                     raise RuntimeError(
-                        "Trader TP geometry cannot fit profitable exchange ticks"
+                        f"Existing exit {link_id} conflicts with the planned policy"
                     )
-                if price in [p for _, p in expected_exits.values()]:
-                    raise RuntimeError(
-                        "Trader TP geometry cannot fit distinct exchange ticks"
-                    )
+                continue
 
-                if context.min_notional and (quantity * price < context.min_notional):
-                    logger.warning(
-                        "%s TP%s rounds below "
-                        "minimum notional; leaving "
-                        "that share in the runner",
-                        state.symbol,
-                        index,
-                    )
-                    continue
+            await self._executor.place_reduce_only_exit(
+                symbol=state.symbol,
+                position_side=position.side,
+                quantity=quantity,
+                price=price,
+                order_link_id=link_id,
+            )
 
-                link_id = self._fill_detector.exit_link_id(state, index)
-                expected_exits[link_id] = (quantity, price)
-                existing = [
-                    order
-                    for order in account.open_orders
-                    if order.symbol == state.symbol and order.order_link_id == link_id
-                ]
-                if not existing:
-                    historical = await self._executor.strategy_order(
-                        state.symbol, link_id
-                    )
-                    if historical is not None:
-                        existing = [historical]
-                if existing:
-                    if len(existing) != 1 or not self._matching_exit(
-                        existing[0], position.side, quantity, price
-                    ):
-                        raise RuntimeError(
-                            f"Existing exit {link_id} conflicts with the planned policy"
-                        )
-                    continue
+        return expected_exits
 
-                await self._executor.place_reduce_only_exit(
-                    symbol=state.symbol,
-                    position_side=position.side,
-                    quantity=quantity,
-                    price=price,
-                    order_link_id=link_id,
-                )
+    @staticmethod
+    def _resolve_target_rs(
+        plan: ExecutionPlan,
+        position: AccountPosition,
+        risk_distance: Decimal,
+        cap: Decimal | None,
+    ) -> list[Decimal]:
+        target_rs = [target.r_multiple for target in plan.take_profit_targets]
+        if cap is None:
+            return target_rs
+        cap_r = (
+            (cap - position.avg_price)
+            if position.side is Side.LONG
+            else (position.avg_price - cap)
+        ) / risk_distance
+        if cap_r <= 0:
+            raise RuntimeError("Trader TP cap is no longer beyond the live entry")
+        if cap_r < target_rs[-1]:
+            if cap_r > target_rs[0]:
+                target_rs = [target_rs[0], (target_rs[0] + cap_r) / 2, cap_r]
+            else:
+                target_rs = [r * cap_r / target_rs[-1] for r in target_rs]
+        return target_rs
 
+    @staticmethod
+    def _compute_exit_price(
+        position: AccountPosition,
+        target_r: Decimal,
+        risk_distance: Decimal,
+        cap: Decimal | None,
+        context: InstrumentContext,
+    ) -> Decimal:
+        if position.side is Side.LONG:
+            raw_price = position.avg_price + (target_r * risk_distance)
+        else:
+            raw_price = position.avg_price - (target_r * risk_distance)
+
+        price = _round_price(
+            raw_price,
+            context.tick_size,
+        )
+
+        if cap is not None:
+            rounding = ROUND_FLOOR if position.side is Side.LONG else ROUND_CEILING
+            cap_price = (cap / context.tick_size).to_integral_value(
+                rounding=rounding
+            ) * context.tick_size
+            price = (
+                min(price, cap_price)
+                if position.side is Side.LONG
+                else max(price, cap_price)
+            )
+        return price
+
+    async def _find_existing_exit(
+        self,
+        state: PositionStrategy,
+        link_id: str,
+        account: AccountStateSummary,
+    ) -> list[AccountOrder]:
+        existing = [
+            order
+            for order in account.open_orders
+            if order.symbol == state.symbol and order.order_link_id == link_id
+        ]
+        if not existing:
+            historical = await self._executor.strategy_order(state.symbol, link_id)
+            if historical is not None:
+                existing = [historical]
+        return existing
+
+    async def _verify_installation(
+        self,
+        state: PositionStrategy,
+        position: AccountPosition,
+        protected_stop: Decimal,
+        trailing_distance: Decimal | None,
+        expected_exits: dict[str, tuple[Decimal, Decimal]],
+    ) -> AccountStateSummary:
         verified = await self._executor.account_state()
         verified_position = _find_position(state, verified)
         if verified_position is None:
@@ -287,23 +417,14 @@ class ExitInstaller:
             trailing_distance,
         )
         for link_id, (quantity, price) in expected_exits.items():
-            matches = [
-                order
-                for order in verified.open_orders
-                if order.symbol == state.symbol and order.order_link_id == link_id
-            ]
-            if not matches:
-                historical = await self._executor.strategy_order(state.symbol, link_id)
-                if historical is not None:
-                    matches = [historical]
+            matches = await self._find_existing_exit(state, link_id, verified)
             if len(matches) != 1 or not self._matching_exit(
                 matches[0], position.side, quantity, price
             ):
                 raise RuntimeError(
                     f"Bybit did not confirm expected Strategy V2 exit {link_id}"
                 )
-
-        return (verified, protected_stop, trailing_distance)
+        return verified
 
     @staticmethod
     def _matching_exit(
