@@ -63,6 +63,7 @@ async def async_main() -> None:
     executor = BybitDemoExecutor(
         api_key=settings.bybit_api_key,
         api_secret=(settings.bybit_api_secret),
+        planner=planner,
     )
 
     account_mutation_lock = asyncio.Lock()

@@ -44,12 +44,14 @@ class BybitDemoExecutor:
         *,
         api_key: str,
         api_secret: str,
+        planner: ExecutionPlanner | None = None,
     ) -> None:
         self._client = BybitClient(
             base_url=DEMO_BASE_URL,
             api_key=api_key,
             api_secret=api_secret,
         )
+        self._planner = planner if planner is not None else ExecutionPlanner()
 
     async def market_context(
         self,
@@ -1136,7 +1138,7 @@ class BybitDemoExecutor:
             self._validate_staged_market_plan(plan)
             self._sync_clock()
             context = self._market_context_sync(plan.symbol)
-            refreshed = ExecutionPlanner().refresh_market_plan(plan, context)
+            refreshed = self._planner.refresh_market_plan(plan, context)
             self._validate_market_plan(refreshed, context.market_price)
             request = self._order_params(refreshed, 0)
             logger.info(
