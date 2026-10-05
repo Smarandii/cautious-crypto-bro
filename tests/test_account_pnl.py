@@ -95,28 +95,19 @@ def test_account_pnl_ledger_is_idempotent(
 
 
 def test_closed_pnl_buy_means_closed_short_position() -> None:
-    from cautious_crypto_bro.bybit import BybitDemoExecutor
+    from cautious_crypto_bro.bybit.normalize import closed_pnl_record_from_item
 
-    executor = BybitDemoExecutor(
-        api_key="key",
-        api_secret="secret",
+    record = closed_pnl_record_from_item(
+        {
+            "symbol": "BTCUSDT",
+            "orderId": "close-2",
+            "side": "Buy",
+            "closedPnl": "5",
+            "closedSize": "0.01",
+            "avgEntryPrice": "80000",
+            "avgExitPrice": "79000",
+            "updatedTime": "1789320000000",
+        }
     )
 
-    try:
-        record = executor._closed_pnl_record_from_item(
-            {
-                "symbol": "BTCUSDT",
-                "orderId": "close-2",
-                "side": "Buy",
-                "closedPnl": "5",
-                "closedSize": "0.01",
-                "avgEntryPrice": "80000",
-                "avgExitPrice": "79000",
-                "updatedTime": "1789320000000",
-            }
-        )
-
-        assert record.position_side is Side.SHORT
-
-    finally:
-        executor.close()
+    assert record.position_side is Side.SHORT

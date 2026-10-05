@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
 import time
 from datetime import (
@@ -34,6 +32,14 @@ from ..domain import (
 )
 from ..execution import ExecutionPlanner
 from .client import DEMO_BASE_URL, BybitClient
+from .normalize import (
+    account_order_from_item,
+    closed_pnl_record_from_item,
+    format_decimal,
+    parse_decimal,
+    parse_optional_decimal,
+    parse_side,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +224,7 @@ class BybitDemoExecutor:
             "symbol": symbol,
             "tpslMode": "Full",
             "positionIdx": 0,
-            "stopLoss": self._fmt(stop_loss),
+            "stopLoss": format_decimal(stop_loss),
             "slTriggerBy": "LastPrice",
         }
 
@@ -226,7 +232,7 @@ class BybitDemoExecutor:
             if trailing_distance <= 0:
                 raise TradeExecutionError("Trailing distance must be positive")
 
-            body["trailingStop"] = self._fmt(trailing_distance)
+            body["trailingStop"] = format_decimal(trailing_distance)
 
         self._client.private_post(
             "/v5/position/trading-stop",
@@ -255,8 +261,8 @@ class BybitDemoExecutor:
                 "symbol": symbol,
                 "side": side,
                 "orderType": "Limit",
-                "qty": self._fmt(quantity),
-                "price": self._fmt(price),
+                "qty": format_decimal(quantity),
+                "price": format_decimal(price),
                 "timeInForce": "GTC",
                 "positionIdx": 0,
                 "reduceOnly": True,
@@ -295,7 +301,7 @@ class BybitDemoExecutor:
                 "Bybit wallet balance response did not contain exactly one account"
             )
 
-        balance = self._decimal(accounts[0].get("totalWalletBalance"))
+        balance = parse_decimal(accounts[0].get("totalWalletBalance"))
 
         if balance <= 0:
             raise TradeExecutionError("Bybit totalWalletBalance must be positive")
@@ -320,7 +326,7 @@ class BybitDemoExecutor:
         positions: list[AccountPosition] = []
 
         for item in position_items:
-            size = self._decimal(item.get("size"))
+            size = parse_decimal(item.get("size"))
 
             if size <= 0:
                 continue
@@ -330,9 +336,9 @@ class BybitDemoExecutor:
             if not symbol:
                 continue
 
-            avg_price = self._decimal(item.get("avgPrice"))
+            avg_price = parse_decimal(item.get("avgPrice"))
 
-            mark_price = self._decimal(item.get("markPrice"))
+            mark_price = parse_decimal(item.get("markPrice"))
 
             if avg_price <= 0 or mark_price <= 0:
                 raise TradeExecutionError(
@@ -342,18 +348,18 @@ class BybitDemoExecutor:
             positions.append(
                 AccountPosition(
                     symbol=symbol,
-                    side=self._side_from_bybit(item.get("side")),
+                    side=parse_side(item.get("side")),
                     size=size,
                     avg_price=avg_price,
                     mark_price=mark_price,
-                    unrealised_pnl=(self._decimal(item.get("unrealisedPnl"))),
+                    unrealised_pnl=(parse_decimal(item.get("unrealisedPnl"))),
                     status=str(item.get("positionStatus") or "Unknown"),
-                    take_profit=(self._optional_decimal(item.get("takeProfit"))),
-                    stop_loss=(self._optional_decimal(item.get("stopLoss"))),
+                    take_profit=(parse_optional_decimal(item.get("takeProfit"))),
+                    stop_loss=(parse_optional_decimal(item.get("stopLoss"))),
                     break_even_price=(
-                        self._optional_decimal(item.get("breakEvenPrice"))
+                        parse_optional_decimal(item.get("breakEvenPrice"))
                     ),
-                    trailing_stop=(self._optional_decimal(item.get("trailingStop"))),
+                    trailing_stop=(parse_optional_decimal(item.get("trailingStop"))),
                 )
             )
 
@@ -368,14 +374,14 @@ class BybitDemoExecutor:
         )
 
         open_orders = tuple(
-            self._account_order_from_item(item)
+            account_order_from_item(item)
             for item in open_items
             if (
-                self._decimal(item.get("leavesQty")) > 0
+                parse_decimal(item.get("leavesQty")) > 0
                 or (
                     item.get("stopOrderType") == "PartialStopLoss"
                     and str(item.get("orderStatus")) == "Untriggered"
-                    and self._decimal(item.get("qty")) > 0
+                    and parse_decimal(item.get("qty")) > 0
                 )
             )
         )
@@ -437,7 +443,7 @@ class BybitDemoExecutor:
             )
 
             for item in items:
-                record = self._closed_pnl_record_from_item(item)
+                record = closed_pnl_record_from_item(item)
 
                 records[record.record_id] = record
 
@@ -448,121 +454,6 @@ class BybitDemoExecutor:
                 records.values(),
                 key=lambda item: item.updated_at,
             )
-        )
-
-    def _closed_pnl_record_from_item(
-        self,
-        item: dict,
-    ) -> ClosedPnlRecord:
-        symbol = str(item.get("symbol") or "").upper()
-
-        order_id = str(item.get("orderId") or "")
-
-        updated_ms = int(item.get("updatedTime") or item.get("createdTime") or 0)
-
-        if not symbol:
-            raise TradeExecutionError("Closed-PnL record has no symbol")
-
-        if updated_ms <= 0:
-            raise TradeExecutionError("Closed-PnL record has no timestamp")
-
-        if order_id:
-            record_id = f"{symbol}:{order_id}"
-
-        else:
-            # Some non-standard settlement records
-            # may not carry an orderId. Build a
-            # deterministic identifier rather than
-            # silently dropping realized P&L.
-            identity = {
-                "symbol": symbol,
-                "side": item.get("side"),
-                "execType": item.get("execType"),
-                "closedSize": (item.get("closedSize")),
-                "closedPnl": (item.get("closedPnl")),
-                "avgEntryPrice": (item.get("avgEntryPrice")),
-                "avgExitPrice": (item.get("avgExitPrice")),
-                "updatedTime": updated_ms,
-            }
-
-            digest = hashlib.sha256(
-                json.dumps(
-                    identity,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
-
-            record_id = f"{symbol}:synthetic:{digest}"
-
-        close_side = str(item.get("side") or "")
-
-        if close_side == "Sell":
-            position_side = Side.LONG
-        elif close_side == "Buy":
-            position_side = Side.SHORT
-        else:
-            raise TradeExecutionError("Closed-PnL record has invalid side")
-
-        return ClosedPnlRecord(
-            record_id=record_id,
-            order_id=order_id,
-            symbol=symbol,
-            position_side=position_side,
-            closed_pnl=self._decimal(item.get("closedPnl")),
-            closed_size=self._decimal(item.get("closedSize")),
-            avg_entry_price=(self._optional_decimal(item.get("avgEntryPrice"))),
-            avg_exit_price=(self._optional_decimal(item.get("avgExitPrice"))),
-            updated_at=datetime.fromtimestamp(
-                updated_ms / 1000,
-                tz=UTC,
-            ),
-        )
-
-    def _account_order_from_item(
-        self,
-        item: dict,
-    ) -> AccountOrder:
-        updated_ms = int(item.get("updatedTime") or item.get("createdTime") or 0)
-
-        return AccountOrder(
-            symbol=str(item.get("symbol") or "").upper(),
-            side=self._side_from_bybit(item.get("side")),
-            order_type=str(item.get("orderType") or "Unknown"),
-            status=str(item.get("orderStatus") or "Unknown"),
-            quantity=self._decimal(item.get("qty")),
-            remaining_quantity=(
-                self._decimal(item.get("leavesQty"))
-                or (
-                    self._decimal(item.get("qty"))
-                    if (
-                        item.get("stopOrderType") == "PartialStopLoss"
-                        and item.get("orderStatus") == "Untriggered"
-                    )
-                    else Decimal("0")
-                )
-            ),
-            price=self._optional_decimal(item.get("price")),
-            avg_price=(self._optional_decimal(item.get("avgPrice"))),
-            order_id=str(item.get("orderId") or ""),
-            order_link_id=str(item.get("orderLinkId") or ""),
-            reduce_only=(
-                item.get("reduceOnly") is True
-                or str(item.get("reduceOnly")).casefold() == "true"
-            ),
-            updated_at=datetime.fromtimestamp(
-                updated_ms / 1000,
-                tz=UTC,
-            ),
-            stop_order_type=str(item.get("stopOrderType") or ""),
-            create_type=str(item.get("createType") or ""),
-            trigger_price=(self._optional_decimal(item.get("triggerPrice"))),
-            close_on_trigger=(
-                item.get("closeOnTrigger") is True
-                or str(item.get("closeOnTrigger")).casefold() == "true"
-            ),
-            parent_order_link_id=str(item.get("parentOrderLinkId") or ""),
-            executed_quantity=self._decimal(item.get("cumExecQty")),
         )
 
     async def strategy_order(self, symbol: str, link_id: str) -> AccountOrder | None:
@@ -577,7 +468,7 @@ class BybitDemoExecutor:
             )
             for item in response.get("result", {}).get("list", []):
                 if item.get("orderLinkId") == link_id and item.get("symbol") == symbol:
-                    return self._account_order_from_item(item)
+                    return account_order_from_item(item)
         return None
 
     def _exposure_sync(
@@ -619,7 +510,7 @@ class BybitDemoExecutor:
 
             positions.append(
                 PositionExposure(
-                    side=(self._side_from_bybit(item.get("side"))),
+                    side=(parse_side(item.get("side"))),
                     size=size,
                     avg_price=Decimal(str(avg_price_raw)),
                 )
@@ -691,7 +582,7 @@ class BybitDemoExecutor:
 
                 pending_orders.append(
                     OpenOrderExposure(
-                        side=(self._side_from_bybit(item.get("side"))),
+                        side=(parse_side(item.get("side"))),
                         remaining_quantity=(remaining),
                         order_id=str(item.get("orderId") or ""),
                         order_link_id=(order_link_id),
@@ -769,7 +660,7 @@ class BybitDemoExecutor:
             )
 
             submitted_quantity = quantity
-            qty = self._fmt(quantity)
+            qty = format_decimal(quantity)
 
         side = "Sell" if position.side is Side.LONG else "Buy"
 
@@ -917,7 +808,7 @@ class BybitDemoExecutor:
             if not (reduce_only is True or str(reduce_only).casefold() == "true"):
                 continue
 
-            if self._decimal(item.get("leavesQty")) <= 0:
+            if parse_decimal(item.get("leavesQty")) <= 0:
                 continue
 
             order_id = str(item.get("orderId") or "")
@@ -1091,11 +982,11 @@ class BybitDemoExecutor:
             if record is not None:
                 status = str(record.get("orderStatus") or "")
 
-                filled_quantity = self._decimal(record.get("cumExecQty"))
+                filled_quantity = parse_decimal(record.get("cumExecQty"))
 
-                average_price = self._decimal(record.get("avgPrice"))
+                average_price = parse_decimal(record.get("avgPrice"))
 
-                remaining = self._decimal(record.get("leavesQty"))
+                remaining = parse_decimal(record.get("leavesQty"))
 
                 if (
                     filled_quantity > 0
@@ -1119,7 +1010,7 @@ class BybitDemoExecutor:
         raise TradeExecutionError("Timed out confirming V2 MARKET E1 fill")
 
     def _set_leverage_sync(self, plan: ExecutionPlan) -> None:
-        leverage = self._fmt(plan.leverage)
+        leverage = format_decimal(plan.leverage)
         self._client.private_post(
             "/v5/position/set-leverage",
             {
@@ -1272,8 +1163,8 @@ class BybitDemoExecutor:
             "orderType": (
                 "Market" if order.order_type is ExecutionOrderType.MARKET else "Limit"
             ),
-            "qty": self._fmt(order.quantity),
-            "stopLoss": self._fmt(plan.stop_loss),
+            "qty": format_decimal(order.quantity),
+            "stopLoss": format_decimal(plan.stop_loss),
             "tpslMode": "Partial",
             "slOrderType": "Market",
             "timeInForce": (
@@ -1286,7 +1177,7 @@ class BybitDemoExecutor:
 
         if order.order_type is ExecutionOrderType.LIMIT:
             assert order.price is not None
-            params["price"] = self._fmt(order.price)
+            params["price"] = format_decimal(order.price)
 
         return params
 
@@ -1466,45 +1357,4 @@ class BybitDemoExecutor:
         self._client.cancel_batch_best_effort(
             symbol,
             order_link_ids,
-        )
-
-    @staticmethod
-    def _decimal(
-        value: object,
-    ) -> Decimal:
-        raw = str(value if value is not None else "0").strip()
-
-        if not raw:
-            return Decimal("0")
-
-        return Decimal(raw)
-
-    @classmethod
-    def _optional_decimal(
-        cls,
-        value: object,
-    ) -> Decimal | None:
-        parsed = cls._decimal(value)
-
-        return parsed if parsed != 0 else None
-
-    @staticmethod
-    def _side_from_bybit(
-        side: object,
-    ) -> Side:
-        if side == "Buy":
-            return Side.LONG
-
-        if side == "Sell":
-            return Side.SHORT
-
-        raise TradeExecutionError(f"Unexpected Bybit position/order side: {side!r}")
-
-    @staticmethod
-    def _fmt(
-        value: Decimal,
-    ) -> str:
-        return format(
-            value.normalize(),
-            "f",
         )
