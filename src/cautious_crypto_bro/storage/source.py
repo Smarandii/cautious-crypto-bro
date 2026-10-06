@@ -142,31 +142,7 @@ class SourceRepositoryImpl(_Store):
         position_actions: Sequence[PositionActionIntent],
         claim_token: str,
     ) -> bool:
-        sources = [intent.source for intent, _ in items]
-        sources.extend(action.source for action in position_actions)
-
-        if not sources:
-            raise ValueError("At least one signal output is required")
-
-        source = sources[0]
-        source_key = (
-            source.channel_id,
-            source.message_id,
-        )
-
-        for candidate_source in sources:
-            if (
-                candidate_source.channel_id,
-                candidate_source.message_id,
-            ) != source_key:
-                raise ValueError(
-                    "All signal outputs in a batch "
-                    "must belong to the same Telegram post"
-                )
-
-        for intent, plan in items:
-            if plan.intent_id != intent.intent_id:
-                raise ValueError("ExecutionPlan intent_id does not match TradingIntent")
+        source = self._validate_batch_inputs(items, position_actions)
 
         async with aiosqlite.connect(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
@@ -206,17 +182,9 @@ class SourceRepositoryImpl(_Store):
                         action,
                     )
 
-                for record_id, kind in (
-                    *(
-                        (str(intent.intent_id), "OPEN")
-                        for intent, _ in items
-                        if intent.approval_mode is ApprovalMode.MANUAL
-                    ),
-                    *(
-                        (str(action.action_id), "ACTION")
-                        for action in position_actions
-                        if action.approval_mode is ApprovalMode.MANUAL
-                    ),
+                for record_id, kind in self._pending_manual_rows(
+                    items,
+                    position_actions,
                 ):
                     await db.execute(
                         "INSERT INTO manual_deliveries(record_id, kind) VALUES (?, ?)",
@@ -239,6 +207,67 @@ class SourceRepositoryImpl(_Store):
             except Exception:
                 await db.rollback()
                 raise
+
+    @staticmethod
+    def _validate_batch_inputs(
+        items: Sequence[
+            tuple[
+                TradingIntent,
+                ExecutionPlan,
+            ]
+        ],
+        position_actions: Sequence[PositionActionIntent],
+    ) -> SourceMessage:
+        sources = [intent.source for intent, _ in items]
+        sources.extend(action.source for action in position_actions)
+
+        if not sources:
+            raise ValueError("At least one signal output is required")
+
+        source = sources[0]
+        source_key = (
+            source.channel_id,
+            source.message_id,
+        )
+
+        for candidate_source in sources:
+            if (
+                candidate_source.channel_id,
+                candidate_source.message_id,
+            ) != source_key:
+                raise ValueError(
+                    "All signal outputs in a batch "
+                    "must belong to the same Telegram post"
+                )
+
+        for intent, plan in items:
+            if plan.intent_id != intent.intent_id:
+                raise ValueError("ExecutionPlan intent_id does not match TradingIntent")
+
+        return source
+
+    @staticmethod
+    def _pending_manual_rows(
+        items: Sequence[
+            tuple[
+                TradingIntent,
+                ExecutionPlan,
+            ]
+        ],
+        position_actions: Sequence[PositionActionIntent],
+    ) -> list[tuple[str, str]]:
+        return [
+            *(
+                (str(intent.intent_id), "OPEN")
+                for intent, _ in items
+                if intent.approval_mode is ApprovalMode.MANUAL
+            ),
+            *(
+                (str(action.action_id), "ACTION")
+                for action in position_actions
+                if action.approval_mode is ApprovalMode.MANUAL
+            ),
+        ]
 
     async def reset_stale_processing_sources(
         self,
