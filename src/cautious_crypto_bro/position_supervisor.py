@@ -453,23 +453,7 @@ class PositionSupervisor:
         )
 
         if fixed_exit_filled:
-            await self._executor.cancel_pending_entries(state.symbol)
-            account = await self._executor.account_state()
-            updated_position = self._position(state, account)
-            if updated_position is None:
-                await self._save(
-                    state.model_copy(update={"status": StrategyStatus.CLOSED})
-                )
-                return account
-            state = state.model_copy(
-                update={
-                    "entry_frozen": True,
-                    "last_position_qty": updated_position.size,
-                    "last_avg_price": updated_position.avg_price,
-                }
-            )
-            await self._save(state)
-            return await self._reconcile(state, plan, account)
+            return await self._reconcile_after_fixed_exit(state, plan, account)
 
         position_grew = (
             previous_position_qty is not None and position.size > previous_position_qty
@@ -498,35 +482,72 @@ class PositionSupervisor:
         )
 
         if not should_freeze:
-            if structure_missing or position_grew:
-                state = state.model_copy(
-                    update={
-                        "exit_revision": (state.exit_revision + 1),
-                    }
-                )
+            return await self._continue_accumulation(
+                state,
+                plan,
+                position,
+                account,
+                reinstall_structure=(structure_missing or position_grew),
+            )
 
-                (
-                    account,
-                    installed_stop,
-                    installed_trail,
-                ) = await self._exit_installer.install_structure(
-                    state,
-                    plan,
-                    position,
-                    account,
-                    enable_trailing=False,
-                )
+        return await self._freeze_entries(state, plan, account, strategy)
 
-                state = state.model_copy(
-                    update={
-                        "protected_stop_loss": (installed_stop),
-                        "trailing_distance": (installed_trail),
-                    }
-                )
-
-            await self._save(state)
+    async def _reconcile_after_fixed_exit(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+    ) -> AccountStateSummary:
+        await self._executor.cancel_pending_entries(state.symbol)
+        account = await self._executor.account_state()
+        updated_position = self._position(state, account)
+        if updated_position is None:
+            await self._save(state.model_copy(update={"status": StrategyStatus.CLOSED}))
             return account
+        state = state.model_copy(
+            update={
+                "entry_frozen": True,
+                "last_position_qty": updated_position.size,
+                "last_avg_price": updated_position.avg_price,
+            }
+        )
+        await self._save(state)
+        return await self._reconcile(state, plan, account)
 
+    async def _continue_accumulation(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        position: AccountPosition,
+        account: AccountStateSummary,
+        *,
+        reinstall_structure: bool,
+    ) -> AccountStateSummary:
+        if reinstall_structure:
+            state = state.model_copy(
+                update={
+                    "exit_revision": (state.exit_revision + 1),
+                }
+            )
+
+            state, account = await self._install_structure(
+                state,
+                plan,
+                position,
+                account,
+                enable_trailing=False,
+            )
+
+        await self._save(state)
+        return account
+
+    async def _freeze_entries(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+        strategy: StrategyV2Policy,
+    ) -> AccountStateSummary:
         await self._executor.cancel_pending_entries(state.symbol)
         account = await self._executor.account_state()
         updated_position = self._position(state, account)
@@ -557,6 +578,39 @@ class PositionSupervisor:
             }
         )
 
+        trailing_enabled = live_r >= strategy.trailing_activation_r
+
+        state, account = await self._install_structure(
+            state,
+            plan,
+            updated_position,
+            account,
+            enable_trailing=trailing_enabled,
+        )
+
+        state = state.model_copy(
+            update={
+                "status": (
+                    StrategyStatus.PROFIT_PROTECTED
+                    if trailing_enabled
+                    else StrategyStatus.OPEN_RISK
+                ),
+                "trailing_active": trailing_enabled,
+            }
+        )
+
+        await self._save(state)
+        return account
+
+    async def _install_structure(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        position: AccountPosition,
+        account: AccountStateSummary,
+        *,
+        enable_trailing: bool,
+    ) -> tuple[PositionStrategy, AccountStateSummary]:
         (
             account,
             installed_stop,
@@ -564,26 +618,20 @@ class PositionSupervisor:
         ) = await self._exit_installer.install_structure(
             state,
             plan,
-            updated_position,
+            position,
             account,
-            enable_trailing=(live_r >= strategy.trailing_activation_r),
+            enable_trailing=enable_trailing,
         )
 
-        state = state.model_copy(
-            update={
-                "status": (
-                    StrategyStatus.PROFIT_PROTECTED
-                    if (live_r >= strategy.trailing_activation_r)
-                    else StrategyStatus.OPEN_RISK
-                ),
-                "trailing_active": (live_r >= strategy.trailing_activation_r),
-                "protected_stop_loss": (installed_stop),
-                "trailing_distance": (installed_trail),
-            }
+        return (
+            state.model_copy(
+                update={
+                    "protected_stop_loss": (installed_stop),
+                    "trailing_distance": (installed_trail),
+                }
+            ),
+            account,
         )
-
-        await self._save(state)
-        return account
 
     async def _handle_rebalance(
         self,
