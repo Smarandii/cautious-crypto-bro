@@ -1,0 +1,421 @@
+/* Cautious Crypto Bro landing page.
+   Self-contained: no web fonts, no CDN, no third-party requests except the
+   GitHub CI status badge in index.html. Honours prefers-color-scheme and
+   prefers-reduced-motion. */
+
+:root {
+  --bg: #ffffff;
+  --bg-alt: #f4f6f8;
+  --bg-sunken: #eaeef2;
+  --fg: #14181d;
+  --fg-muted: #4a5560;
+  --border: #7d8791;
+  --accent: #0b5fa5;
+  --accent-fg: #ffffff;
+  --accent-soft: #e6f0fa;
+  --warn-bg: #fdf3e3;
+  --warn-fg: #6b4708;
+  --warn-border: #9a6d0a;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --measure: 68ch;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1116;
+    --bg-alt: #161b22;
+    --bg-sunken: #1d232b;
+    --fg: #e6edf3;
+    --fg-muted: #a3b0bd;
+    --border: #66727e;
+    --accent: #6cb6ff;
+    --accent-fg: #06121f;
+    --accent-soft: #14293d;
+    --warn-bg: #2a2313;
+    --warn-fg: #f0cf94;
+    --warn-border: #b0904e;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.65 var(--sans);
+}
+
+a { color: var(--accent); }
+a:hover { text-decoration-thickness: 2px; }
+
+code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  background: var(--bg-sunken);
+  padding: 0.12em 0.38em;
+  border-radius: 4px;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.7rem 1.1rem;
+  z-index: 10;
+  font-weight: 600;
+}
+.skip:focus { left: 0.5rem; top: 0.5rem; }
+
+/* --- top bar --- */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem clamp(1rem, 5vw, 3rem);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+
+.wordmark {
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.chip {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.chip-warn {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border-color: var(--warn-border);
+}
+
+.badge {
+  display: block;
+  width: 104px;
+  height: 20px;
+}
+
+/* --- layout --- */
+
+main > section {
+  padding: clamp(2rem, 6vw, 4rem) clamp(1rem, 5vw, 3rem);
+  border-bottom: 1px solid var(--border);
+}
+
+main > section > * { max-width: var(--measure); }
+
+h1 {
+  font-size: clamp(1.9rem, 5.2vw, 3.2rem);
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  margin: 0 0 1rem;
+}
+
+h2 {
+  font-size: clamp(1.35rem, 3vw, 1.9rem);
+  letter-spacing: -0.01em;
+  margin: 0 0 0.9rem;
+}
+
+h3 {
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+}
+
+p { margin: 0 0 1rem; }
+
+.lede {
+  font-size: clamp(1.05rem, 2.3vw, 1.22rem);
+  color: var(--fg-muted);
+  max-width: 60ch;
+}
+
+/* --- hero --- */
+
+.hero { background: var(--bg-alt); }
+
+.cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 1.5rem;
+}
+
+.btn {
+  display: inline-block;
+  padding: 0.62rem 1.15rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+}
+.btn:hover { border-color: var(--accent); }
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.9rem;
+  align-items: center;
+  margin-top: 1.6rem;
+  padding: 0;
+}
+.meta .badge { margin-right: 0.2rem; }
+
+/* --- split columns --- */
+
+.split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin: 1.4rem 0;
+}
+
+.split-col {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.1rem 1.3rem;
+  background: var(--bg-alt);
+}
+
+.split-col h3 { color: var(--fg); }
+
+.split-col ul { margin: 0; padding-left: 1.15rem; }
+.split-col li { margin-bottom: 0.35rem; }
+
+.split-model { border-left: 4px solid var(--accent); }
+.split-code  { border-left: 4px solid var(--warn-border); }
+
+/* --- diagram --- */
+
+.diagram { margin: 1.5rem 0 0; }
+
+/* Horizontal scroll container. Below 640px the diagram keeps its natural width
+   so the node labels stay readable instead of scaling down to unreadable
+   fragments; tabindex on the wrapper keeps it keyboard-scrollable. */
+.diagram-canvas {
+  overflow-x: auto;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.diagram-canvas svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+@media (min-width: 641px) {
+  .diagram-canvas svg { max-width: 900px; }
+}
+
+@media (max-width: 640px) {
+  .diagram-canvas svg { min-width: 620px; }
+}
+
+.diagram figcaption {
+  margin-top: 0.7rem;
+  font-size: 0.92rem;
+  color: var(--fg-muted);
+  max-width: var(--measure);
+}
+
+.node rect {
+  fill: var(--bg);
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+.node text {
+  fill: var(--fg);
+  font: 600 14px var(--sans);
+  text-anchor: middle;
+}
+.node text.sub {
+  font: 400 11px var(--sans);
+  fill: var(--fg-muted);
+}
+.node-untrusted rect { stroke: var(--warn-border); stroke-width: 2; }
+.node-gate rect { fill: var(--accent-soft); stroke: var(--accent); }
+.node-terminal rect { stroke-dasharray: 5 3; }
+
+.edge path {
+  fill: none;
+  stroke: var(--fg-muted);
+  stroke-width: 1.5;
+}
+.arrow path {
+  fill: none;
+  stroke: var(--fg-muted);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.gate-note path {
+  fill: none;
+  stroke: var(--warn-border);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.gate-note text {
+  fill: var(--fg-muted);
+  font: 400 11px var(--sans);
+  text-anchor: middle;
+}
+
+/* --- cards --- */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin-top: 1.4rem;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.1rem 1.25rem;
+  background: var(--bg-alt);
+}
+.card h3 {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+.card p { margin: 0; color: var(--fg-muted); font-size: 0.95rem; }
+
+/* Inline SVG rather than emoji glyphs: emoji coverage varies by platform and
+   falls back to tofu boxes on minimal systems. These are decorative, hence
+   aria-hidden, and the heading text carries the meaning. */
+.ico {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  position: relative;
+  top: 0.12em;
+  fill: none;
+  stroke: var(--fg-muted);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* --- checklist --- */
+
+.checklist {
+  list-style: none;
+  padding: 0;
+  margin: 1.2rem 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 0.4rem 1.2rem;
+}
+.checklist li { position: relative; padding-left: 1.5rem; }
+.checklist li::before {
+  content: "\2713";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* --- callout --- */
+
+.callout {
+  border: 1px solid var(--warn-border);
+  border-left-width: 5px;
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  padding: 1.2rem 1.4rem;
+  border-radius: 10px;
+  max-width: var(--measure);
+}
+.callout h3 { color: inherit; }
+.callout p:last-child { margin-bottom: 0; }
+
+/* --- doc grid --- */
+
+.docgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 0.9rem;
+  margin-top: 1.3rem;
+}
+
+.docgrid a {
+  display: block;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-alt);
+  text-decoration: none;
+  color: var(--fg);
+}
+.docgrid a:hover { border-color: var(--accent); }
+.docgrid strong { display: block; color: var(--accent); }
+.docgrid span {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.9rem;
+  color: var(--fg-muted);
+}
+
+/* --- footer --- */
+
+footer {
+  padding: clamp(2rem, 5vw, 3rem) clamp(1rem, 5vw, 3rem);
+  background: var(--bg-alt);
+  color: var(--fg-muted);
+  font-size: 0.92rem;
+}
+footer p { max-width: var(--measure); margin: 0 0 0.6rem; }
+
+/* --- motion / print --- */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  .topbar, .cta, .skip { display: none; }
+  body { background: #fff; color: #000; }
+}

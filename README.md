@@ -54,7 +54,8 @@ recovered actions. Preview failures do not suppress the execution result.
   stay quarantined. Paused strategies require deliberate recovery.
 
 See [STRATEGY.md](STRATEGY.md) for execution rules, [TESTING.md](TESTING.md) for
-checks and operations, and [TODO.md](TODO.md) for remaining work.
+checks and operations, [CHANGELOG.md](CHANGELOG.md) for release history, and
+[TODO.md](TODO.md) for remaining work.
 
 ## Contributing
 
@@ -62,6 +63,10 @@ GPL-3.0-only. See [CONTRIBUTING.md](CONTRIBUTING.md) for the quality gate and
 conventions, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and
 [SECURITY.md](SECURITY.md) before reporting anything safety-relevant.
 [ACCESSIBILITY.md](ACCESSIBILITY.md) covers the operator-facing surfaces.
+
+`master` is protected: CI must pass, force-pushes and deletion of `master` are
+blocked, and merged branches are auto-deleted. Protection applies to `master`
+only, so feature branches stay freely pushable and deletable.
 
 ## Development
 

@@ -19,7 +19,16 @@ uv run pre-commit install
 
 ## The gate
 
-Every push and pull request runs `ci.yml`. Locally, the same checks:
+`master` requires CI to pass, so every change lands through a pull request even
+if you are the only contributor. Four workflows run:
+
+- `ci.yml` &mdash; format, lint, types, build, tests, Dockerfile and Compose
+- `codeql.yml` &mdash; CodeQL security-extended analysis of Python
+- `dependency-review.yml` &mdash; advisory gate on the PR's dependency delta
+- `title.yml` &mdash; Conventional Commit title and single-commit agreement
+- `pages.yml` &mdash; deploys the landing page, only when `docs/` changes
+
+Locally, the same checks as `ci.yml`:
 
 ```sh
 uv sync --frozen --group dev
@@ -37,6 +46,16 @@ git diff --check
 locally. `uv run pyright` type-checks `src/` only. `uv run pytest -q` runs with
 offline/mocked boundaries and real temporary SQLite — no network, no
 credentials, no orders. If it needs anything else, the test is wrong.
+
+## Dependency and workflow updates
+
+`.github/dependabot.yml` opens weekly PRs for `uv` and `github-actions`, grouped
+into runtime and dev-tooling batches. Do not merge one blind: a dependency bump
+can change extraction or execution behaviour, and the project is GPL-3.0-only.
+
+Actions are pinned to commit SHAs. Dependabot rewrites both the SHA and the
+trailing version comment. pre-commit hook revs live in `.pre-commit-config.yaml`
+and have no Dependabot ecosystem &mdash; update those with `pre-commit autoupdate`.
 
 ## Code conventions
 
@@ -66,6 +85,9 @@ Enforced by `ruff` (line length 88, `py312`) and `pyright` (basic mode):
 - Every new branch in `src/` needs a test that fails without it.
 - Deterministic time and ordering. No sleeps to synchronize.
 - Anything touching exchange responses needs a malformed/partial-payload case.
+- `uv run pytest -q` measures branch coverage and fails below the `fail_under`
+  floor in `pyproject.toml`. New code without tests drops the number and fails
+  the gate. Raise the floor when you improve coverage; never lower it.
 
 ## Commit and PR conventions
 
@@ -78,7 +100,26 @@ ci: gate application complexity at C901=10
 ```
 
 Use a scope matching the touched module. Imperative mood, no trailing period,
-one logical change per commit.
+one logical change per commit. The PR title is validated against the same
+convention, and on a single-commit pull request it must match the commit message
+exactly, since squash-merge would otherwise take the commit message as the
+release line.
+
+Draft pull requests skip the title check, so use the draft state while working.
+
+## Releases
+
+`project.version` in `pyproject.toml` is the single source of truth. To cut a
+release:
+
+1. Add a `## [<version>]` section to [CHANGELOG.md](CHANGELOG.md) and bump
+   `project.version` in the same pull request.
+2. Merge, then tag `v<version>`.
+
+The release workflow refuses to publish if the tag, the declared version and the
+changelog disagree, and it publishes the changelog section verbatim as the
+release body. `v1.0.0` shipped as a merged pull request with no tag and no
+version bump; this exists so that cannot happen quietly again.
 
 Before opening a PR, fill in `.github/pull_request_template.md` and confirm the
 gate output you pasted is from your own run. Say plainly whether the change

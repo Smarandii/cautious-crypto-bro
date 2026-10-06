@@ -1,5 +1,10 @@
 services:
   redis:
+    # Left on a floating tag deliberately, unlike the Dockerfile base image.
+    # Redis is an external service the operator pulls, so an unpinned tag means
+    # 7.x patches arrive without anyone remembering to bump a digest. Pin this
+    # too if a Dependabot run confirms the docker ecosystem also covers
+    # docker-compose.yaml.
     image: redis:7-alpine
     command:
       - redis-server

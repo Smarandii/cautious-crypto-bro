@@ -1,0 +1,51 @@
+name: Title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Pull request / title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      contents: read
+      # Required for the check the action reports, and for holding it pending
+      # while a draft is in progress. Without this the action fails with
+      # "Resource not accessible by integration" on create-a-commit-status.
+      statuses: write
+      # For labelling the pull request as conventional/non-conventional.
+      pull-requests: write
+      # For the explanatory comment the action leaves on failure.
+      issues: write
+
+    steps:
+      # Deliberately `pull_request`, not `pull_request_target`: this keeps a
+      # third-party action off any context that hands it a write token for code
+      # an outsider controls. The trade-off is that pull requests from forks get
+      # a read-only token and will not get a check run. Same-repo pull requests,
+      # which is where Dependabot and normal work arrive, validate fine.
+      - name: Validate Conventional Commit title
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # A single-commit pull request merged with squash would otherwise take
+          # its commit message as the release line, bypassing this check.
+          validateSingleCommit: true
+          validateSingleCommitMatchesPrTitle: true
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject must start lowercase. Existing history uses imperative,
+            lowercase subjects: "extract scale-in leg derivation from rebase".
+          # Skip validation while a pull request is still a draft.
+          wip: true

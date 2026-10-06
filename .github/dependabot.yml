@@ -1,0 +1,78 @@
+version: 2
+
+updates:
+  # Keeps uv.lock and pyproject.toml in step with upstream releases. CI runs
+  # `uv lock --check`, so a stale lockfile fails the build rather than silently
+  # drifting.
+  #
+  # Note: this project is licensed GPL-3.0-only, so dependency updates are
+  # ordinary source changes and must keep the license intact. Upgrading a
+  # dependency can also change extraction or execution behavior, so read the
+  # changelog rather than merging blind.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - python
+    commit-message:
+      prefix: "build(uv)"
+    groups:
+      # Group the security-relevant runtime deps so a single PR resolves them
+      # together instead of producing several lockfile bumps.
+      runtime:
+        applies-to: version-updates
+        dependency-type: production
+      # Dev tooling churns fastest and is the noisiest, so it batches separately.
+      dev-tooling:
+        applies-to: version-updates
+        dependency-type: development
+
+  # Container base images. These carry OS-level CVEs and were previously
+  # untracked, which is the wrong gap to leave open in a repo whose image runs
+  # Telegram credentials and exchange API keys.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "build(docker)"
+    groups:
+      base-images:
+        patterns:
+          - "*"
+
+  # Actions in this repo are pinned to commit SHAs. Dependabot rewrites the SHA
+  # and updates the trailing version comment, so pinning stays upgradeable.
+  #
+  # pre-commit hook revs live in .pre-commit-config.yaml and have no Dependabot
+  # ecosystem. Update them with `pre-commit autoupdate`, not here.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "build(actions)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

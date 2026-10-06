@@ -21,6 +21,7 @@ dev = [
   "pre-commit>=4.3,<5",
   "pyright>=1.1.405,<2",
   "pytest>=8.4,<9",
+  "pytest-cov>=6,<8",
   "ruff>=0.13,<1",
 ]
 
@@ -37,6 +38,30 @@ packages = ["src/cautious_crypto_bro"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# Coverage is part of the default invocation rather than a CI-only extra, so a
+# local `pytest -q` and the pull request gate measure exactly the same thing.
+addopts = "--cov --cov-report=term-missing:skip-covered"
+
+[tool.coverage.run]
+# Application code only. Operator scripts and tests are linear run-once
+# procedures and are excluded from the metric on purpose.
+source = ["cautious_crypto_bro"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# Ratchet, not a cliff. Measured 79.70% when the source-claiming and AUTO
+# gate suites landed; a failure here means coverage moved down. Raise this
+# every time coverage is improved, never lower it.
+fail_under = 79
+# Literal strings so the regex reaches coverage unescaped by TOML. The ellipsis
+# pattern is anchored: an unanchored '...' matches almost every line.
+exclude_also = [
+  'if TYPE_CHECKING:',
+  'raise NotImplementedError',
+  '^\s*\.\.\.\s*$',
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -66,5 +91,9 @@ max-complexity = 10
 [tool.pyright]
 include = ["src"]
 pythonVersion = "3.12"
-typeCheckingMode = "basic"
+# Measured clean at this level across all 48 files. `strict` is a separate piece
+# of work: it reports 485 findings, 422 of them unknown-type propagation from
+# third-party boundaries (httpx, aiogram, telethon), which needs explicit
+# annotations at those seams rather than a config flip.
+typeCheckingMode = "standard"
 reportMissingTypeStubs = false
