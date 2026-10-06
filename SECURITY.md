@@ -46,6 +46,37 @@ Out of scope:
 - findings that require an already-compromised host or a malicious dependency
   author, absent a concrete amplification path
 
+## Container image posture
+
+CI scans the runtime image with Trivy on every build and uploads the result
+plus a CycloneDX SBOM as the `image-security` artifact. The scan is
+**report-only** today, and that is a deliberate decision rather than an
+oversight.
+
+Measured baseline for the current `python3.12-bookworm-slim` base:
+
+| Scope | Fixable findings |
+| --- | --- |
+| Python dependencies (`multidict`, `pip`) | 8, all MEDIUM or LOW, zero HIGH or CRITICAL |
+| Debian OS packages from the base image | 114 |
+| Total fixable | 122 (of 386 reported; 264 have no upstream fix) |
+
+Almost the entire signal is inherited OS tooling that this service never
+executes. Gating on HIGH today would fail on base-image noise that cannot be
+fixed from this repository, which is how a gate gets learned to be ignored.
+Turning it into a blocking gate means trimming the base image of unused
+tooling first &mdash; `apt` lists, `perl-base`, `gpgv`, `diffutils`, `gcc-12-base`
+&mdash; then setting `exit-code: 1`. That is an image change with its own review
+and has deliberately not been done here.
+
+Two consequences worth knowing:
+
+- The image contains more OS surface than the application needs. Treat any
+  container-escape or host-level issue as more likely than the dependency
+  numbers suggest.
+- `pip` appears in the runtime image even though uv manages the venv, so it
+  shows up in library scans.
+
 ## Threat model in one page
 
 The design assumes four inputs are hostile or unreliable, and constrains each:
