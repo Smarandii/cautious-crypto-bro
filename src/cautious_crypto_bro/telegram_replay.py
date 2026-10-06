@@ -32,13 +32,7 @@ def parse_telegram_post_url(
 ) -> TelegramPostReference:
     parsed = urlparse(url.strip())
 
-    host = parsed.netloc.lower().removeprefix("www.")
-
-    if host not in {
-        "t.me",
-        "telegram.me",
-    }:
-        raise TelegramReplayError("Expected a t.me Telegram post URL")
+    _require_telegram_host(parsed.netloc)
 
     parts = [part for part in parsed.path.split("/") if part]
 
@@ -46,37 +40,11 @@ def parse_telegram_post_url(
         raise TelegramReplayError("Telegram URL does not contain a post")
 
     if parts[0] == "c":
-        if len(parts) < 3:
-            raise TelegramReplayError(
-                "Private-channel link must look like https://t.me/c/<channel>/<message>"
-            )
-
-        channel_part = parts[1]
-
-        if not channel_part.isdigit():
-            raise TelegramReplayError("Invalid private Telegram channel id")
-
-        entity: str | int = int(f"-100{channel_part}")
-
-        message_part = parts[2]
-
+        entity, message_part = _private_channel_reference(parts)
     elif parts[0] == "s":
-        if len(parts) < 3:
-            raise TelegramReplayError(
-                "Telegram preview link must contain channel and message id"
-            )
-
-        entity = parts[1]
-        message_part = parts[2]
-
+        entity, message_part = _preview_reference(parts)
     else:
-        if len(parts) < 2:
-            raise TelegramReplayError(
-                "Public-channel link must look like https://t.me/<channel>/<message>"
-            )
-
-        entity = parts[0]
-        message_part = parts[1]
+        entity, message_part = _public_channel_reference(parts)
 
     try:
         message_id = int(message_part)
@@ -90,6 +58,54 @@ def parse_telegram_post_url(
         entity=entity,
         message_id=message_id,
     )
+
+
+def _require_telegram_host(netloc: str) -> None:
+    host = netloc.lower().removeprefix("www.")
+
+    if host not in {
+        "t.me",
+        "telegram.me",
+    }:
+        raise TelegramReplayError("Expected a t.me Telegram post URL")
+
+
+def _private_channel_reference(
+    parts: list[str],
+) -> tuple[str | int, str]:
+    if len(parts) < 3:
+        raise TelegramReplayError(
+            "Private-channel link must look like https://t.me/c/<channel>/<message>"
+        )
+
+    channel_part = parts[1]
+
+    if not channel_part.isdigit():
+        raise TelegramReplayError("Invalid private Telegram channel id")
+
+    return int(f"-100{channel_part}"), parts[2]
+
+
+def _preview_reference(
+    parts: list[str],
+) -> tuple[str | int, str]:
+    if len(parts) < 3:
+        raise TelegramReplayError(
+            "Telegram preview link must contain channel and message id"
+        )
+
+    return parts[1], parts[2]
+
+
+def _public_channel_reference(
+    parts: list[str],
+) -> tuple[str | int, str]:
+    if len(parts) < 2:
+        raise TelegramReplayError(
+            "Public-channel link must look like https://t.me/<channel>/<message>"
+        )
+
+    return parts[0], parts[1]
 
 
 async def fetch_telegram_post(

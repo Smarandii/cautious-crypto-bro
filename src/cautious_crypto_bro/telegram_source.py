@@ -73,6 +73,33 @@ async def telegram_messages_to_post(
     if resolved_chat is None:
         return None
 
+    texts, images = await _collect_album_content(ordered)
+
+    if not texts and not images:
+        logger.info(
+            "Ignoring Telegram message group "
+            "starting at %s: no text or "
+            "supported images",
+            ordered[0].id,
+        )
+        return None
+
+    canonical = ordered[0]
+
+    source = _album_source(canonical, ordered, resolved_chat, texts)
+
+    if source is None:
+        return None
+
+    return IncomingPost(
+        source=source,
+        images=tuple(images),
+    )
+
+
+async def _collect_album_content(
+    ordered: tuple[Message, ...],
+) -> tuple[list[str], list[ImageAttachment]]:
     texts: list[str] = []
     images: list[ImageAttachment] = []
 
@@ -114,17 +141,15 @@ async def telegram_messages_to_post(
             )
         )
 
-    if not texts and not images:
-        logger.info(
-            "Ignoring Telegram message group "
-            "starting at %s: no text or "
-            "supported images",
-            ordered[0].id,
-        )
-        return None
+    return texts, images
 
-    canonical = ordered[0]
 
+def _album_source(
+    canonical: Message,
+    ordered: tuple[Message, ...],
+    resolved_chat: object,
+    texts: list[str],
+) -> SourceMessage | None:
     dates = tuple(message.date for message in ordered if message.date is not None)
 
     if not dates:
@@ -145,7 +170,7 @@ async def telegram_messages_to_post(
         )
         return None
 
-    source = SourceMessage(
+    return SourceMessage(
         channel_id=channel_id,
         channel_title=(
             getattr(
@@ -166,11 +191,6 @@ async def telegram_messages_to_post(
         published_at=published_at,
         received_at=datetime.now(UTC),
         text="\n".join(texts),
-    )
-
-    return IncomingPost(
-        source=source,
-        images=tuple(images),
     )
 
 
