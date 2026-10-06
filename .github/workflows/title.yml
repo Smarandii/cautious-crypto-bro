@@ -18,8 +18,14 @@ jobs:
     timeout-minutes: 5
 
     permissions:
-      # Needed to publish the check and the review comment.
+      contents: read
+      # Required for the check the action reports, and for holding it pending
+      # while a draft is in progress. Without this the action fails with
+      # "Resource not accessible by integration" on create-a-commit-status.
+      statuses: write
+      # For labelling the pull request as conventional/non-conventional.
       pull-requests: write
+      # For the explanatory comment the action leaves on failure.
       issues: write
 
     steps:
