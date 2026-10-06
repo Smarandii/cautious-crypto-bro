@@ -895,71 +895,79 @@ def _open_intents_from_extraction(
     opens: list[TradingIntent] = []
 
     for raw in extraction.intents:
-        relation = raw.relation or OpenRelation.UNCLASSIFIED
+        intent = _open_intent_from_candidate(source, raw)
 
-        if relation is OpenRelation.UPDATE_EXISTING:
-            logger.info(
-                "Ignoring UPDATE_EXISTING candidate from %s/%s for %s",
-                source.channel_id,
-                source.message_id,
-                raw.symbol,
-            )
-            continue
-
-        side = _side_from_transport(raw.side) or _side_from_transport(raw.direction)
-
-        entry = _entry_from_transport(raw)
-
-        if (
-            entry is not None
-            and entry.type is EntryType.MARKET
-            and _caption_is_market_update(source.text)
-        ):
-            logger.warning(
-                "Dropping recap-derived MARKET OPEN for %s from %s/%s",
-                raw.symbol,
-                source.channel_id,
-                source.message_id,
-            )
-            continue
-
-        if side is None or entry is None:
-            logger.warning(
-                "Dropping incomplete OPEN candidate from %s/%s for %s",
-                source.channel_id,
-                source.message_id,
-                raw.symbol,
-            )
-            continue
-
-        try:
-            intent = TradingIntent(
-                source=source,
-                symbol=raw.symbol,
-                side=side,
-                entry=entry,
-                stop_loss=raw.stop_loss,
-                take_profit=raw.take_profit,
-                leverage=raw.leverage,
-                summary=raw.summary,
-                confidence=raw.confidence,
-                relation=relation,
-                relation_evidence=(raw.relation_evidence),
-            )
-
-        except ValidationError as exc:
-            logger.warning(
-                "Dropping invalid OPEN candidate from %s/%s for %s: %s",
-                source.channel_id,
-                source.message_id,
-                raw.symbol,
-                exc,
-            )
-            continue
-
-        opens.append(intent)
+        if intent is not None:
+            opens.append(intent)
 
     return tuple(opens)
+
+
+def _open_intent_from_candidate(
+    source: SourceMessage,
+    raw: ExtractedIntent,
+) -> TradingIntent | None:
+    relation = raw.relation or OpenRelation.UNCLASSIFIED
+
+    if relation is OpenRelation.UPDATE_EXISTING:
+        logger.info(
+            "Ignoring UPDATE_EXISTING candidate from %s/%s for %s",
+            source.channel_id,
+            source.message_id,
+            raw.symbol,
+        )
+        return None
+
+    side = _side_from_transport(raw.side) or _side_from_transport(raw.direction)
+
+    entry = _entry_from_transport(raw)
+
+    if (
+        entry is not None
+        and entry.type is EntryType.MARKET
+        and _caption_is_market_update(source.text)
+    ):
+        logger.warning(
+            "Dropping recap-derived MARKET OPEN for %s from %s/%s",
+            raw.symbol,
+            source.channel_id,
+            source.message_id,
+        )
+        return None
+
+    if side is None or entry is None:
+        logger.warning(
+            "Dropping incomplete OPEN candidate from %s/%s for %s",
+            source.channel_id,
+            source.message_id,
+            raw.symbol,
+        )
+        return None
+
+    try:
+        return TradingIntent(
+            source=source,
+            symbol=raw.symbol,
+            side=side,
+            entry=entry,
+            stop_loss=raw.stop_loss,
+            take_profit=raw.take_profit,
+            leverage=raw.leverage,
+            summary=raw.summary,
+            confidence=raw.confidence,
+            relation=relation,
+            relation_evidence=(raw.relation_evidence),
+        )
+
+    except ValidationError as exc:
+        logger.warning(
+            "Dropping invalid OPEN candidate from %s/%s for %s: %s",
+            source.channel_id,
+            source.message_id,
+            raw.symbol,
+            exc,
+        )
+        return None
 
 
 def _position_actions_from_extraction(
@@ -1089,6 +1097,53 @@ def _validate_intent_extraction_response(
         raise LLMResponseValidationError(str(exc)) from exc
 
 
+def _log_if_not_actionable(
+    source: SourceMessage,
+    signals: SignalExtraction,
+    extraction: IntentExtraction,
+) -> None:
+    if signals.actionable:
+        return
+
+    logger.info(
+        "No actionable intent for %s/%s: %s",
+        source.channel_id,
+        source.message_id,
+        extraction.reason,
+    )
+
+
+def _extraction_request(
+    post: IncomingPost,
+    *,
+    global_guidance: str | None,
+    channel_guidance: str | None,
+    position_context: SignalPositionContext | None,
+) -> LLMRequest:
+    source = post.source
+
+    return LLMRequest(
+        system_prompt=SYSTEM_PROMPT,
+        user_text=_build_user_text(
+            post,
+            global_guidance=global_guidance,
+            channel_guidance=channel_guidance,
+            position_context=position_context,
+        ),
+        response_schema_name=("trading_intent_extraction"),
+        response_schema=(IntentExtraction.model_json_schema()),
+        images=tuple(
+            LLMImage(
+                media_type=image.media_type,
+                data=image.data,
+            )
+            for image in post.images
+        ),
+        response_validator=(_validate_intent_extraction_response),
+        request_label=(f"{source.channel_id}/{source.message_id}"),
+    )
+
+
 class IntentExtractor:
     def __init__(
         self,
@@ -1193,36 +1248,20 @@ class IntentExtractor:
                     cached_extraction,
                 )
 
-                if not cached_signals.actionable:
-                    logger.info(
-                        "No actionable intent for %s/%s: %s",
-                        source.channel_id,
-                        source.message_id,
-                        cached_extraction.reason,
-                    )
+                _log_if_not_actionable(
+                    source,
+                    cached_signals,
+                    cached_extraction,
+                )
 
                 return cached_signals
 
         response = await self._provider.complete(
-            LLMRequest(
-                system_prompt=SYSTEM_PROMPT,
-                user_text=_build_user_text(
-                    post,
-                    global_guidance=global_guidance,
-                    channel_guidance=channel_guidance,
-                    position_context=position_context,
-                ),
-                response_schema_name=("trading_intent_extraction"),
-                response_schema=(IntentExtraction.model_json_schema()),
-                images=tuple(
-                    LLMImage(
-                        media_type=image.media_type,
-                        data=image.data,
-                    )
-                    for image in post.images
-                ),
-                response_validator=(_validate_intent_extraction_response),
-                request_label=(f"{source.channel_id}/{source.message_id}"),
+            _extraction_request(
+                post,
+                global_guidance=global_guidance,
+                channel_guidance=channel_guidance,
+                position_context=position_context,
             )
         )
 
@@ -1238,12 +1277,10 @@ class IntentExtractor:
             extraction,
         )
 
-        if not signals.actionable:
-            logger.info(
-                "No actionable intent for %s/%s: %s",
-                source.channel_id,
-                source.message_id,
-                extraction.reason,
-            )
+        _log_if_not_actionable(
+            source,
+            signals,
+            extraction,
+        )
 
         return signals
