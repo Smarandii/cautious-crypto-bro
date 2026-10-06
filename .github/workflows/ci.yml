@@ -90,3 +90,17 @@ jobs:
 
       - name: Build runtime image
         run: docker build --target runtime --tag cautious-crypto-bro:ci .
+
+      # The Dockerfile ships a `test` stage and docker-compose a `test` profile.
+      # Both existed without ever being exercised in CI, so a break in the
+      # containerized test path would only surface on an operator's machine.
+      - name: Build test image
+        run: docker build --target test --tag cautious-crypto-bro:test .
+
+      - name: Run tests inside the image
+        run: docker run --rm cautious-crypto-bro:test
+
+      # Proves the compose `test` profile resolves and runs, which is how
+      # TESTING.md tells operators to exercise the suite.
+      - name: Run tests through the compose profile
+        run: docker compose --profile test run --rm --build test
