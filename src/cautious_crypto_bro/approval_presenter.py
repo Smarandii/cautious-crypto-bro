@@ -551,128 +551,15 @@ def render(
 ) -> str:
     intent_source_line = source_line(intent.source.telegram_url)
 
-    if intent.entry.type is EntryType.MARKET:
-        signal_entry = "Market"
+    signal_entry = _render_signal_entry(intent)
 
-    elif intent.entry.type is EntryType.LIMIT:
-        assert intent.entry.price is not None
+    tp_block = _render_take_profit_block(plan)
 
-        signal_entry = f"{intent.entry.price:g}"
+    order_lines = _render_order_lines(plan)
 
-    else:
-        assert intent.entry.range_low is not None
-        assert intent.entry.range_high is not None
+    total_qty, weighted_entry = _weighted_entry(plan)
 
-        signal_entry = f"{intent.entry.range_low:g} – {intent.entry.range_high:g}"
-
-    if plan.take_profit_targets:
-        if plan.strategy_version >= 2:
-            source_label = (
-                "Strategy V2"
-                if (plan.take_profit_source is TakeProfitSource.POLICY)
-                else "Trader-guided V2"
-            )
-        else:
-            source_label = (
-                "Policy fallback"
-                if (plan.take_profit_source is TakeProfitSource.POLICY)
-                else "Trader"
-            )
-
-        tp_lines = []
-
-        for target in plan.take_profit_targets:
-            tp_lines.append(
-                f"{html.escape(target.name.title())}: "
-                f"<b>"
-                f"{fmt_decimal(target.price)}"
-                f"</b> — "
-                f"{fmt_decimal(target.close_pct)}%"
-            )
-
-        if plan.strategy_version >= 2:
-            tp_lines.append(f"Runner: <b>{fmt_decimal(plan.runner_pct)}%</b>")
-
-        tp_block = f"<b>TPs ({source_label})</b>\n" + "\n".join(tp_lines)
-    else:
-        tp_block = f"Take profit: <b>{fmt_decimal(plan.take_profit)}</b>"
-
-    order_lines = []
-
-    for index, order in enumerate(
-        plan.orders,
-        start=1,
-    ):
-        qty = fmt_decimal(order.quantity)
-
-        if plan.strategy_version >= 2:
-            label = html.escape(order.name)
-
-            risk_allocation = (
-                fmt_decimal(order.risk_pct) if order.risk_pct is not None else "?"
-            )
-
-            prefix = f"{label} · {risk_allocation}% risk"
-        else:
-            prefix = str(index)
-
-        if order.order_type is ExecutionOrderType.MARKET:
-            order_lines.append(f"{prefix}: Market × {qty}")
-        else:
-            assert order.price is not None
-
-            price = fmt_decimal(order.price)
-
-            order_lines.append(f"{prefix}: {price} × {qty}")
-
-    total_qty = sum(
-        (order.quantity for order in plan.orders),
-        Decimal("0"),
-    )
-
-    weighted_entry = (
-        sum(
-            (order.reference_price * order.quantity for order in plan.orders),
-            Decimal("0"),
-        )
-        / total_qty
-    )
-
-    if intent.side is Side.LONG:
-        risk = (weighted_entry - plan.stop_loss) / weighted_entry * Decimal("100")
-    else:
-        risk = (plan.stop_loss - weighted_entry) / weighted_entry * Decimal("100")
-
-    if plan.take_profit_targets:
-        reward = Decimal("0")
-
-        for target in plan.take_profit_targets:
-            if intent.side is Side.LONG:
-                target_reward = (
-                    (target.price - weighted_entry) / weighted_entry * Decimal("100")
-                )
-            else:
-                target_reward = (
-                    (weighted_entry - target.price) / weighted_entry * Decimal("100")
-                )
-
-            reward += target_reward * target.close_pct / Decimal("100")
-
-        rr_label = "Blended R:R"
-
-    else:
-        if intent.side is Side.LONG:
-            reward = (
-                (plan.take_profit - weighted_entry) / weighted_entry * Decimal("100")
-            )
-        else:
-            reward = (
-                (weighted_entry - plan.take_profit) / weighted_entry * Decimal("100")
-            )
-
-        rr_label = "R:R"
-
-    rr = reward / risk if risk > 0 else Decimal("0")
+    rr_label, rr = _risk_reward(intent, plan, weighted_entry)
 
     orders_text = "\n".join(order_lines)
 
@@ -714,3 +601,145 @@ def render(
         f"{html.escape(intent.source.channel_title)}</b>\n"
         f"{intent_source_line}"
     )
+
+
+def _render_signal_entry(intent: TradingIntent) -> str:
+    if intent.entry.type is EntryType.MARKET:
+        return "Market"
+
+    if intent.entry.type is EntryType.LIMIT:
+        assert intent.entry.price is not None
+
+        return f"{intent.entry.price:g}"
+
+    assert intent.entry.range_low is not None
+    assert intent.entry.range_high is not None
+
+    return f"{intent.entry.range_low:g} – {intent.entry.range_high:g}"
+
+
+def _render_take_profit_block(plan: ExecutionPlan) -> str:
+    if not plan.take_profit_targets:
+        return f"Take profit: <b>{fmt_decimal(plan.take_profit)}</b>"
+
+    if plan.strategy_version >= 2:
+        source_label = (
+            "Strategy V2"
+            if (plan.take_profit_source is TakeProfitSource.POLICY)
+            else "Trader-guided V2"
+        )
+    else:
+        source_label = (
+            "Policy fallback"
+            if (plan.take_profit_source is TakeProfitSource.POLICY)
+            else "Trader"
+        )
+
+    tp_lines = []
+
+    for target in plan.take_profit_targets:
+        tp_lines.append(
+            f"{html.escape(target.name.title())}: "
+            f"<b>"
+            f"{fmt_decimal(target.price)}"
+            f"</b> — "
+            f"{fmt_decimal(target.close_pct)}%"
+        )
+
+    if plan.strategy_version >= 2:
+        tp_lines.append(f"Runner: <b>{fmt_decimal(plan.runner_pct)}%</b>")
+
+    return f"<b>TPs ({source_label})</b>\n" + "\n".join(tp_lines)
+
+
+def _render_order_lines(plan: ExecutionPlan) -> list[str]:
+    order_lines: list[str] = []
+
+    for index, order in enumerate(
+        plan.orders,
+        start=1,
+    ):
+        qty = fmt_decimal(order.quantity)
+
+        if plan.strategy_version >= 2:
+            label = html.escape(order.name)
+
+            risk_allocation = (
+                fmt_decimal(order.risk_pct) if order.risk_pct is not None else "?"
+            )
+
+            prefix = f"{label} · {risk_allocation}% risk"
+        else:
+            prefix = str(index)
+
+        if order.order_type is ExecutionOrderType.MARKET:
+            order_lines.append(f"{prefix}: Market × {qty}")
+        else:
+            assert order.price is not None
+
+            price = fmt_decimal(order.price)
+
+            order_lines.append(f"{prefix}: {price} × {qty}")
+
+    return order_lines
+
+
+def _weighted_entry(plan: ExecutionPlan) -> tuple[Decimal, Decimal]:
+    total_qty = sum(
+        (order.quantity for order in plan.orders),
+        Decimal("0"),
+    )
+
+    weighted_entry = (
+        sum(
+            (order.reference_price * order.quantity for order in plan.orders),
+            Decimal("0"),
+        )
+        / total_qty
+    )
+
+    return total_qty, weighted_entry
+
+
+def _risk_reward(
+    intent: TradingIntent,
+    plan: ExecutionPlan,
+    weighted_entry: Decimal,
+) -> tuple[str, Decimal]:
+    if intent.side is Side.LONG:
+        risk = (weighted_entry - plan.stop_loss) / weighted_entry * Decimal("100")
+    else:
+        risk = (plan.stop_loss - weighted_entry) / weighted_entry * Decimal("100")
+
+    if plan.take_profit_targets:
+        reward = Decimal("0")
+
+        for target in plan.take_profit_targets:
+            if intent.side is Side.LONG:
+                target_reward = (
+                    (target.price - weighted_entry) / weighted_entry * Decimal("100")
+                )
+            else:
+                target_reward = (
+                    (weighted_entry - target.price) / weighted_entry * Decimal("100")
+                )
+
+            reward += target_reward * target.close_pct / Decimal("100")
+
+        rr_label = "Blended R:R"
+
+    else:
+        if intent.side is Side.LONG:
+            reward = (
+                (plan.take_profit - weighted_entry) / weighted_entry * Decimal("100")
+            )
+        else:
+            reward = (
+                (weighted_entry - plan.take_profit) / weighted_entry * Decimal("100")
+            )
+
+        rr_label = "R:R"
+
+    rr = reward / risk if risk > 0 else Decimal("0")
+
+    return rr_label, rr
