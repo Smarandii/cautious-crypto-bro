@@ -42,6 +42,7 @@ line-length = 88
 
 [tool.ruff.lint]
 select = [
+  "C901",
   "E4",
   "E7",
   "E9",
@@ -50,6 +51,15 @@ select = [
   "UP",
   "B",
 ]
+
+# Complexity gate for application logic. Operator scripts and test
+# fixtures stay exempt: they are linear run-once procedures.
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["C901"]
+"tests/*" = ["C901"]
 
 [tool.pyright]
 include = ["src"]
