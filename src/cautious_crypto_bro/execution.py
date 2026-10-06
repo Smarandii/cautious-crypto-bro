@@ -52,6 +52,16 @@ class TakeProfitRequest:
     collapsed_targets_error: str
 
 
+@dataclass(frozen=True, slots=True)
+class _RebaseGeometry:
+    """Values that hold for every scale-in leg of one actual-fill rebase."""
+
+    stop_loss: Decimal
+    risk_budget: Decimal
+    remaining_scale: Decimal
+    context: InstrumentContext
+
+
 def _weighted_entry(orders: Sequence[PlannedOrder]) -> Decimal:
     total_quantity = sum(
         (order.quantity for order in orders),
@@ -335,55 +345,22 @@ class ExecutionPlanner:
             }
         )
 
-        def scale_in(
-            *,
-            name: str,
-            reference_price: Decimal,
-            risk_pct: Decimal,
-        ) -> PlannedOrder:
-            distance = abs(reference_price - stop_loss)
+        geometry = _RebaseGeometry(
+            stop_loss=stop_loss,
+            risk_budget=risk_budget,
+            remaining_scale=remaining_scale,
+            context=context,
+        )
 
-            if distance <= 0:
-                raise ExecutionPlanningError(f"{name} has no entry-to-stop distance")
-
-            nominal_budget = risk_budget * risk_pct / Decimal("100")
-
-            effective_budget = nominal_budget * remaining_scale
-
-            quantity = self._round_down(
-                effective_budget / distance,
-                context.qty_step,
-            )
-
-            if quantity <= 0 or quantity < context.min_qty:
-                raise ExecutionPlanningError(
-                    f"{name} actual-fill rebasing rounds below Bybit minimum quantity"
-                )
-
-            if context.min_notional and (
-                quantity * reference_price < context.min_notional
-            ):
-                raise ExecutionPlanningError(
-                    f"{name} actual-fill rebasing rounds below Bybit minimum notional"
-                )
-
-            return PlannedOrder(
-                name=name,
-                risk_pct=risk_pct,
-                order_type=(ExecutionOrderType.LIMIT),
-                quantity=quantity,
-                price=reference_price,
-                reference_price=reference_price,
-                take_profit=None,
-            )
-
-        secondary = scale_in(
+        secondary = self._scale_in_order(
+            geometry,
             name="E2",
             reference_price=second_price,
             risk_pct=(strategy.secondary_entry_risk_pct),
         )
 
-        tertiary = scale_in(
+        tertiary = self._scale_in_order(
+            geometry,
             name="E3",
             reference_price=third_price,
             risk_pct=(strategy.tertiary_entry_risk_pct),
@@ -426,6 +403,50 @@ class ExecutionPlanner:
             take_profit_source,
             trader_target,
             planned_max_loss,
+        )
+
+    def _scale_in_order(
+        self,
+        geometry: _RebaseGeometry,
+        *,
+        name: str,
+        reference_price: Decimal,
+        risk_pct: Decimal,
+    ) -> PlannedOrder:
+        context = geometry.context
+
+        distance = abs(reference_price - geometry.stop_loss)
+
+        if distance <= 0:
+            raise ExecutionPlanningError(f"{name} has no entry-to-stop distance")
+
+        nominal_budget = geometry.risk_budget * risk_pct / Decimal("100")
+
+        effective_budget = nominal_budget * geometry.remaining_scale
+
+        quantity = self._round_down(
+            effective_budget / distance,
+            context.qty_step,
+        )
+
+        if quantity <= 0 or quantity < context.min_qty:
+            raise ExecutionPlanningError(
+                f"{name} actual-fill rebasing rounds below Bybit minimum quantity"
+            )
+
+        if context.min_notional and (quantity * reference_price < context.min_notional):
+            raise ExecutionPlanningError(
+                f"{name} actual-fill rebasing rounds below Bybit minimum notional"
+            )
+
+        return PlannedOrder(
+            name=name,
+            risk_pct=risk_pct,
+            order_type=(ExecutionOrderType.LIMIT),
+            quantity=quantity,
+            price=reference_price,
+            reference_price=reference_price,
+            take_profit=None,
         )
 
     def _validate_rebase_inputs(
