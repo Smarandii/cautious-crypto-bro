@@ -107,6 +107,20 @@ release line.
 
 Draft pull requests skip the title check, so use the draft state while working.
 
+## Releases
+
+`project.version` in `pyproject.toml` is the single source of truth. To cut a
+release:
+
+1. Add a `## [<version>]` section to [CHANGELOG.md](CHANGELOG.md) and bump
+   `project.version` in the same pull request.
+2. Merge, then tag `v<version>`.
+
+The release workflow refuses to publish if the tag, the declared version and the
+changelog disagree, and it publishes the changelog section verbatim as the
+release body. `v1.0.0` shipped as a merged pull request with no tag and no
+version bump; this exists so that cannot happen quietly again.
+
 Before opening a PR, fill in `.github/pull_request_template.md` and confirm the
 gate output you pasted is from your own run. Say plainly whether the change
 alters planning determinism, `UNCERTAIN` handling, source claiming, or approval

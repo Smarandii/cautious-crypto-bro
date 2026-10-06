@@ -54,7 +54,8 @@ recovered actions. Preview failures do not suppress the execution result.
   stay quarantined. Paused strategies require deliberate recovery.
 
 See [STRATEGY.md](STRATEGY.md) for execution rules, [TESTING.md](TESTING.md) for
-checks and operations, and [TODO.md](TODO.md) for remaining work.
+checks and operations, [CHANGELOG.md](CHANGELOG.md) for release history, and
+[TODO.md](TODO.md) for remaining work.
 
 ## Contributing
 

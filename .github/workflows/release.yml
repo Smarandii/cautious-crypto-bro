@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Release / tag matches version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
+      # project.version was hand-edited and v1.0.0 shipped as a merged pull
+      # request with no tag at all. Nothing caught either. This refuses to
+      # publish a release whose tag, declared version and changelog disagree.
+      - name: Assert tag, version and changelog agree
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          declared="$(python3 -c \
+            "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+
+          echo "tag      : ${tag}"
+          echo "declared : ${declared}"
+
+          if [ "${tag}" != "v${declared}" ]; then
+            echo "::error::Tag ${tag} does not match pyproject.toml version ${declared}."
+            echo "::error::Bump project.version, or retag as v${declared}."
+            exit 1
+          fi
+
+          python3 scripts/release_section.py "${tag}" > /dev/null
+
+          echo "changelog section present for ${tag}"
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Verify the wheel installs
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/verify
+          /tmp/verify/bin/pip install --quiet dist/*.whl
+          /tmp/verify/bin/python -c "import cautious_crypto_bro; print('import ok')"
+
+  publish:
+    name: Release / publish
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
+      - name: Build distributions
+        run: uv build
+
+      # The changelog section for this tag becomes the release body, so the
+      # published release and the repository file cannot drift apart.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          python3 scripts/release_section.py "${GITHUB_REF_NAME}" > /tmp/notes.md
+
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file /tmp/notes.md \
+            dist/*.whl \
+            dist/*.tar.gz
