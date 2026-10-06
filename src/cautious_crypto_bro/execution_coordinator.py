@@ -465,6 +465,60 @@ class ExecutionCoordinator:
                 action=action,
             )
 
+        action, terminal = await self._claim_position_action(
+            action_id,
+            action,
+            approval_mode=approval_mode,
+            user_id=user_id,
+        )
+
+        if terminal is not None:
+            return terminal
+
+        result: PositionActionExecutionResult | None = None
+
+        async with self._execution_lock:
+            if action.action is PositionActionType.CANCEL_ENTRIES:
+                return await self._cancel_entries(action)
+            try:
+                result = await self._executor.execute_position_action(action)
+                await self._confirm_position_action(action, result)
+
+            except PositionActionPreflightError as exc:
+                return await self._preflight_failure_outcome(action_id, action, exc)
+
+            except Exception as exc:
+                # The exchange may have accepted a market reduction even
+                # when its response or the later confirmation timed out.
+                logger.exception(
+                    "Position action %s has an uncertain exchange outcome",
+                    action_id,
+                )
+                return await self._uncertain_outcome(action_id, action, result, exc)
+
+            assert result is not None
+            # Status and resulting strategy rebalance/close must be durable
+            # before releasing the lock to the position supervisor.
+            await self._store.complete_position_action(
+                action,
+                result.order_id,
+            )
+
+        return PositionActionExecutionOutcome(
+            status=IntentStatus.EXECUTED,
+            message="Executed on Bybit Demo",
+            action=action,
+            result=result,
+        )
+
+    async def _claim_position_action(
+        self,
+        action_id: UUID,
+        action: PositionActionIntent,
+        *,
+        approval_mode: ApprovalMode,
+        user_id: int | None,
+    ) -> tuple[PositionActionIntent, PositionActionExecutionOutcome | None]:
         age = (datetime.now(UTC) - action.created_at).total_seconds()
 
         if age > self._max_age_seconds:
@@ -482,10 +536,13 @@ class ExecutionCoordinator:
                     message,
                 )
 
-            return PositionActionExecutionOutcome(
-                status=IntentStatus.FAILED,
-                message=message,
-                action=action,
+            return (
+                action,
+                PositionActionExecutionOutcome(
+                    status=IntentStatus.FAILED,
+                    message=message,
+                    action=action,
+                ),
             )
 
         claimed = await self._store.claim_position_action_for_execution(
@@ -497,68 +554,56 @@ class ExecutionCoordinator:
         if not claimed:
             current = await self._store.get_position_action(action_id)
 
-            return PositionActionExecutionOutcome(
-                status=(current.status if current is not None else IntentStatus.FAILED),
-                message=(
-                    "Position action was already handled or approval mode changed"
-                ),
-                action=current or action,
-            )
-
-        result: PositionActionExecutionResult | None = None
-
-        async with self._execution_lock:
-            if action.action is PositionActionType.CANCEL_ENTRIES:
-                return await self._cancel_entries(action)
-            try:
-                result = await self._executor.execute_position_action(action)
-                await self._confirm_position_action(action, result)
-
-            except PositionActionPreflightError as exc:
-                # A typed preflight error is raised only before any mutation.
-                message = f"{type(exc).__name__}: {exc}"
-                await self._store.mark_position_action_failed(
-                    action_id,
-                    message,
-                )
-                return PositionActionExecutionOutcome(
-                    status=IntentStatus.FAILED,
-                    message=message,
-                    action=action,
-                )
-
-            except Exception as exc:
-                # The exchange may have accepted a market reduction even
-                # when its response or the later confirmation timed out.
-                logger.exception(
-                    "Position action %s has an uncertain exchange outcome",
-                    action_id,
-                )
-                message = f"{type(exc).__name__}: {exc}"
-                await self._store.mark_position_action_uncertain(
-                    action_id,
-                    action.symbol,
-                    result.order_id if result is not None else None,
-                    message,
-                )
-                return PositionActionExecutionOutcome(
-                    status=IntentStatus.UNCERTAIN,
-                    message=message,
-                    action=action,
-                    result=result,
-                )
-
-            assert result is not None
-            # Status and resulting strategy rebalance/close must be durable
-            # before releasing the lock to the position supervisor.
-            await self._store.complete_position_action(
+            return (
                 action,
-                result.order_id,
+                PositionActionExecutionOutcome(
+                    status=(
+                        current.status if current is not None else IntentStatus.FAILED
+                    ),
+                    message=(
+                        "Position action was already handled or approval mode changed"
+                    ),
+                    action=current or action,
+                ),
             )
 
+        return action, None
+
+    async def _preflight_failure_outcome(
+        self,
+        action_id: UUID,
+        action: PositionActionIntent,
+        exc: PositionActionPreflightError,
+    ) -> PositionActionExecutionOutcome:
+        # A typed preflight error is raised only before any mutation.
+        message = f"{type(exc).__name__}: {exc}"
+        await self._store.mark_position_action_failed(
+            action_id,
+            message,
+        )
         return PositionActionExecutionOutcome(
-            status=IntentStatus.EXECUTED,
-            message="Executed on Bybit Demo",
+            status=IntentStatus.FAILED,
+            message=message,
+            action=action,
+        )
+
+    async def _uncertain_outcome(
+        self,
+        action_id: UUID,
+        action: PositionActionIntent,
+        result: PositionActionExecutionResult | None,
+        exc: Exception,
+    ) -> PositionActionExecutionOutcome:
+        message = f"{type(exc).__name__}: {exc}"
+        await self._store.mark_position_action_uncertain(
+            action_id,
+            action.symbol,
+            result.order_id if result is not None else None,
+            message,
+        )
+        return PositionActionExecutionOutcome(
+            status=IntentStatus.UNCERTAIN,
+            message=message,
             action=action,
             result=result,
         )
