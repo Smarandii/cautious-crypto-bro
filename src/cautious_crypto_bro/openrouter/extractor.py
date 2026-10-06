@@ -12,6 +12,7 @@ from ..domain import (
     Entry,
     EntryType,
     ExtractedIntent,
+    ExtractedPositionAction,
     IncomingPost,
     IntentExtraction,
     OpenRelation,
@@ -715,30 +716,7 @@ def _current_post_action_evidence(
         return None
 
     if action_type is PositionActionType.CANCEL_ENTRIES:
-        # Bind the ticker to this instruction, never arbitrary nearby text.
-        clauses = re.split(r"[.!?…;\n]+", source.text)
-        for index, clause in enumerate(clauses):
-            normalized = _normalize_evidence_text(clause)
-            match = re.search(
-                r"\b(?:cancel|отменяем|отменить|отменяю)\b[^.!?\n]{0,60}?"
-                r"(?:лимит\w*|заявк\w*|ордер\w*|entr\w*|limit\w*|orders?)",
-                normalized,
-            )
-            if match is None or re.search(
-                r"\b(?:не|not|don't|never)\s+(?:cancel|отмен\w*)", normalized
-            ):
-                continue
-            # Uppercase ticker tokens are evidence from the actual post.
-            tickers = re.findall(r"\b[A-Z][A-Z0-9]{1,14}\b", clause)
-            scope = normalized
-            if not tickers and index:
-                previous = clauses[index - 1]
-                tickers = re.findall(r"\b[A-Z][A-Z0-9]{1,14}\b", previous)
-                scope = _normalize_evidence_text(previous) + ". " + normalized
-            variants = _symbol_close_variants(symbol)
-            if tickers and all(t.lower() in variants for t in tickers):
-                return scope
-        return None
+        return _cancel_entries_evidence(source.text, symbol)
 
     if (
         action_type is PositionActionType.REDUCE
@@ -746,6 +724,56 @@ def _current_post_action_evidence(
     ):
         return None
 
+    for scope in _action_scopes(post_text, model_evidence_text):
+        evidence = _deterministic_action_evidence(
+            scope,
+            action_type,
+            symbol,
+        )
+
+        if evidence is not None:
+            # Return the complete source clause, not only the regex match.
+            # This keeps authoritative percentages/fractions and surrounding
+            # negation in the same deterministic scope.
+            return scope
+
+    return None
+
+
+def _cancel_entries_evidence(
+    text: str,
+    symbol: str,
+) -> str | None:
+    # Bind the ticker to this instruction, never arbitrary nearby text.
+    clauses = re.split(r"[.!?…;\n]+", text)
+    for index, clause in enumerate(clauses):
+        normalized = _normalize_evidence_text(clause)
+        match = re.search(
+            r"\b(?:cancel|отменяем|отменить|отменяю)\b[^.!?\n]{0,60}?"
+            r"(?:лимит\w*|заявк\w*|ордер\w*|entr\w*|limit\w*|orders?)",
+            normalized,
+        )
+        if match is None or re.search(
+            r"\b(?:не|not|don't|never)\s+(?:cancel|отмен\w*)", normalized
+        ):
+            continue
+        # Uppercase ticker tokens are evidence from the actual post.
+        tickers = re.findall(r"\b[A-Z][A-Z0-9]{1,14}\b", clause)
+        scope = normalized
+        if not tickers and index:
+            previous = clauses[index - 1]
+            tickers = re.findall(r"\b[A-Z][A-Z0-9]{1,14}\b", previous)
+            scope = _normalize_evidence_text(previous) + ". " + normalized
+        variants = _symbol_close_variants(symbol)
+        if tickers and all(t.lower() in variants for t in tickers):
+            return scope
+    return None
+
+
+def _action_scopes(
+    post_text: str,
+    model_evidence_text: str | None,
+) -> list[str]:
     scopes: list[str] = []
 
     if model_evidence_text:
@@ -760,20 +788,7 @@ def _current_post_action_evidence(
         if clause not in scopes:
             scopes.append(clause)
 
-    for scope in scopes:
-        evidence = _deterministic_action_evidence(
-            scope,
-            action_type,
-            symbol,
-        )
-
-        if evidence is not None:
-            # Return the complete source clause, not only the regex match.
-            # This keeps authoritative percentages/fractions and surrounding
-            # negation in the same deterministic scope.
-            return scope
-
-    return None
+    return scopes
 
 
 def _reduction_pct_from_evidence(
@@ -867,6 +882,16 @@ def _signals_from_extraction(
     source: SourceMessage,
     extraction: IntentExtraction,
 ) -> SignalExtraction:
+    return SignalExtraction(
+        open_intents=_open_intents_from_extraction(source, extraction),
+        position_actions=_position_actions_from_extraction(source, extraction),
+    )
+
+
+def _open_intents_from_extraction(
+    source: SourceMessage,
+    extraction: IntentExtraction,
+) -> tuple[TradingIntent, ...]:
     opens: list[TradingIntent] = []
 
     for raw in extraction.intents:
@@ -934,6 +959,13 @@ def _signals_from_extraction(
 
         opens.append(intent)
 
+    return tuple(opens)
+
+
+def _position_actions_from_extraction(
+    source: SourceMessage,
+    extraction: IntentExtraction,
+) -> tuple[PositionActionIntent, ...]:
     actions: list[PositionActionIntent] = []
 
     for raw in extraction.position_actions:
@@ -980,31 +1012,16 @@ def _signals_from_extraction(
             raw.side
         )
 
-        if action_type is not PositionActionType.REDUCE:
-            close_pct = None
-        else:
-            close_pct = _reduction_pct_from_evidence(action_evidence)
+        close_pct = None
+        if action_type is PositionActionType.REDUCE:
+            close_pct = _reduce_close_pct(
+                source,
+                raw,
+                action_evidence,
+            )
 
             if close_pct is None:
-                logger.warning(
-                    "Dropping REDUCE position "
-                    "action for %s from %s/%s: "
-                    "no deterministic reduction "
-                    "amount in current caption "
-                    "evidence",
-                    raw.symbol,
-                    source.channel_id,
-                    source.message_id,
-                )
                 continue
-
-            if raw.close_pct is not None and abs(raw.close_pct - close_pct) > 1e-9:
-                logger.warning(
-                    "Normalizing REDUCE close_pct for %s from model=%s to evidence=%s",
-                    raw.symbol,
-                    raw.close_pct,
-                    close_pct,
-                )
 
         try:
             action = PositionActionIntent(
@@ -1029,10 +1046,38 @@ def _signals_from_extraction(
 
         actions.append(action)
 
-    return SignalExtraction(
-        open_intents=tuple(opens),
-        position_actions=tuple(actions),
-    )
+    return tuple(actions)
+
+
+def _reduce_close_pct(
+    source: SourceMessage,
+    raw: ExtractedPositionAction,
+    action_evidence: str,
+) -> float | None:
+    close_pct = _reduction_pct_from_evidence(action_evidence)
+
+    if close_pct is None:
+        logger.warning(
+            "Dropping REDUCE position "
+            "action for %s from %s/%s: "
+            "no deterministic reduction "
+            "amount in current caption "
+            "evidence",
+            raw.symbol,
+            source.channel_id,
+            source.message_id,
+        )
+        return None
+
+    if raw.close_pct is not None and abs(raw.close_pct - close_pct) > 1e-9:
+        logger.warning(
+            "Normalizing REDUCE close_pct for %s from model=%s to evidence=%s",
+            raw.symbol,
+            raw.close_pct,
+            close_pct,
+        )
+
+    return close_pct
 
 
 def _validate_intent_extraction_response(
