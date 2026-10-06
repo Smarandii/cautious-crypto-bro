@@ -33,6 +33,27 @@ updates:
         applies-to: version-updates
         dependency-type: development
 
+  # Container base images. These carry OS-level CVEs and were previously
+  # untracked, which is the wrong gap to leave open in a repo whose image runs
+  # Telegram credentials and exchange API keys.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "build(docker)"
+    groups:
+      base-images:
+        patterns:
+          - "*"
+
   # Actions in this repo are pinned to commit SHAs. Dependabot rewrites the SHA
   # and updates the trailing version comment, so pinning stays upgradeable.
   #
