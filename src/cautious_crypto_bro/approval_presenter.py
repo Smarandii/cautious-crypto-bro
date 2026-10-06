@@ -275,6 +275,33 @@ def render_position_protection(
     position: AccountPosition,
     open_orders: tuple[AccountOrder, ...],
 ) -> str:
+    stop_prices, take_profit_prices, trailing_stop = _collect_protection(
+        position,
+        open_orders,
+    )
+
+    if not stop_prices and not take_profit_prices and not trailing_stop:
+        return "⚠️ No SL/TP protection detected"
+
+    parts = [
+        ("SL " + _render_protection_prices(stop_prices) if stop_prices else "SL —"),
+        (
+            "TP " + _render_protection_prices(take_profit_prices)
+            if take_profit_prices
+            else "TP —"
+        ),
+    ]
+
+    if trailing_stop:
+        parts.append("Trailing stop active")
+
+    return "Protection: " + " · ".join(parts)
+
+
+def _collect_protection(
+    position: AccountPosition,
+    open_orders: tuple[AccountOrder, ...],
+) -> tuple[set[Decimal], set[Decimal], bool]:
     stop_prices: set[Decimal] = set()
     take_profit_prices: set[Decimal] = set()
     trailing_stop = bool(position.trailing_stop)
@@ -289,62 +316,65 @@ def render_position_protection(
         if order.symbol != position.symbol:
             continue
 
-        # V2 take profits are standalone reduce-only limits, not attached TP orders.
-        if (
-            order.is_v2_take_profit
-            and order.side is not position.side
-            and order.status in {"New", "PartiallyFilled"}
-            and order.remaining_quantity > 0
-            and order.price is not None
-        ):
-            take_profit_prices.add(order.price)
+        v2_price = _v2_take_profit_price(order, position)
+        if v2_price is not None:
+            take_profit_prices.add(v2_price)
 
         if not order.is_protective:
             continue
 
-        if order.kind == "TRAILING":
+        if _merge_attached_protection(order, stop_prices, take_profit_prices):
             trailing_stop = True
-            continue
 
-        if order.trigger_price is None:
-            continue
+    return stop_prices, take_profit_prices, trailing_stop
 
-        if order.kind == "SL":
-            stop_prices.add(order.trigger_price)
 
-        elif order.kind == "TP":
-            take_profit_prices.add(order.trigger_price)
+def _v2_take_profit_price(
+    order: AccountOrder,
+    position: AccountPosition,
+) -> Decimal | None:
+    # V2 take profits are standalone reduce-only limits, not attached TP orders.
+    if (
+        order.is_v2_take_profit
+        and order.side is not position.side
+        and order.status in {"New", "PartiallyFilled"}
+        and order.remaining_quantity > 0
+        and order.price is not None
+    ):
+        return order.price
 
-    if not stop_prices and not take_profit_prices and not trailing_stop:
-        return "⚠️ No SL/TP protection detected"
+    return None
 
-    def render_prices(prices: set[Decimal]) -> str:
-        ordered = sorted(prices)
-        shown = ordered[:4]
 
-        rendered = " / ".join(fmt_decimal(price) for price in shown)
+def _merge_attached_protection(
+    order: AccountOrder,
+    stop_prices: set[Decimal],
+    take_profit_prices: set[Decimal],
+) -> bool:
+    if order.kind == "TRAILING":
+        return True
 
-        if len(ordered) > 4:
-            rendered += f" / +{len(ordered) - 4}"
+    if order.trigger_price is None:
+        return False
 
-        return rendered
+    if order.kind == "SL":
+        stop_prices.add(order.trigger_price)
+    elif order.kind == "TP":
+        take_profit_prices.add(order.trigger_price)
 
-    parts = []
+    return False
 
-    if stop_prices:
-        parts.append("SL " + render_prices(stop_prices))
-    else:
-        parts.append("SL —")
 
-    if take_profit_prices:
-        parts.append("TP " + render_prices(take_profit_prices))
-    else:
-        parts.append("TP —")
+def _render_protection_prices(prices: set[Decimal]) -> str:
+    ordered = sorted(prices)
+    shown = ordered[:4]
 
-    if trailing_stop:
-        parts.append("Trailing stop active")
+    rendered = " / ".join(fmt_decimal(price) for price in shown)
 
-    return "Protection: " + " · ".join(parts)
+    if len(ordered) > 4:
+        rendered += f" / +{len(ordered) - 4}"
+
+    return rendered
 
 
 def render_account_state(
