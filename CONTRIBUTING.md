@@ -19,7 +19,15 @@ uv run pre-commit install
 
 ## The gate
 
-Every push and pull request runs `ci.yml`. Locally, the same checks:
+`master` requires CI to pass, so every change lands through a pull request even
+if you are the only contributor. Four workflows run:
+
+- `ci.yml` &mdash; format, lint, types, build, tests, Dockerfile and Compose
+- `codeql.yml` &mdash; CodeQL security-extended analysis of Python
+- `dependency-review.yml` &mdash; advisory gate on the PR's dependency delta
+- `pages.yml` &mdash; deploys the landing page, only when `docs/` changes
+
+Locally, the same checks as `ci.yml`:
 
 ```sh
 uv sync --frozen --group dev
@@ -37,6 +45,16 @@ git diff --check
 locally. `uv run pyright` type-checks `src/` only. `uv run pytest -q` runs with
 offline/mocked boundaries and real temporary SQLite — no network, no
 credentials, no orders. If it needs anything else, the test is wrong.
+
+## Dependency and workflow updates
+
+`.github/dependabot.yml` opens weekly PRs for `uv` and `github-actions`, grouped
+into runtime and dev-tooling batches. Do not merge one blind: a dependency bump
+can change extraction or execution behaviour, and the project is GPL-3.0-only.
+
+Actions are pinned to commit SHAs. Dependabot rewrites both the SHA and the
+trailing version comment. pre-commit hook revs live in `.pre-commit-config.yaml`
+and have no Dependabot ecosystem &mdash; update those with `pre-commit autoupdate`.
 
 ## Code conventions
 

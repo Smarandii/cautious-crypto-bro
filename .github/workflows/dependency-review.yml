@@ -1,0 +1,39 @@
+name: Dependency review
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Dependencies / advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      security-events: write
+      # Required by comment-summary-in-pr, below.
+      pull-requests: write
+
+    steps:
+      # Reviews the dependency delta of the PR itself, so a vulnerable or
+      # newly-removed transitive dependency is caught at review time rather than
+      # at the next Dependabot run.
+      #
+      # License checking is deliberately left off: PyPI license metadata is
+      # incomplete and inconsistent often enough that enabling it produces
+      # false blocks. The GPL-3.0-only obligation is handled at merge time by
+      # review, not by this action.
+      - name: Review dependencies
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure

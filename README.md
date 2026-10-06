@@ -63,6 +63,10 @@ conventions, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and
 [SECURITY.md](SECURITY.md) before reporting anything safety-relevant.
 [ACCESSIBILITY.md](ACCESSIBILITY.md) covers the operator-facing surfaces.
 
+`master` is protected: CI must pass, force-pushes and deletion of `master` are
+blocked, and merged branches are auto-deleted. Protection applies to `master`
+only, so feature branches stay freely pushable and deletable.
+
 ## Development
 
 ```sh

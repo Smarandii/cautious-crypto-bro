@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cautious Crypto Bro — deterministic execution for Telegram trading signals</title>
+<meta name="description" content="An LLM reads Telegram posts as text. Deterministic code decides the sizes, orders and risk. Bybit Demo only.">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <span class="wordmark">cautious-crypto-bro</span>
+  <span class="chip chip-warn">
+    <span aria-hidden="true">&#9888;</span> Bybit Demo only
+  </span>
+</header>
+
+<main id="main">
+
+  <section class="hero">
+    <h1>The model reads the post.<br>The code decides the trade.</h1>
+    <p class="lede">
+      Crypto Telegram channels are full of leverage claims, entry ladders and
+      profit screenshots. This project reads them &mdash; text, images, albums
+      &mdash; and turns them into orders, but only through a fixed pipeline where
+      a language model is allowed to interpret and is never allowed to decide
+      money.
+    </p>
+    <p class="cta">
+      <a class="btn btn-primary" href="https://github.com/Smarandii/cautious-crypto-bro/blob/master/STRATEGY.md">Read the execution rules</a>
+      <a class="btn" href="https://github.com/Smarandii/cautious-crypto-bro">Browse the source</a>
+    </p>
+    <p class="meta">
+      <img class="badge"
+           src="https://github.com/Smarandii/cautious-crypto-bro/actions/workflows/ci.yml/badge.svg"
+           alt="CI status: passing">
+      <span class="chip">Python 3.12</span>
+      <span class="chip">GPL-3.0-only</span>
+      <span class="chip">358 tests</span>
+    </p>
+  </section>
+
+  <section aria-labelledby="principle">
+    <h2 id="principle">One dividing line</h2>
+    <p>
+      A language model is good at reading a messy human post and bad at
+      arithmetic under a clock. So the split is deliberate and narrow:
+    </p>
+    <div class="split">
+      <div class="split-col split-model">
+        <h3>The model may</h3>
+        <ul>
+          <li>Read text, images and albums</li>
+          <li>Name a symbol and a direction</li>
+          <li>Recognise entry, reduce, close and cancel intent</li>
+          <li>Copy the trader's stated leverage</li>
+          <li>Say &ldquo;this is ambiguous&rdquo; and stop</li>
+        </ul>
+      </div>
+      <div class="split-col split-code">
+        <h3>The model may not</h3>
+        <ul>
+          <li>Choose a position size</li>
+          <li>Pick a stop, target or ladder level</li>
+          <li>Set or move leverage</li>
+          <li>Submit, amend or cancel an order</li>
+          <li>Approve its own extraction</li>
+        </ul>
+      </div>
+    </div>
+    <p>
+      Every level a trader sees is arithmetic over a frozen capital base and a
+      price-risk budget &mdash; a 1% default, with a deterministic 2%
+      fallback stop when the post omits one. Because no wall clock, randomness or
+      network call sits inside planning, a plan can be replayed offline and
+      compared against what actually happened.
+    </p>
+  </section>
+
+  <section aria-labelledby="pipeline">
+    <h2 id="pipeline">The pipeline</h2>
+    <p>
+      Untrusted input enters on the left. By the time anything reaches the
+      exchange, it has passed through four gates that each get to say no.
+    </p>
+
+    <figure class="diagram">
+      <!-- Scrollable so the labels stay legible on narrow screens instead of
+           shrinking to unreadable. Focusable so it can be scrolled by keyboard;
+           the SVG's own role=img and <desc> carry the content either way. -->
+      <div class="diagram-canvas" role="region" aria-label="Pipeline diagram" tabindex="0">
+      <svg viewBox="0 0 900 250" role="img"
+           aria-labelledby="pipe-title pipe-desc">
+        <title id="pipe-title">Signal pipeline from Telegram post to Bybit Demo</title>
+        <desc id="pipe-desc">
+          A Telegram post with text, images or albums is read by the extractor,
+          which produces a structured intent or an uncertain verdict. The intent
+          is turned into a deterministic plan with frozen capital and a price-risk
+          budget. The plan is routed to manual approval, or to automatic routing
+          when auto approval is enabled. Execution reaches Bybit Demo, after which
+          a position supervisor keeps exits and protection installed.
+        </desc>
+
+        <g class="edge">
+          <path d="M150 125 H215"/>
+          <path d="M325 125 H390"/>
+          <path d="M500 125 H565"/>
+          <path d="M675 125 H740"/>
+        </g>
+        <g class="arrow">
+          <path d="M207 118 l8 7 -8 7"/>
+          <path d="M382 118 l8 7 -8 7"/>
+          <path d="M557 118 l8 7 -8 7"/>
+          <path d="M732 118 l8 7 -8 7"/>
+        </g>
+
+        <g class="node node-untrusted">
+          <rect x="20" y="85" width="130" height="80" rx="10"/>
+          <text x="85" y="112">Telegram</text>
+          <text x="85" y="132" class="sub">text &#183; images</text>
+          <text x="85" y="150" class="sub">albums</text>
+        </g>
+
+        <g class="node">
+          <rect x="215" y="85" width="110" height="80" rx="10"/>
+          <text x="270" y="118">Extract</text>
+          <text x="270" y="138" class="sub">LLM, structured</text>
+        </g>
+
+        <g class="node">
+          <rect x="390" y="85" width="110" height="80" rx="10"/>
+          <text x="445" y="118">Plan</text>
+          <text x="445" y="138" class="sub">deterministic</text>
+        </g>
+
+        <g class="node node-gate">
+          <rect x="565" y="85" width="110" height="80" rx="10"/>
+          <text x="620" y="112">Approve</text>
+          <text x="620" y="132" class="sub">manual by</text>
+          <text x="620" y="150" class="sub">default</text>
+        </g>
+
+        <g class="node node-terminal">
+          <rect x="740" y="85" width="140" height="80" rx="10"/>
+          <text x="810" y="112">Bybit Demo</text>
+          <text x="810" y="132" class="sub">supervised</text>
+          <text x="810" y="150" class="sub">positions</text>
+        </g>
+
+        <g class="gate-note">
+          <path d="M620 168 v34"/>
+          <text x="620" y="220">ambiguity &#8594; UNCERTAIN, nothing is submitted</text>
+        </g>
+      </svg>
+      </div>
+      <figcaption>
+        Automatic routing exists but is off by default: <code>AUTO_APPROVAL_MODE</code>
+        ships as <code>disabled</code>, <code>open_only</code>, or <code>all</code>.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section aria-labelledby="rails">
+    <h2 id="rails">Failure is the interesting part</h2>
+    <p>
+      Any system that places orders has to decide what to do when reality is
+      ambiguous. Here, ambiguity is a state, not an error to be retried.
+    </p>
+    <div class="cards">
+      <article class="card">
+        <h3><svg class="ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.4"/><path d="M8 4.6v4.2M8 11.4v.1"/></svg>Uncertain stays uncertain</h3>
+        <p>
+          When a cancellation or lifecycle action cannot be resolved from current
+          evidence, the strategy is parked as <code>UNCERTAIN</code> and the
+          exchange is left alone. A restart never retries it automatically, and
+          recovery is a deliberate human decision.
+        </p>
+      </article>
+      <article class="card">
+        <h3><svg class="ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="3.4" y="7" width="9.2" height="6.4" rx="1.2"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7"/></svg>Accepted-but-unknown is quarantined</h3>
+        <p>
+          If a submission may have reached the exchange, it is quarantined rather
+          than resent. A pre-submit failure is different: it closes the empty
+          strategy outright. Retrying either case blindly is how one bad signal
+          becomes two positions.
+        </p>
+      </article>
+      <article class="card">
+        <h3><svg class="ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.4"/><path d="M8 4.6v3.6l2.4 1.4"/></svg>One owner per position</h3>
+        <p>
+          Both manual and automatic routing refuse symbols already controlled by
+          an active strategy or by live exposure and orders. Independent ladders
+          cannot share a net position.
+        </p>
+      </article>
+      <article class="card">
+        <h3><svg class="ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="2.4" y="3.2" width="11.2" height="9.6" rx="1.4"/><path d="M2.4 6.4h11.2M6.2 3.2v3.2"/></svg>Missed posts still arrive</h3>
+        <p>
+          Each channel is reconciled against history on a fixed interval. Only a
+          history scan advances the recovery cursor, so a newer live message
+          cannot hide an older missed post. Album downloads survive batch
+          boundaries and retries.
+        </p>
+      </article>
+    </div>
+  </section>
+
+  <section aria-labelledby="gate">
+    <h2 id="gate">Rigor over features</h2>
+    <p>
+      The pull request gate is the same locally and in CI: format, lint, type
+      check, build, and the full test suite. Application code is held to a
+      cyclomatic complexity ceiling of 10; operator scripts and tests are exempt
+      because they are linear procedures.
+    </p>
+    <ul class="checklist">
+      <li><code>ruff format</code> and <code>ruff check</code> &mdash; formatting and lint</li>
+      <li><code>pyright</code> &mdash; static types over <code>src/</code></li>
+      <li><code>pytest</code> &mdash; 358 tests, offline boundaries, real temporary SQLite</li>
+      <li><code>uv build</code> and <code>uv lock --check</code> &mdash; reproducible packaging</li>
+      <li><code>dockerfile-roast</code> &mdash; Dockerfile linting at warning severity</li>
+      <li><code>docker compose config</code> and a real image build</li>
+      <li><code>CodeQL</code> &mdash; security-extended analysis of Python</li>
+      <li><code>dependency-review</code> &mdash; advisory gate on every pull request</li>
+    </ul>
+    <p>
+      Live Bybit Demo testing is deliberately opt-in and bounded: small notional,
+      a frozen risk cap, one symbol at a time, and evidence written out with
+      hashes and cleanup receipts. If cleanup fails, the app stays paused.
+    </p>
+  </section>
+
+  <section aria-labelledby="limits">
+    <h2 id="limits">What this is not</h2>
+    <div class="callout">
+      <h3>Demo only. No performance claims.</h3>
+      <p>
+        This repository targets Bybit <strong>Demo</strong> trading. It is not
+        configured for mainnet, and no part of it should be pointed at real funds.
+      </p>
+      <p>
+        There are no published return, drawdown or win-rate figures here. The
+        comparison of the final implementation against forensic replay &mdash;
+        drawdown, full-stop losses, profit give-back, realized R after costs and
+        fill quality &mdash; is listed as open work and has not been completed.
+        A passing test suite is not a track record.
+      </p>
+    </div>
+  </section>
+
+  <section aria-labelledby="docs">
+    <h2 id="docs">Read further</h2>
+    <div class="docgrid">
+      <a href="https://github.com/Smarandii/cautious-crypto-bro/blob/master/STRATEGY.md">
+        <strong>STRATEGY.md</strong>
+        <span>The execution rules the code actually implements.</span>
+      </a>
+      <a href="https://github.com/Smarandii/cautious-crypto-bro/blob/master/TESTING.md">
+        <strong>TESTING.md</strong>
+        <span>Checks, replay tooling and live Demo operations.</span>
+      </a>
+      <a href="https://github.com/Smarandii/cautious-crypto-bro/blob/master/CONTRIBUTING.md">
+        <strong>CONTRIBUTING.md</strong>
+        <span>The quality gate and the safety rules for contributors.</span>
+      </a>
+      <a href="https://github.com/Smarandii/cautious-crypto-bro/blob/master/SECURITY.md">
+        <strong>SECURITY.md</strong>
+        <span>Threat model, private reporting, and what is out of scope.</span>
+      </a>
+      <a href="https://github.com/Smarandii/cautious-crypto-bro/blob/master/CODE_OF_CONDUCT.md">
+        <strong>Code of conduct</strong>
+        <span>Contributor Covenant 2.1.</span>
+      </a>
+      <a href="https://github.com/Smarandii/cautious-crypto-bro/blob/master/ACCESSIBILITY.md">
+        <strong>ACCESSIBILITY.md</strong>
+        <span>Operator surfaces, known gaps, how to report a barrier.</span>
+      </a>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p>
+    <code>cautious-crypto-bro</code> &mdash; GPL-3.0-only.
+    Read-only Telegram channels, human-in-the-loop by default.
+  </p>
+  <p>
+    Not investment advice. Placing orders on an exchange carries risk of loss,
+    and a language model can misread a post no matter how carefully the
+    surrounding rules are written.
+  </p>
+</footer>
+
+</body>
+</html>
