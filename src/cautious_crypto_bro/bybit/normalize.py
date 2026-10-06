@@ -10,6 +10,7 @@ from decimal import Decimal
 
 from ..domain import (
     AccountOrder,
+    AccountPosition,
     ClosedPnlRecord,
     OpenOrderExposure,
     PositionExposure,
@@ -47,6 +48,47 @@ def format_decimal(value: Decimal) -> str:
     return format(
         value.normalize(),
         "f",
+    )
+
+
+def account_position_from_item(item: dict) -> AccountPosition | None:
+    size = parse_decimal(item.get("size"))
+
+    if size <= 0:
+        return None
+
+    symbol = str(item.get("symbol") or "").upper()
+
+    if not symbol:
+        return None
+
+    avg_price = parse_decimal(item.get("avgPrice"))
+
+    mark_price = parse_decimal(item.get("markPrice"))
+
+    if avg_price <= 0 or mark_price <= 0:
+        raise TradeExecutionError("Active Bybit position contains invalid pricing")
+
+    return AccountPosition(
+        symbol=symbol,
+        side=parse_side(item.get("side")),
+        size=size,
+        avg_price=avg_price,
+        mark_price=mark_price,
+        unrealised_pnl=(parse_decimal(item.get("unrealisedPnl"))),
+        status=str(item.get("positionStatus") or "Unknown"),
+        take_profit=(parse_optional_decimal(item.get("takeProfit"))),
+        stop_loss=(parse_optional_decimal(item.get("stopLoss"))),
+        break_even_price=(parse_optional_decimal(item.get("breakEvenPrice"))),
+        trailing_stop=(parse_optional_decimal(item.get("trailingStop"))),
+    )
+
+
+def is_live_open_order(item: dict) -> bool:
+    return parse_decimal(item.get("leavesQty")) > 0 or (
+        item.get("stopOrderType") == "PartialStopLoss"
+        and str(item.get("orderStatus")) == "Untriggered"
+        and parse_decimal(item.get("qty")) > 0
     )
 
 

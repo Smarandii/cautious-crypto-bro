@@ -12,7 +12,6 @@ from decimal import ROUND_DOWN, Decimal
 
 from ..domain import (
     AccountOrder,
-    AccountPosition,
     AccountStateSummary,
     ClosedPnlRecord,
     EntryPreflightError,
@@ -34,11 +33,11 @@ from ..execution import ExecutionPlanner
 from .client import DEMO_BASE_URL, BybitClient
 from .normalize import (
     account_order_from_item,
+    account_position_from_item,
     closed_pnl_record_from_item,
     format_decimal,
+    is_live_open_order,
     parse_decimal,
-    parse_optional_decimal,
-    parse_side,
     pending_entry_order_from_item,
     position_exposure_from_item,
 )
@@ -325,45 +324,11 @@ class BybitDemoExecutor:
             },
         )
 
-        positions: list[AccountPosition] = []
-
-        for item in position_items:
-            size = parse_decimal(item.get("size"))
-
-            if size <= 0:
-                continue
-
-            symbol = str(item.get("symbol") or "").upper()
-
-            if not symbol:
-                continue
-
-            avg_price = parse_decimal(item.get("avgPrice"))
-
-            mark_price = parse_decimal(item.get("markPrice"))
-
-            if avg_price <= 0 or mark_price <= 0:
-                raise TradeExecutionError(
-                    "Active Bybit position contains invalid pricing"
-                )
-
-            positions.append(
-                AccountPosition(
-                    symbol=symbol,
-                    side=parse_side(item.get("side")),
-                    size=size,
-                    avg_price=avg_price,
-                    mark_price=mark_price,
-                    unrealised_pnl=(parse_decimal(item.get("unrealisedPnl"))),
-                    status=str(item.get("positionStatus") or "Unknown"),
-                    take_profit=(parse_optional_decimal(item.get("takeProfit"))),
-                    stop_loss=(parse_optional_decimal(item.get("stopLoss"))),
-                    break_even_price=(
-                        parse_optional_decimal(item.get("breakEvenPrice"))
-                    ),
-                    trailing_stop=(parse_optional_decimal(item.get("trailingStop"))),
-                )
-            )
+        positions = [
+            position
+            for position in map(account_position_from_item, position_items)
+            if position is not None
+        ]
 
         open_items = self._client.paginate_private_list(
             "/v5/order/realtime",
@@ -378,14 +343,7 @@ class BybitDemoExecutor:
         open_orders = tuple(
             account_order_from_item(item)
             for item in open_items
-            if (
-                parse_decimal(item.get("leavesQty")) > 0
-                or (
-                    item.get("stopOrderType") == "PartialStopLoss"
-                    and str(item.get("orderStatus")) == "Untriggered"
-                    and parse_decimal(item.get("qty")) > 0
-                )
-            )
+            if is_live_open_order(item)
         )
 
         return AccountStateSummary(
@@ -561,43 +519,74 @@ class BybitDemoExecutor:
         except TradeExecutionError as exc:
             raise PositionActionPreflightError(str(exc)) from exc
 
-        # A lifecycle instruction supersedes stale
-        # CCB entry orders for this symbol. Otherwise
-        # an old scale-in order could rebuild exposure
-        # immediately after a REDUCE/CLOSE.
-        cancelled_entries = self._cancel_ccb_entry_orders_sync(action.symbol)
-
-        # Existing V2 reduce-only exits must not race
-        # a trader-authorized REDUCE/CLOSE.
-        cancelled_exits = self._cancel_ccb_exit_orders_sync(action.symbol)
+        cancelled_entries, cancelled_exits = self._cancel_conflicting_orders(
+            action.symbol
+        )
 
         # Resolve position size again after cancellation.
         # An entry could have filled concurrently while
         # cancellations were being processed.
-        current_exposure = self._exposure_sync(action.symbol)
-
         position = self._position_for_action(
             action,
-            current_exposure,
+            self._exposure_sync(action.symbol),
         )
 
-        submitted_quantity: Decimal | None
+        body, submitted_quantity = self._action_order_body(action, position)
 
+        response = self._client.private_post(
+            "/v5/order/create",
+            body,
+        )
+
+        order_id = response.get("result", {}).get("orderId")
+
+        if not order_id:
+            raise TradeExecutionError("Bybit returned success without orderId")
+
+        return PositionActionExecutionResult(
+            order_id=str(order_id),
+            position_side=position.side,
+            position_size_before=position.size,
+            submitted_quantity=(submitted_quantity),
+            cancelled_entry_orders=(cancelled_entries),
+            cancelled_exit_orders=(cancelled_exits),
+        )
+
+    def _cancel_conflicting_orders(
+        self,
+        symbol: str,
+    ) -> tuple[int, int]:
+        # A lifecycle instruction supersedes stale
+        # CCB entry orders for this symbol. Otherwise
+        # an old scale-in order could rebuild exposure
+        # immediately after a REDUCE/CLOSE.
+        cancelled_entries = self._cancel_ccb_entry_orders_sync(symbol)
+
+        # Existing V2 reduce-only exits must not race
+        # a trader-authorized REDUCE/CLOSE.
+        cancelled_exits = self._cancel_ccb_exit_orders_sync(symbol)
+
+        return cancelled_entries, cancelled_exits
+
+    def _action_order_body(
+        self,
+        action: PositionActionIntent,
+        position: PositionExposure,
+    ) -> tuple[dict[str, object], Decimal | None]:
         if action.action is PositionActionType.CLOSE:
-            submitted_quantity = None
+            submitted_quantity: Decimal | None = None
             qty = "0"
 
         else:
             assert action.close_pct is not None
 
-            quantity = self._partial_reduce_quantity(
+            submitted_quantity = self._partial_reduce_quantity(
                 action.symbol,
                 position.size,
                 Decimal(str(action.close_pct)),
             )
 
-            submitted_quantity = quantity
-            qty = format_decimal(quantity)
+            qty = format_decimal(submitted_quantity)
 
         side = "Sell" if position.side is Side.LONG else "Buy"
 
@@ -619,24 +608,7 @@ class BybitDemoExecutor:
         if action.action is PositionActionType.CLOSE:
             body["closeOnTrigger"] = True
 
-        response = self._client.private_post(
-            "/v5/order/create",
-            body,
-        )
-
-        order_id = response.get("result", {}).get("orderId")
-
-        if not order_id:
-            raise TradeExecutionError("Bybit returned success without orderId")
-
-        return PositionActionExecutionResult(
-            order_id=str(order_id),
-            position_side=position.side,
-            position_size_before=position.size,
-            submitted_quantity=(submitted_quantity),
-            cancelled_entry_orders=(cancelled_entries),
-            cancelled_exit_orders=(cancelled_exits),
-        )
+        return body, submitted_quantity
 
     @staticmethod
     def _position_for_action(
