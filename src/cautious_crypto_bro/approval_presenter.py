@@ -12,9 +12,11 @@ from .domain import (
     ExecutionOrderType,
     ExecutionPlan,
     IntentStatus,
+    OpenOrderExposure,
     PositionActionExecutionOutcome,
     PositionActionIntent,
     PositionActionType,
+    PositionExposure,
     Side,
     SymbolExposure,
     TakeProfitSource,
@@ -196,79 +198,87 @@ def render_exposure(
     if exposure is None:
         return ""
 
-    warnings: list[str] = []
-
-    for position in exposure.positions:
-        size = fmt_decimal(position.size)
-        avg_price = fmt_decimal(position.avg_price)
-
-        if position.side is intent.side:
-            warnings.append(
-                "⚠️ <b>EXISTING SAME-SIDE "
-                "EXPOSURE</b>\n"
-                f"Bybit already has "
-                f"<b>{position.side.value} "
-                f"{html.escape(intent.symbol)}"
-                f"</b>: {size} @ "
-                f"{avg_price}.\n"
-                f"Executing this "
-                f"{intent.side.value} will "
-                "add to the same one-way "
-                "position and change its "
-                "average entry."
-            )
-        else:
-            warnings.append(
-                "⚠️ <b>EXISTING OPPOSITE "
-                "EXPOSURE</b>\n"
-                f"Bybit already has "
-                f"<b>{position.side.value} "
-                f"{html.escape(intent.symbol)}"
-                f"</b>: {size} @ "
-                f"{avg_price}.\n"
-                f"Executing this "
-                f"{intent.side.value} may "
-                "reduce, close, or reverse "
-                "that position depending on "
-                "filled quantity."
-            )
+    warnings = [
+        _position_exposure_warning(intent, position) for position in exposure.positions
+    ]
 
     if exposure.pending_entry_orders:
-        same_side = [
-            order
-            for order in exposure.pending_entry_orders
-            if (order.side is intent.side)
-        ]
-
-        opposite_side = [
-            order
-            for order in exposure.pending_entry_orders
-            if (order.side is not intent.side)
-        ]
-
-        details: list[str] = []
-
-        if same_side:
-            details.append(f"{len(same_side)} same-side")
-
-        if opposite_side:
-            details.append(f"{len(opposite_side)} opposite-side")
-
-        warnings.append(
-            "⚠️ <b>PENDING CCB ENTRY "
-            "ORDERS</b>\n"
-            + ", ".join(details)
-            + " unfilled order(s) for "
-            + html.escape(intent.symbol)
-            + " may fill later and further "
-            "change the shared one-way "
-            "position."
-        )
+        warnings.append(_pending_entry_warning(intent, exposure.pending_entry_orders))
 
     if not warnings:
         return ""
 
     return "\n\n".join(warnings) + "\n\n"
+
+
+def _position_exposure_warning(
+    intent: TradingIntent,
+    position: PositionExposure,
+) -> str:
+    size = fmt_decimal(position.size)
+    avg_price = fmt_decimal(position.avg_price)
+
+    headline = (
+        "EXISTING SAME-SIDE EXPOSURE"
+        if position.side is intent.side
+        else "EXISTING OPPOSITE EXPOSURE"
+    )
+
+    consequence = (
+        "Executing this "
+        f"{intent.side.value} will "
+        "add to the same one-way "
+        "position and change its "
+        "average entry."
+        if position.side is intent.side
+        else (
+            "Executing this "
+            f"{intent.side.value} may "
+            "reduce, close, or reverse "
+            "that position depending on "
+            "filled quantity."
+        )
+    )
+
+    return (
+        f"⚠️ <b>{headline}</b>\n"
+        f"Bybit already has "
+        f"<b>{position.side.value} "
+        f"{html.escape(intent.symbol)}"
+        f"</b>: {size} @ "
+        f"{avg_price}.\n"
+        f"{consequence}"
+    )
+
+
+def _pending_entry_warning(
+    intent: TradingIntent,
+    pending_entry_orders: tuple[OpenOrderExposure, ...],
+) -> str:
+    same_side = sum(1 for order in pending_entry_orders if (order.side is intent.side))
+
+    opposite_side = sum(
+        1 for order in pending_entry_orders if (order.side is not intent.side)
+    )
+
+    details: list[str] = []
+
+    if same_side:
+        details.append(f"{same_side} same-side")
+
+    if opposite_side:
+        details.append(f"{opposite_side} opposite-side")
+
+    return (
+        "⚠️ <b>PENDING CCB ENTRY "
+        "ORDERS</b>\n"
+        + ", ".join(details)
+        + " unfilled order(s) for "
+        + html.escape(intent.symbol)
+        + " may fill later and further "
+        "change the shared one-way "
+        "position."
+    )
 
 
 def render_position_protection(
