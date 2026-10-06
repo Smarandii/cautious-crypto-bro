@@ -17,6 +17,7 @@ from .domain import (
     ApprovalMode,
     AutoApprovalMode,
     ExecutionPlan,
+    ExecutionPolicy,
     IncomingPost,
     IntentExecutionOutcome,
     IntentStatus,
@@ -24,6 +25,7 @@ from .domain import (
     PositionActionExecutionOutcome,
     PositionActionIntent,
     PositionActionType,
+    Side,
     SignalContextSnapshot,
     SignalExtraction,
     SignalPositionContext,
@@ -558,12 +560,7 @@ class SignalService:
         )
 
         try:
-            policy = await self._store.get_execution_policy()
-            trading_capital_usdt = await self._executor.wallet_balance_usdt()
-            policy = policy.model_copy(
-                update={"trading_capital_usdt": (trading_capital_usdt)}
-            )
-
+            policy = await self._capital_frozen_policy()
         except Exception as exc:
             planning_errors.append(
                 f"Execution policy/capital: {type(exc).__name__}: {exc}"
@@ -575,40 +572,68 @@ class SignalService:
             return planned, planning_errors
 
         for extracted_intent in signals.open_intents:
-            key = (extracted_intent.symbol, extracted_intent.side)
-
-            approval_mode = self._open_approval_mode(
+            intent = self._routed_intent(
                 extracted_intent,
-                position_context=(position_context),
-                account_state=(account_state),
-                duplicate_in_batch=(open_counts[key] > 1),
+                position_context,
+                account_state,
+                open_counts,
             )
 
-            intent = extracted_intent.model_copy(
-                update={"approval_mode": (approval_mode)}
-            )
+            plan = await self._plan_single_intent(intent, policy, planning_errors)
 
-            try:
-                market_context = await self._executor.market_context(intent.symbol)
-                plan = self._planner.plan(
-                    intent,
-                    policy,
-                    market_context,
-                )
-
-            except Exception as exc:
-                error = f"{intent.symbol}: {type(exc).__name__}: {exc}"
-                planning_errors.append(error)
-
-                logger.exception(
-                    "Execution planning failed for candidate %s",
-                    intent.symbol,
-                )
-                continue
-
-            planned.append((intent, plan))
+            if plan is not None:
+                planned.append((intent, plan))
 
         return planned, planning_errors
+
+    async def _capital_frozen_policy(self) -> ExecutionPolicy:
+        policy = await self._store.get_execution_policy()
+        trading_capital_usdt = await self._executor.wallet_balance_usdt()
+        return policy.model_copy(
+            update={"trading_capital_usdt": (trading_capital_usdt)}
+        )
+
+    def _routed_intent(
+        self,
+        extracted_intent: TradingIntent,
+        position_context: SignalPositionContext,
+        account_state: AccountStateSummary | None,
+        open_counts: Counter[tuple[str, Side]],
+    ) -> TradingIntent:
+        key = (extracted_intent.symbol, extracted_intent.side)
+
+        approval_mode = self._open_approval_mode(
+            extracted_intent,
+            position_context=(position_context),
+            account_state=(account_state),
+            duplicate_in_batch=(open_counts[key] > 1),
+        )
+
+        return extracted_intent.model_copy(update={"approval_mode": (approval_mode)})
+
+    async def _plan_single_intent(
+        self,
+        intent: TradingIntent,
+        policy: ExecutionPolicy,
+        planning_errors: list[str],
+    ) -> ExecutionPlan | None:
+        try:
+            market_context = await self._executor.market_context(intent.symbol)
+            return self._planner.plan(
+                intent,
+                policy,
+                market_context,
+            )
+
+        except Exception as exc:
+            error = f"{intent.symbol}: {type(exc).__name__}: {exc}"
+            planning_errors.append(error)
+
+            logger.exception(
+                "Execution planning failed for candidate %s",
+                intent.symbol,
+            )
+            return None
 
     def _build_position_actions(
         self,
