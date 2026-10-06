@@ -496,3 +496,243 @@ def test_position_action_without_live_position_is_skipped() -> None:
         )
         is ApprovalMode.SKIPPED
     )
+
+
+def _gate_service(
+    *,
+    mode=AutoApprovalMode.OPEN_ONLY,
+    safety_reason=None,
+):
+    class Coordinator:
+        @staticmethod
+        def auto_open_safety_reason(intent, account_state):
+            return safety_reason
+
+    return SignalService(
+        store=object(),
+        extractor=object(),
+        planner=object(),
+        executor=object(),
+        approval_bot=object(),
+        coordinator=Coordinator(),
+        context_provider=object(),
+        auto_approval_mode=mode,
+    )
+
+
+def _open_context(intent, *, available=True, history=()):
+    return SignalPositionContext(
+        source_channel_id=intent.source.channel_id,
+        account_state_available=available,
+        source_open_history=history,
+    )
+
+
+def test_auto_open_is_manual_when_disabled() -> None:
+    """AUTO mode cannot be reached while the switch is off, even if every
+    other gate would pass."""
+
+    service = _gate_service(mode=AutoApprovalMode.DISABLED)
+    intent = _intent(relation=OpenRelation.NEW)
+
+    assert (
+        service._open_approval_mode(
+            intent,
+            position_context=_open_context(intent),
+            account_state=_state(),
+            duplicate_in_batch=False,
+        )
+        is ApprovalMode.MANUAL
+    )
+
+
+def test_auto_open_is_manual_for_non_entry_relations() -> None:
+    service = _gate_service()
+
+    # UNCLASSIFIED matters most here: a relation the model could not pin down
+    # must never reach order placement on its own.
+    for relation in (
+        OpenRelation.UPDATE_EXISTING,
+        OpenRelation.UNCLASSIFIED,
+    ):
+        intent = _intent(relation=relation)
+
+        assert (
+            service._open_approval_mode(
+                intent,
+                position_context=_open_context(intent),
+                account_state=_state(_position()),
+                duplicate_in_batch=False,
+            )
+            is ApprovalMode.MANUAL
+        ), relation
+
+
+def test_auto_open_is_manual_when_the_same_symbol_appears_twice() -> None:
+    service = _gate_service()
+    intent = _intent(relation=OpenRelation.NEW)
+
+    assert (
+        service._open_approval_mode(
+            intent,
+            position_context=_open_context(intent),
+            account_state=_state(),
+            duplicate_in_batch=True,
+        )
+        is ApprovalMode.MANUAL
+    )
+
+
+def test_auto_open_is_manual_without_trusted_account_state() -> None:
+    service = _gate_service()
+    intent = _intent(relation=OpenRelation.NEW)
+
+    # State fetch returned nothing.
+    assert (
+        service._open_approval_mode(
+            intent,
+            position_context=_open_context(intent),
+            account_state=None,
+            duplicate_in_batch=False,
+        )
+        is ApprovalMode.MANUAL
+    )
+
+    # Or the provider reported it as unavailable despite having state.
+    assert (
+        service._open_approval_mode(
+            intent,
+            position_context=_open_context(intent, available=False),
+            account_state=_state(),
+            duplicate_in_batch=False,
+        )
+        is ApprovalMode.MANUAL
+    )
+
+
+def test_auto_open_is_manual_when_coordinator_reports_a_hazard() -> None:
+    service = _gate_service(safety_reason="exchange reports an open order")
+    intent = _intent(relation=OpenRelation.NEW)
+
+    assert (
+        service._open_approval_mode(
+            intent,
+            position_context=_open_context(intent),
+            account_state=_state(),
+            duplicate_in_batch=False,
+        )
+        is ApprovalMode.MANUAL
+    )
+
+
+def test_auto_open_is_manual_when_history_already_copied_the_position() -> None:
+    """NEW relation, but the source already has an active copy: manual."""
+
+    service = _gate_service()
+    intent = _intent(relation=OpenRelation.NEW)
+
+    history = (
+        SourceOpenContext(
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            status=IntentStatus.EXECUTED,
+            message_id=99,
+            created_at=datetime.now(UTC),
+            active_copy=True,
+        ),
+    )
+
+    assert (
+        service._open_approval_mode(
+            intent,
+            position_context=_open_context(intent, history=history),
+            account_state=_state(),
+            duplicate_in_batch=False,
+        )
+        is ApprovalMode.MANUAL
+    )
+
+
+def test_auto_open_allows_add_to_an_existing_copy() -> None:
+    """ADD_OR_REENTRY is allowed even with an active copy in history, since
+    scaling into an owned position is the intended use."""
+
+    service = _gate_service()
+    intent = _intent(relation=OpenRelation.ADD_OR_REENTRY)
+
+    history = (
+        SourceOpenContext(
+            symbol="BTCUSDT",
+            side=Side.LONG,
+            status=IntentStatus.EXECUTED,
+            message_id=99,
+            created_at=datetime.now(UTC),
+            active_copy=True,
+        ),
+    )
+
+    assert (
+        service._open_approval_mode(
+            intent,
+            position_context=_open_context(intent, history=history),
+            account_state=_state(),
+            duplicate_in_batch=False,
+        )
+        is ApprovalMode.AUTO
+    )
+
+
+def _action(
+    action: PositionActionType,
+    expected_side=None,
+    approval_mode=ApprovalMode.MANUAL,
+):
+    return PositionActionIntent(
+        source=_source(),
+        symbol="BTCUSDT",
+        action=action,
+        expected_side=expected_side,
+        summary=f"{action.value} BTC",
+        confidence=1,
+        approval_mode=approval_mode,
+    )
+
+
+def test_position_action_is_manual_without_account_state() -> None:
+    service = _gate_service(mode=AutoApprovalMode.ALL)
+
+    assert (
+        service._position_action_approval_mode(
+            _action(PositionActionType.CLOSE, Side.LONG),
+            account_state=None,
+        )
+        is ApprovalMode.MANUAL
+    )
+
+
+def test_position_action_needs_all_mode_for_auto() -> None:
+    service = _gate_service(mode=AutoApprovalMode.OPEN_ONLY)
+
+    assert (
+        service._position_action_approval_mode(
+            _action(PositionActionType.CLOSE, Side.LONG),
+            account_state=_state(_position(Side.LONG)),
+        )
+        is ApprovalMode.MANUAL
+    )
+
+
+def test_cancel_entries_auto_ignores_position_count() -> None:
+    """CANCEL_ENTRIES resolves ownership from durable source records, so a
+    missing or mismatched live position must not block it."""
+
+    service = _gate_service(mode=AutoApprovalMode.ALL)
+
+    for state in (_state(), _state(_position(Side.SHORT))):
+        assert (
+            service._position_action_approval_mode(
+                _action(PositionActionType.CANCEL_ENTRIES),
+                account_state=state,
+            )
+            is ApprovalMode.AUTO
+        )
