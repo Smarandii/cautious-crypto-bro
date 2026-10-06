@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Smarandii/cautious-crypto-bro/security/advisories/new
+    about: Report privately. Never open a public issue for a vulnerability.
+  - name: Security policy and threat model
+    url: https://github.com/Smarandii/cautious-crypto-bro/blob/master/SECURITY.md
+    about: What is in scope, what is not, and which inputs are treated as hostile.
+  - name: Contributing guide
+    url: https://github.com/Smarandii/cautious-crypto-bro/blob/master/CONTRIBUTING.md
+    about: The quality gate, code conventions, and the safety rules contributors must follow.
+  - name: Execution rules (Strategy V2)
+    url: https://github.com/Smarandii/cautious-crypto-bro/blob/master/STRATEGY.md
+    about: Check here first if you think a behavior is a bug; it may be the documented rule.

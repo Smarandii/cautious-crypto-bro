@@ -1,0 +1,53 @@
+name: Feature request
+description: Suggest new behavior
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Strategy changes usually start as a TODO.md item. Open an issue first so
+        the design is agreed before code is written.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today, and what does it cost you?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: |
+        Describe the behavior, not the implementation. Include the fail-closed
+        behavior for ambiguous input.
+    validations:
+      required: true
+
+  - type: textarea
+    id: determinism
+    attributes:
+      label: Effect on determinism and approvals
+      description: |
+        Does this change what reaches order placement, `UNCERTAIN` handling,
+        source claiming, or approval gating? Any answer other than "none"
+        raises the review bar significantly.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      options:
+        - label: This does not introduce a mainnet path.
+          required: true
+        - label: This does not relax an existing fail-closed guard.
+          required: true

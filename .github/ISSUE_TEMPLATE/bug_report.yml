@@ -1,0 +1,103 @@
+name: Bug report
+description: Something behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities here. Use
+        `Security` -> `Report a vulnerability` instead, per SECURITY.md.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What went wrong
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        Smallest sequence that triggers it. Offline commands or a post replay
+        is ideal; say which one you used.
+      placeholder: |
+        uv run pytest -q tests/test_execution.py::test_scale_in_rebase
+        pyapp scripts/replay_telegram_post.py '<telegram-post-url>'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      options:
+        - Extraction / LLM
+        - Planning / execution
+        - Position supervision / exits
+        - Telegram source or approval bot
+        - Storage / migrations / recovery
+        - Scripts / tooling
+        - Configuration
+        - CI / build
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: |
+        Error text, traceback, or log excerpt. Trim to the relevant lines.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: revision
+    attributes:
+      label: Version or commit
+      placeholder: v2.0.0 or git rev-parse HEAD
+    validations:
+      required: true
+
+  - type: dropdown
+    id: demo
+    attributes:
+      label: Environment
+      options:
+        - Bybit Demo
+        - Offline / tests only
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: auto_mode
+    attributes:
+      label: AUTO_APPROVAL_MODE
+      description: disabled, open_only, or all
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: |
+        Did this touch a real order, a Demo order, a quarantine, or nothing but
+        display? Say plainly if you are unsure.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I used Demo credentials only.
+          required: true
+        - label: I removed tokens, secrets and channel contents from any logs or payloads pasted above.
+          required: true

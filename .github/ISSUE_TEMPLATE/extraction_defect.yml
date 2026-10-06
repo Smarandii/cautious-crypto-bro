@@ -1,0 +1,76 @@
+name: Extraction defect
+description: A Telegram post or image was interpreted incorrectly
+labels: ["extraction"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template only when the model output is wrong. If the code did
+        what the rules say, that is Strategy V2 behavior, not a defect.
+
+  - type: textarea
+    id: post
+    attributes:
+      label: The post
+      description: |
+        Link or sanitized excerpt. Redact account handles, channel names and
+        anything you do not want indexed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: intended
+    attributes:
+      label: Intended reading
+      description: Symbol, side, and the semantics you expected to extract.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual output
+      description: |
+        Extracted intent as returned, including the UNCERTAIN verdict and its
+        reason, if any.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: modality
+    attributes:
+      label: Source modality
+      options:
+        - label: Text only
+        - label: Image only
+        - label: Album (multiple images)
+
+  - type: input
+    id: language
+    attributes:
+      label: Post language(s)
+      placeholder: ru, en, mixed
+
+  - type: dropdown
+    id: post_type
+    attributes:
+      label: Post type
+      options:
+        - Entry signal
+        - Profit / holding update
+        - Exit / reduce / close
+        - Cancel pending entries
+        - Mixed or ambiguous
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: determinism
+    attributes:
+      label: Replay result
+      description: |
+        Output of `scripts/replay_telegram_post.py --intent-only`, if you ran
+        it. Note the model and provider; extraction is not guaranteed
+        deterministic across providers.
+      render: shell
