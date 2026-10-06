@@ -385,8 +385,8 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
 
         assert len(bot.calls) == 2
 
-        assert bot.calls[0][2]["send_account_state"] is True
-        assert bot.calls[1][2]["send_account_state"] is False
+        assert bot.calls[0][2]["snapshot"] is not None
+        assert bot.calls[1][2]["snapshot"] is None
 
         assert bot.calls[0][2]["exposure"] == ("exposure:BTCUSDT")
         assert bot.calls[1][2]["exposure"] == ("exposure:ETHUSDT")

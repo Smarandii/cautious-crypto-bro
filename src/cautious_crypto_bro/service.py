@@ -12,6 +12,7 @@ from datetime import (
 
 from .domain import (
     AccountPnlSummary,
+    AccountSnapshotDelivery,
     AccountStateSummary,
     ApprovalMode,
     AutoApprovalMode,
@@ -129,11 +130,11 @@ class SignalService:
                     and plan is not None
                     and signal.status is IntentStatus.PENDING
                 ):
-                    await self._deliver_manual(signal, plan, send_account_state=False)
+                    await self._deliver_manual(signal, plan)
             else:
                 action = await self._store.get_position_action(record_id)
                 if action is not None and action.status is IntentStatus.PENDING:
-                    await self._deliver_manual(action, send_account_state=False)
+                    await self._deliver_manual(action)
 
     async def run_manual_delivery_recovery(self) -> None:
         while True:
@@ -435,19 +436,19 @@ class SignalService:
         if not finalized:
             return
 
+        snapshot = AccountSnapshotDelivery(
+            state=batch.account_state,
+            state_error=batch.account_state_error,
+            pnl=account_pnl,
+            pnl_error=account_pnl_error,
+        )
         await self._dispatch_planned_intents(
             batch.planned,
-            account_state=batch.account_state,
-            account_state_error=batch.account_state_error,
-            account_pnl=account_pnl,
-            account_pnl_error=account_pnl_error,
+            snapshot=snapshot,
         )
         await self._dispatch_position_actions(
             batch.position_actions,
-            account_state=batch.account_state,
-            account_state_error=batch.account_state_error,
-            account_pnl=account_pnl,
-            account_pnl_error=account_pnl_error,
+            snapshot=snapshot,
         )
 
     async def _claim_source_or_skip(
@@ -717,10 +718,7 @@ class SignalService:
             ]
         ],
         *,
-        account_state: AccountStateSummary | None,
-        account_state_error: str | None,
-        account_pnl: AccountPnlSummary | None,
-        account_pnl_error: str | None,
+        snapshot: AccountSnapshotDelivery,
     ) -> None:
         manual_cards_sent = 0
 
@@ -747,20 +745,16 @@ class SignalService:
                 continue
 
             exposure = None
-            if account_state is not None:
-                exposure = account_state.exposure_for(intent.symbol)
+            if snapshot.state is not None:
+                exposure = snapshot.state.exposure_for(intent.symbol)
 
             try:
                 sent = await self._deliver_manual(
                     intent,
                     plan,
                     exposure=exposure,
-                    exposure_error=(account_state_error),
-                    account_state=account_state,
-                    account_state_error=(account_state_error),
-                    account_pnl=account_pnl,
-                    account_pnl_error=(account_pnl_error),
-                    send_account_state=(manual_cards_sent == 0),
+                    exposure_error=(snapshot.state_error),
+                    snapshot=(snapshot if manual_cards_sent == 0 else None),
                 )
 
             except Exception:
@@ -776,10 +770,7 @@ class SignalService:
         self,
         position_actions: tuple[PositionActionIntent, ...],
         *,
-        account_state: AccountStateSummary | None,
-        account_state_error: str | None,
-        account_pnl: AccountPnlSummary | None,
-        account_pnl_error: str | None,
+        snapshot: AccountSnapshotDelivery,
     ) -> None:
         manual_cards_sent = 0
 
@@ -811,11 +802,7 @@ class SignalService:
             try:
                 sent = await self._deliver_manual(
                     action,
-                    account_state=account_state,
-                    account_state_error=(account_state_error),
-                    account_pnl=account_pnl,
-                    account_pnl_error=(account_pnl_error),
-                    send_account_state=(manual_cards_sent == 0),
+                    snapshot=(snapshot if manual_cards_sent == 0 else None),
                 )
 
             except Exception:

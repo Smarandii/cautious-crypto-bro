@@ -10,6 +10,7 @@ from .domain import (
     AccountOrder,
     AccountPnlSummary,
     AccountPnlSyncState,
+    AccountSnapshotDelivery,
     AccountStateSummary,
     ApprovalMode,
     ClosedPnlRecord,
@@ -118,19 +119,14 @@ class ApprovalSender(Protocol):
         *,
         exposure: SymbolExposure | None = None,
         exposure_error: str | None = None,
-        account_state: AccountStateSummary | None = None,
-        account_state_error: str | None = None,
-        account_pnl: AccountPnlSummary | None = None,
-        account_pnl_error: str | None = None,
-        send_account_state: bool = True,
+        snapshot: AccountSnapshotDelivery | None = None,
     ) -> None: ...
 
     async def send_position_action(
         self,
         action: PositionActionIntent,
         *,
-        account_state: AccountStateSummary | None = None,
-        account_state_error: str | None = None,
+        snapshot: AccountSnapshotDelivery | None = None,
     ) -> None: ...
 
     async def send_auto_intent_outcome(

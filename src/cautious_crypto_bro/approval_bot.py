@@ -31,6 +31,7 @@ from .approval_presenter import (
 )
 from .domain import (
     AccountPnlSummary,
+    AccountSnapshotDelivery,
     AccountStateSummary,
     ApprovalMode,
     ExecutionPlan,
@@ -184,18 +185,14 @@ class ApprovalBot:
         *,
         exposure: SymbolExposure | None = None,
         exposure_error: str | None = None,
-        account_state: AccountStateSummary | None = None,
-        account_state_error: str | None = None,
-        account_pnl: AccountPnlSummary | None = None,
-        account_pnl_error: str | None = None,
-        send_account_state: bool = True,
+        snapshot: AccountSnapshotDelivery | None = None,
     ) -> None:
-        if send_account_state:
+        if snapshot is not None:
             await self.send_account_snapshot(
-                account_state,
-                state_error=account_state_error,
-                pnl=account_pnl,
-                pnl_error=account_pnl_error,
+                snapshot.state,
+                state_error=snapshot.state_error,
+                pnl=snapshot.pnl,
+                pnl_error=snapshot.pnl_error,
             )
 
         keyboard = InlineKeyboardMarkup(
@@ -239,18 +236,14 @@ class ApprovalBot:
         self,
         action: PositionActionIntent,
         *,
-        account_state: AccountStateSummary | None = None,
-        account_state_error: str | None = None,
-        account_pnl: AccountPnlSummary | None = None,
-        account_pnl_error: str | None = None,
-        send_account_state: bool = True,
+        snapshot: AccountSnapshotDelivery | None = None,
     ) -> None:
-        if send_account_state:
+        if snapshot is not None:
             await self.send_account_snapshot(
-                account_state,
-                state_error=account_state_error,
-                pnl=account_pnl,
-                pnl_error=account_pnl_error,
+                snapshot.state,
+                state_error=snapshot.state_error,
+                pnl=snapshot.pnl,
+                pnl_error=snapshot.pnl_error,
             )
 
         execute_label = (
@@ -290,8 +283,10 @@ class ApprovalBot:
         await self._send_html(
             render_position_action(
                 action,
-                account_state=account_state,
-                account_state_error=(account_state_error),
+                account_state=snapshot.state if snapshot is not None else None,
+                account_state_error=(
+                    snapshot.state_error if snapshot is not None else None
+                ),
             ),
             reply_markup=keyboard,
         )

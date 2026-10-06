@@ -258,6 +258,20 @@ class AccountPnlSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class AccountSnapshotDelivery:
+    """Account snapshot requested ahead of a manual approval card.
+
+    Passing an instance asks the approval sender to deliver the snapshot
+    first; passing None asks it to deliver only the card.
+    """
+
+    state: AccountStateSummary | None = None
+    state_error: str | None = None
+    pnl: AccountPnlSummary | None = None
+    pnl_error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class IntentExecutionOutcome:
     status: IntentStatus
     message: str
