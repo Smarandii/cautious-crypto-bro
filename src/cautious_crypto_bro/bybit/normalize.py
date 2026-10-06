@@ -11,6 +11,8 @@ from decimal import Decimal
 from ..domain import (
     AccountOrder,
     ClosedPnlRecord,
+    OpenOrderExposure,
+    PositionExposure,
     Side,
     TradeExecutionError,
 )
@@ -45,6 +47,77 @@ def format_decimal(value: Decimal) -> str:
     return format(
         value.normalize(),
         "f",
+    )
+
+
+def position_exposure_from_item(item: object) -> PositionExposure | None:
+    if not isinstance(
+        item,
+        dict,
+    ):
+        return None
+
+    size = Decimal(str(item.get("size") or "0"))
+
+    if size <= 0:
+        return None
+
+    avg_price_raw = item.get("avgPrice")
+
+    if avg_price_raw is None or str(avg_price_raw).strip() == "":
+        raise TradeExecutionError("Active Bybit position contains no average price")
+
+    return PositionExposure(
+        side=(parse_side(item.get("side"))),
+        size=size,
+        avg_price=Decimal(str(avg_price_raw)),
+    )
+
+
+def pending_entry_order_from_item(item: object) -> OpenOrderExposure | None:
+    if not isinstance(
+        item,
+        dict,
+    ):
+        return None
+
+    order_link_id = str(item.get("orderLinkId") or "")
+
+    # Only warn about pending entry
+    # orders created by this app.
+    if not order_link_id.startswith("ccb-"):
+        return None
+
+    reduce_only = item.get("reduceOnly")
+
+    if reduce_only is True or str(reduce_only).casefold() == "true":
+        return None
+
+    remaining = Decimal(str(item.get("leavesQty") or "0"))
+
+    if remaining <= 0:
+        return None
+
+    price_raw = str(item.get("price") or "").strip()
+
+    price = (
+        None
+        if price_raw
+        in {
+            "",
+            "0",
+            "0.0",
+            "0.00",
+        }
+        else Decimal(price_raw)
+    )
+
+    return OpenOrderExposure(
+        side=(parse_side(item.get("side"))),
+        remaining_quantity=(remaining),
+        order_id=str(item.get("orderId") or ""),
+        order_link_id=(order_link_id),
+        price=price,
     )
 
 

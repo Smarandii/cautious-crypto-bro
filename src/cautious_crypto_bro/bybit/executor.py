@@ -39,6 +39,8 @@ from .normalize import (
     parse_decimal,
     parse_optional_decimal,
     parse_side,
+    pending_entry_order_from_item,
+    position_exposure_from_item,
 )
 
 logger = logging.getLogger(__name__)
@@ -485,36 +487,13 @@ class BybitDemoExecutor:
             },
         )
 
-        positions: list[PositionExposure] = []
-
         position_items = position_response.get("result", {}).get("list", [])
 
-        for item in position_items:
-            if not isinstance(
-                item,
-                dict,
-            ):
-                continue
-
-            size = Decimal(str(item.get("size") or "0"))
-
-            if size <= 0:
-                continue
-
-            avg_price_raw = item.get("avgPrice")
-
-            if avg_price_raw is None or str(avg_price_raw).strip() == "":
-                raise TradeExecutionError(
-                    "Active Bybit position contains no average price"
-                )
-
-            positions.append(
-                PositionExposure(
-                    side=(parse_side(item.get("side"))),
-                    size=size,
-                    avg_price=Decimal(str(avg_price_raw)),
-                )
-            )
+        positions = [
+            exposure
+            for exposure in map(position_exposure_from_item, position_items)
+            if exposure is not None
+        ]
 
         pending_orders: list[OpenOrderExposure] = []
 
@@ -542,53 +521,11 @@ class BybitDemoExecutor:
                 [],
             )
 
-            for item in order_items:
-                if not isinstance(
-                    item,
-                    dict,
-                ):
-                    continue
-
-                order_link_id = str(item.get("orderLinkId") or "")
-
-                # Only warn about pending entry
-                # orders created by this app.
-                if not order_link_id.startswith("ccb-"):
-                    continue
-
-                reduce_only = item.get("reduceOnly")
-
-                if reduce_only is True or str(reduce_only).casefold() == "true":
-                    continue
-
-                remaining = Decimal(str(item.get("leavesQty") or "0"))
-
-                if remaining <= 0:
-                    continue
-
-                price_raw = str(item.get("price") or "").strip()
-
-                price = (
-                    None
-                    if price_raw
-                    in {
-                        "",
-                        "0",
-                        "0.0",
-                        "0.00",
-                    }
-                    else Decimal(price_raw)
-                )
-
-                pending_orders.append(
-                    OpenOrderExposure(
-                        side=(parse_side(item.get("side"))),
-                        remaining_quantity=(remaining),
-                        order_id=str(item.get("orderId") or ""),
-                        order_link_id=(order_link_id),
-                        price=price,
-                    )
-                )
+            pending_orders.extend(
+                order
+                for order in map(pending_entry_order_from_item, order_items)
+                if order is not None
+            )
 
             cursor = str(result.get("nextPageCursor") or "")
 
