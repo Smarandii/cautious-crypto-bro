@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import TYPE_CHECKING
 
@@ -16,11 +17,24 @@ if TYPE_CHECKING:
         AccountStateSummary,
         ExecutionPlan,
         InstrumentContext,
+        PlannedTakeProfit,
         PositionStrategy,
     )
     from ..ports import AccountGateway, PositionSupervisorStore
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _ExitGeometry:
+    """Values derived from the plan and live position, shared by every exit leg."""
+
+    position: AccountPosition
+    context: InstrumentContext
+    remaining_weight: Decimal
+    risk_distance: Decimal
+    cap: Decimal | None
+    target_rs: list[Decimal]
 
 
 class ExitInstaller:
@@ -247,7 +261,15 @@ class ExitInstaller:
             if plan.take_profit_source is TakeProfitSource.TRADER
             else None
         )
-        target_rs = self._resolve_target_rs(plan, position, risk_distance, cap)
+
+        geometry = _ExitGeometry(
+            position=position,
+            context=context,
+            remaining_weight=remaining_weight,
+            risk_distance=risk_distance,
+            cap=cap,
+            target_rs=self._resolve_target_rs(plan, position, risk_distance, cap),
+        )
 
         expected_exits: dict[str, tuple[Decimal, Decimal]] = {}
         if remaining_weight <= 0:
@@ -260,73 +282,121 @@ class ExitInstaller:
             if done[index - 1]:
                 continue
 
-            quantity = _round_down(
-                (position.size * target.close_pct / remaining_weight),
-                context.qty_step,
+            leg = self._planned_exit(
+                state,
+                geometry,
+                target,
+                index,
+                expected_exits,
             )
 
-            if quantity <= 0 or quantity < context.min_qty:
-                logger.warning(
-                    "%s TP%s rounds below "
-                    "minimum quantity; leaving "
-                    "that share in the runner",
-                    state.symbol,
-                    index,
-                )
+            if leg is None:
                 continue
 
-            price = self._compute_exit_price(
-                position,
-                target_rs[index - 1],
-                risk_distance,
-                cap,
-                context,
-            )
-
-            if (
-                price <= position.avg_price
-                if position.side is Side.LONG
-                else price >= position.avg_price
-            ):
-                raise RuntimeError(
-                    "Trader TP geometry cannot fit profitable exchange ticks"
-                )
-            if price in [p for _, p in expected_exits.values()]:
-                raise RuntimeError(
-                    "Trader TP geometry cannot fit distinct exchange ticks"
-                )
-
-            if context.min_notional and (quantity * price < context.min_notional):
-                logger.warning(
-                    "%s TP%s rounds below "
-                    "minimum notional; leaving "
-                    "that share in the runner",
-                    state.symbol,
-                    index,
-                )
-                continue
-
-            link_id = self._fill_detector.exit_link_id(state, index)
+            link_id, quantity, price = leg
             expected_exits[link_id] = (quantity, price)
-            existing = await self._find_existing_exit(state, link_id, account)
-            if existing:
-                if len(existing) != 1 or not self._matching_exit(
-                    existing[0], position.side, quantity, price
-                ):
-                    raise RuntimeError(
-                        f"Existing exit {link_id} conflicts with the planned policy"
-                    )
-                continue
 
-            await self._executor.place_reduce_only_exit(
-                symbol=state.symbol,
-                position_side=position.side,
-                quantity=quantity,
-                price=price,
-                order_link_id=link_id,
+            await self._reconcile_or_place_exit(
+                state,
+                position,
+                account,
+                link_id,
+                quantity,
+                price,
             )
 
         return expected_exits
+
+    def _planned_exit(
+        self,
+        state: PositionStrategy,
+        geometry: _ExitGeometry,
+        target: PlannedTakeProfit,
+        index: int,
+        expected_exits: dict[str, tuple[Decimal, Decimal]],
+    ) -> tuple[str, Decimal, Decimal] | None:
+        """Return (link_id, quantity, price), or None to leave the leg in the runner."""
+        position = geometry.position
+        context = geometry.context
+
+        quantity = _round_down(
+            (position.size * target.close_pct / geometry.remaining_weight),
+            context.qty_step,
+        )
+
+        if quantity <= 0 or quantity < context.min_qty:
+            logger.warning(
+                "%s TP%s rounds below "
+                "minimum quantity; leaving "
+                "that share in the runner",
+                state.symbol,
+                index,
+            )
+            return None
+
+        price = self._compute_exit_price(
+            position,
+            geometry.target_rs[index - 1],
+            geometry.risk_distance,
+            geometry.cap,
+            context,
+        )
+
+        if (
+            price <= position.avg_price
+            if position.side is Side.LONG
+            else price >= position.avg_price
+        ):
+            raise RuntimeError(
+                "Trader TP geometry cannot fit profitable exchange ticks"
+            )
+
+        if price in [p for _, p in expected_exits.values()]:
+            raise RuntimeError("Trader TP geometry cannot fit distinct exchange ticks")
+
+        if context.min_notional and (quantity * price < context.min_notional):
+            logger.warning(
+                "%s TP%s rounds below "
+                "minimum notional; leaving "
+                "that share in the runner",
+                state.symbol,
+                index,
+            )
+            return None
+
+        return (
+            self._fill_detector.exit_link_id(state, index),
+            quantity,
+            price,
+        )
+
+    async def _reconcile_or_place_exit(
+        self,
+        state: PositionStrategy,
+        position: AccountPosition,
+        account: AccountStateSummary,
+        link_id: str,
+        quantity: Decimal,
+        price: Decimal,
+    ) -> None:
+        existing = await self._find_existing_exit(state, link_id, account)
+
+        if existing:
+            if len(existing) != 1 or not self._matching_exit(
+                existing[0], position.side, quantity, price
+            ):
+                raise RuntimeError(
+                    f"Existing exit {link_id} conflicts with the planned policy"
+                )
+            return
+
+        await self._executor.place_reduce_only_exit(
+            symbol=state.symbol,
+            position_side=position.side,
+            quantity=quantity,
+            price=price,
+            order_link_id=link_id,
+        )
 
     @staticmethod
     def _resolve_target_rs(
