@@ -25,6 +25,7 @@ if you are the only contributor. Four workflows run:
 - `ci.yml` &mdash; format, lint, types, build, tests, Dockerfile and Compose
 - `codeql.yml` &mdash; CodeQL security-extended analysis of Python
 - `dependency-review.yml` &mdash; advisory gate on the PR's dependency delta
+- `title.yml` &mdash; Conventional Commit title and single-commit agreement
 - `pages.yml` &mdash; deploys the landing page, only when `docs/` changes
 
 Locally, the same checks as `ci.yml`:
@@ -99,7 +100,12 @@ ci: gate application complexity at C901=10
 ```
 
 Use a scope matching the touched module. Imperative mood, no trailing period,
-one logical change per commit.
+one logical change per commit. The PR title is validated against the same
+convention, and on a single-commit pull request it must match the commit message
+exactly, since squash-merge would otherwise take the commit message as the
+release line.
+
+Draft pull requests skip the title check, so use the draft state while working.
 
 Before opening a PR, fill in `.github/pull_request_template.md` and confirm the
 gate output you pasted is from your own run. Say plainly whether the change
