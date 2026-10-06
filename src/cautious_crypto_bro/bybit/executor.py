@@ -843,13 +843,6 @@ class BybitDemoExecutor:
         symbol: str,
         order_id: str,
     ) -> MarketPrimaryExecutionResult:
-        terminal_without_fill = {
-            "Rejected",
-            "Cancelled",
-            "Deactivated",
-            "PartiallyFilledCanceled",
-        }
-
         params: dict[str, object] = {
             "category": "linear",
             "symbol": symbol,
@@ -857,66 +850,84 @@ class BybitDemoExecutor:
         }
 
         for attempt in range(20):
-            record = None
-
-            for path in (
-                "/v5/order/realtime",
-                "/v5/order/history",
-            ):
-                response = self._client.private_get(
-                    path,
-                    params,
-                )
-
-                items = response.get(
-                    "result",
-                    {},
-                ).get(
-                    "list",
-                    [],
-                )
-
-                record = next(
-                    (
-                        item
-                        for item in items
-                        if str(item.get("orderId") or "") == order_id
-                    ),
-                    None,
-                )
-
-                if record is not None:
-                    break
+            record = self._find_order_record(params, order_id)
 
             if record is not None:
-                status = str(record.get("orderStatus") or "")
+                filled = self._filled_primary_result(record, order_id)
 
-                filled_quantity = parse_decimal(record.get("cumExecQty"))
-
-                average_price = parse_decimal(record.get("avgPrice"))
-
-                remaining = parse_decimal(record.get("leavesQty"))
-
-                if (
-                    filled_quantity > 0
-                    and average_price > 0
-                    and (status == "Filled" or remaining <= 0)
-                ):
-                    return MarketPrimaryExecutionResult(
-                        order_id=order_id,
-                        average_fill_price=(average_price),
-                        filled_quantity=(filled_quantity),
-                    )
-
-                if filled_quantity <= 0 and status in terminal_without_fill:
-                    raise TradeExecutionError(
-                        f"V2 MARKET E1 ended without a fill: {status}"
-                    )
+                if filled is not None:
+                    return filled
 
             if attempt < 19:
                 time.sleep(0.25)
 
         raise TradeExecutionError("Timed out confirming V2 MARKET E1 fill")
+
+    def _find_order_record(
+        self,
+        params: dict[str, object],
+        order_id: str,
+    ) -> dict | None:
+        for path in (
+            "/v5/order/realtime",
+            "/v5/order/history",
+        ):
+            response = self._client.private_get(
+                path,
+                params,
+            )
+
+            items = response.get(
+                "result",
+                {},
+            ).get(
+                "list",
+                [],
+            )
+
+            record = next(
+                (item for item in items if str(item.get("orderId") or "") == order_id),
+                None,
+            )
+
+            if record is not None:
+                return record
+
+        return None
+
+    @staticmethod
+    def _filled_primary_result(
+        record: dict,
+        order_id: str,
+    ) -> MarketPrimaryExecutionResult | None:
+        status = str(record.get("orderStatus") or "")
+
+        filled_quantity = parse_decimal(record.get("cumExecQty"))
+
+        average_price = parse_decimal(record.get("avgPrice"))
+
+        remaining = parse_decimal(record.get("leavesQty"))
+
+        if (
+            filled_quantity > 0
+            and average_price > 0
+            and (status == "Filled" or remaining <= 0)
+        ):
+            return MarketPrimaryExecutionResult(
+                order_id=order_id,
+                average_fill_price=(average_price),
+                filled_quantity=(filled_quantity),
+            )
+
+        if filled_quantity <= 0 and status in {
+            "Rejected",
+            "Cancelled",
+            "Deactivated",
+            "PartiallyFilledCanceled",
+        }:
+            raise TradeExecutionError(f"V2 MARKET E1 ended without a fill: {status}")
+
+        return None
 
     def _set_leverage_sync(self, plan: ExecutionPlan) -> None:
         leverage = format_decimal(plan.leverage)
