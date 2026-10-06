@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -69,6 +70,8 @@ class PositionSupervisor:
     async def reconcile_once(self) -> None:
         # The durable strategy snapshot must be loaded while holding the
         # same lock used for exchange mutations and quarantine writes.
+        first_error: Exception | None = None
+
         async with self._mutation_lock:
             records = await self._store.get_active_position_strategies()
 
@@ -84,98 +87,128 @@ class PositionSupervisor:
             self._reported_uncertain.intersection_update(uncertain_ids)
 
             account: AccountStateSummary | None = None
-            first_error: Exception | None = None
 
-            by_symbol: dict[
-                str,
-                list[
-                    tuple[
-                        PositionStrategy,
-                        ExecutionPlan,
-                    ]
-                ],
-            ] = {}
-
-            for state, plan in records:
-                by_symbol.setdefault(
-                    state.symbol,
-                    [],
-                ).append(
-                    (
-                        state,
-                        plan,
-                    )
-                )
+            by_symbol = self._strategies_by_symbol(records)
 
             for symbol, strategies in by_symbol.items():
-                if len(strategies) != 1:
-                    logger.error(
-                        "Multiple active V2 strategies map to %s; pausing automation",
-                        symbol,
-                    )
+                account, error = await self._reconcile_symbol_locked(
+                    symbol,
+                    strategies,
+                    account,
+                )
 
-                    for state, _ in strategies:
-                        await self._store.set_position_strategy_status(
-                            state.strategy_id,
-                            StrategyStatus.MANUAL_OVERRIDE,
-                        )
-
-                    continue
-
-                state, plan = strategies[0]
-
-                if state.status is StrategyStatus.UNCERTAIN:
-                    if state.strategy_id not in self._reported_uncertain:
-                        logger.warning(
-                            "Strategy %s %s is UNCERTAIN; leaving exchange state untouched",
-                            state.strategy_id,
-                            state.symbol,
-                        )
-                        self._reported_uncertain.add(state.strategy_id)
-                    continue
-
-                if account is None:
-                    account = await self._executor.account_state()
-
-                try:
-                    account = await self._reconcile(state, plan, account)
-                except StoreError:
-                    # All strategies share durable storage; no further trading
-                    # is safe when its state cannot be read or committed.
-                    raise
-                except Exception as exc:
-                    logger.exception(
-                        "Strategy %s %s reconciliation failed",
-                        state.strategy_id,
-                        symbol,
-                    )
-                    if first_error is None:
-                        first_error = exc
-                    # A mutation may have succeeded before the error. Refresh
-                    # account state before reconciling another strategy.
-                    account = None
+                if error is not None and first_error is None:
+                    first_error = error
 
         # Preserve fail-closed startup and direct callers without starving
         # healthy symbols in the recurring supervisor loop.
         if first_error is not None:
             raise first_error
 
-    async def _reconcile(
+    @staticmethod
+    def _strategies_by_symbol(
+        records: Sequence[
+            tuple[
+                PositionStrategy,
+                ExecutionPlan,
+            ]
+        ],
+    ) -> dict[
+        str,
+        list[
+            tuple[
+                PositionStrategy,
+                ExecutionPlan,
+            ]
+        ],
+    ]:
+        by_symbol: dict[
+            str,
+            list[
+                tuple[
+                    PositionStrategy,
+                    ExecutionPlan,
+                ]
+            ],
+        ] = {}
+
+        for state, plan in records:
+            by_symbol.setdefault(
+                state.symbol,
+                [],
+            ).append(
+                (
+                    state,
+                    plan,
+                )
+            )
+
+        return by_symbol
+
+    async def _reconcile_symbol_locked(
+        self,
+        symbol: str,
+        strategies: list[
+            tuple[
+                PositionStrategy,
+                ExecutionPlan,
+            ]
+        ],
+        account: AccountStateSummary | None,
+    ) -> tuple[AccountStateSummary | None, Exception | None]:
+        if len(strategies) != 1:
+            logger.error(
+                "Multiple active V2 strategies map to %s; pausing automation",
+                symbol,
+            )
+
+            for state, _ in strategies:
+                await self._store.set_position_strategy_status(
+                    state.strategy_id,
+                    StrategyStatus.MANUAL_OVERRIDE,
+                )
+
+            return account, None
+
+        state, plan = strategies[0]
+
+        if state.status is StrategyStatus.UNCERTAIN:
+            if state.strategy_id not in self._reported_uncertain:
+                logger.warning(
+                    "Strategy %s %s is UNCERTAIN; leaving exchange state untouched",
+                    state.strategy_id,
+                    state.symbol,
+                )
+                self._reported_uncertain.add(state.strategy_id)
+            return account, None
+
+        if account is None:
+            account = await self._executor.account_state()
+
+        try:
+            return await self._reconcile(state, plan, account), None
+        except StoreError:
+            # All strategies share durable storage; no further trading
+            # is safe when its state cannot be read or committed.
+            raise
+        except Exception as exc:
+            logger.exception(
+                "Strategy %s %s reconciliation failed",
+                state.strategy_id,
+                symbol,
+            )
+            # A mutation may have succeeded before the error. Refresh
+            # account state before reconciling another strategy.
+            return None, exc
+
+    async def _blocked_reconcile_outcome(
         self,
         state: PositionStrategy,
         plan: ExecutionPlan,
         account: AccountStateSummary,
-    ) -> AccountStateSummary:
-        position = self._position(
-            state,
-            account,
-        )
-
-        pending_entries = self._pending_entries(
-            state,
-            account,
-        )
-
+        position: AccountPosition | None,
+        pending_entries: tuple[str, ...],
+    ) -> AccountStateSummary | None:
         if state.status is StrategyStatus.CLOSING:
             return await self._handle_closing(state, account, position)
 
@@ -193,14 +226,43 @@ class PositionSupervisor:
                 "position side mismatch",
             )
 
-        risk_distance = abs(position.avg_price - plan.stop_loss)
-
-        if risk_distance <= 0:
+        if abs(position.avg_price - plan.stop_loss) <= 0:
             return await self._manual_override(
                 state,
                 account,
                 "invalid stop loss",
             )
+
+        return None
+
+    async def _reconcile(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+    ) -> AccountStateSummary:
+        position = self._position(
+            state,
+            account,
+        )
+
+        pending_entries = self._pending_entries(
+            state,
+            account,
+        )
+
+        blocked = await self._blocked_reconcile_outcome(
+            state,
+            plan,
+            account,
+            position,
+            pending_entries,
+        )
+
+        if blocked is not None:
+            return blocked
+
+        assert position is not None
 
         if state.installing_exits:
             return await self._handle_installing_exits(
