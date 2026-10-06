@@ -37,6 +37,20 @@ class EntrySpec:
     risk_pct: Decimal
 
 
+@dataclass(frozen=True, slots=True)
+class TakeProfitRequest:
+    """Inputs for deriving the three Strategy V2 fixed exits."""
+
+    side: Side
+    strategy: StrategyV2Policy
+    weighted_entry: Decimal
+    risk_distance: Decimal
+    tick_size: Decimal
+    trader_take_profit: Decimal | None
+    trader_target_error: str
+    collapsed_targets_error: str
+
+
 class ExecutionPlanner:
     def plan(
         self,
@@ -522,19 +536,23 @@ class ExecutionPlanner:
             else None
         )
         target_tuple, take_profit_source = self._build_take_profit_targets(
-            plan.side,
-            strategy,
-            weighted_entry,
-            risk_distance,
-            context.tick_size,
-            self._round_price(trader_target, context.tick_size)
-            if trader_target is not None
-            else None,
-            trader_target_error=(
-                "Trader take profit became too close after actual E1 fill"
-            ),
-            collapsed_targets_error=(
-                "Actual-fill V2 take-profit levels collapse after rounding"
+            TakeProfitRequest(
+                side=plan.side,
+                strategy=strategy,
+                weighted_entry=weighted_entry,
+                risk_distance=risk_distance,
+                tick_size=context.tick_size,
+                trader_take_profit=(
+                    self._round_price(trader_target, context.tick_size)
+                    if trader_target is not None
+                    else None
+                ),
+                trader_target_error=(
+                    "Trader take profit became too close after actual E1 fill"
+                ),
+                collapsed_targets_error=(
+                    "Actual-fill V2 take-profit levels collapse after rounding"
+                ),
             ),
         )
 
@@ -791,53 +809,35 @@ class ExecutionPlanner:
             else None
         )
         return self._build_take_profit_targets(
-            intent.side,
-            strategy,
-            weighted_entry,
-            risk_distance,
-            tick_size,
-            trader_tp,
-            trader_target_error="Trader take profit is too close for Strategy V2 partial exits",
-            collapsed_targets_error="V2 take-profit levels collapse after rounding",
+            TakeProfitRequest(
+                side=intent.side,
+                strategy=strategy,
+                weighted_entry=weighted_entry,
+                risk_distance=risk_distance,
+                tick_size=tick_size,
+                trader_take_profit=trader_tp,
+                trader_target_error=(
+                    "Trader take profit is too close for Strategy V2 partial exits"
+                ),
+                collapsed_targets_error="V2 take-profit levels collapse after rounding",
+            ),
         )
 
     def _build_take_profit_targets(
         self,
-        side: Side,
-        strategy: StrategyV2Policy,
-        weighted_entry: Decimal,
-        risk_distance: Decimal,
-        tick_size: Decimal,
-        trader_tp: Decimal | None,
-        *,
-        trader_target_error: str,
-        collapsed_targets_error: str,
+        request: TakeProfitRequest,
     ) -> tuple[
         tuple[PlannedTakeProfit, PlannedTakeProfit, PlannedTakeProfit],
         TakeProfitSource,
     ]:
-        rules = list(strategy.exit_rules)
+        rules = list(request.strategy.exit_rules)
 
         source = TakeProfitSource.POLICY
 
-        if trader_tp is not None:
-            rules, source = self._trader_capped_rules(
-                side,
-                strategy,
-                weighted_entry,
-                risk_distance,
-                trader_tp,
-                trader_target_error,
-            )
+        if request.trader_take_profit is not None:
+            rules, source = self._trader_capped_rules(request)
 
-        targets = self._derived_take_profits(
-            side,
-            rules,
-            weighted_entry,
-            risk_distance,
-            tick_size,
-            collapsed_targets_error,
-        )
+        targets = self._derived_take_profits(request, rules)
 
         if len(targets) != 3:
             raise ExecutionPlanningError("Strategy V2 requires three fixed exits")
@@ -853,22 +853,22 @@ class ExecutionPlanner:
 
     @staticmethod
     def _trader_capped_rules(
-        side: Side,
-        strategy: StrategyV2Policy,
-        weighted_entry: Decimal,
-        risk_distance: Decimal,
-        trader_tp: Decimal,
-        trader_target_error: str,
+        request: TakeProfitRequest,
     ) -> tuple[list[tuple[str, Decimal, Decimal]], TakeProfitSource]:
-        if side is Side.LONG:
-            trader_reward = trader_tp - weighted_entry
-        else:
-            trader_reward = weighted_entry - trader_tp
+        strategy = request.strategy
+        trader_tp = request.trader_take_profit
 
-        trader_r = trader_reward / risk_distance
+        assert trader_tp is not None
+
+        if request.side is Side.LONG:
+            trader_reward = trader_tp - request.weighted_entry
+        else:
+            trader_reward = request.weighted_entry - trader_tp
+
+        trader_r = trader_reward / request.risk_distance
 
         if trader_r <= strategy.first_take_profit_r:
-            raise ExecutionPlanningError(trader_target_error)
+            raise ExecutionPlanningError(request.trader_target_error)
 
         if trader_r >= strategy.third_take_profit_r:
             return list(strategy.exit_rules), TakeProfitSource.POLICY
@@ -898,12 +898,8 @@ class ExecutionPlanner:
 
     def _derived_take_profits(
         self,
-        side: Side,
+        request: TakeProfitRequest,
         rules: list[tuple[str, Decimal, Decimal]],
-        weighted_entry: Decimal,
-        risk_distance: Decimal,
-        tick_size: Decimal,
-        collapsed_targets_error: str,
     ) -> list[PlannedTakeProfit]:
         targets: list[PlannedTakeProfit] = []
 
@@ -914,27 +910,27 @@ class ExecutionPlanner:
             configured_r,
             close_pct,
         ) in rules:
-            reward_distance = risk_distance * configured_r
+            reward_distance = request.risk_distance * configured_r
 
-            if side is Side.LONG:
-                raw_price = weighted_entry + reward_distance
+            if request.side is Side.LONG:
+                raw_price = request.weighted_entry + reward_distance
             else:
-                raw_price = weighted_entry - reward_distance
+                raw_price = request.weighted_entry - reward_distance
 
             price = self._round_price(
                 raw_price,
-                tick_size,
+                request.tick_size,
             )
 
             if price <= 0:
                 raise ExecutionPlanningError("Derived take profit is not positive")
 
             if previous_price is not None:
-                if side is Side.LONG and price <= previous_price:
-                    raise ExecutionPlanningError(collapsed_targets_error)
+                if request.side is Side.LONG and price <= previous_price:
+                    raise ExecutionPlanningError(request.collapsed_targets_error)
 
-                if side is Side.SHORT and price >= previous_price:
-                    raise ExecutionPlanningError(collapsed_targets_error)
+                if request.side is Side.SHORT and price >= previous_price:
+                    raise ExecutionPlanningError(request.collapsed_targets_error)
 
             targets.append(
                 PlannedTakeProfit(
