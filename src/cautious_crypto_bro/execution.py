@@ -821,39 +821,90 @@ class ExecutionPlanner:
         source = TakeProfitSource.POLICY
 
         if trader_tp is not None:
-            if side is Side.LONG:
-                trader_reward = trader_tp - weighted_entry
-            else:
-                trader_reward = weighted_entry - trader_tp
+            rules, source = self._trader_capped_rules(
+                side,
+                strategy,
+                weighted_entry,
+                risk_distance,
+                trader_tp,
+                trader_target_error,
+            )
 
-            trader_r = trader_reward / risk_distance
+        targets = self._derived_take_profits(
+            side,
+            rules,
+            weighted_entry,
+            risk_distance,
+            tick_size,
+            collapsed_targets_error,
+        )
 
-            if trader_r <= strategy.first_take_profit_r:
-                raise ExecutionPlanningError(trader_target_error)
+        if len(targets) != 3:
+            raise ExecutionPlanningError("Strategy V2 requires three fixed exits")
 
-            if trader_r < strategy.third_take_profit_r:
-                source = TakeProfitSource.TRADER
+        return (
+            (
+                targets[0],
+                targets[1],
+                targets[2],
+            ),
+            source,
+        )
 
-                middle_r = (strategy.first_take_profit_r + trader_r) / Decimal("2")
+    @staticmethod
+    def _trader_capped_rules(
+        side: Side,
+        strategy: StrategyV2Policy,
+        weighted_entry: Decimal,
+        risk_distance: Decimal,
+        trader_tp: Decimal,
+        trader_target_error: str,
+    ) -> tuple[list[tuple[str, Decimal, Decimal]], TakeProfitSource]:
+        if side is Side.LONG:
+            trader_reward = trader_tp - weighted_entry
+        else:
+            trader_reward = weighted_entry - trader_tp
 
-                rules = [
-                    (
-                        "TP1",
-                        strategy.first_take_profit_r,
-                        strategy.first_take_profit_pct,
-                    ),
-                    (
-                        "TP2",
-                        middle_r,
-                        strategy.second_take_profit_pct,
-                    ),
-                    (
-                        "TP3",
-                        trader_r,
-                        strategy.third_take_profit_pct,
-                    ),
-                ]
+        trader_r = trader_reward / risk_distance
 
+        if trader_r <= strategy.first_take_profit_r:
+            raise ExecutionPlanningError(trader_target_error)
+
+        if trader_r >= strategy.third_take_profit_r:
+            return list(strategy.exit_rules), TakeProfitSource.POLICY
+
+        middle_r = (strategy.first_take_profit_r + trader_r) / Decimal("2")
+
+        return (
+            [
+                (
+                    "TP1",
+                    strategy.first_take_profit_r,
+                    strategy.first_take_profit_pct,
+                ),
+                (
+                    "TP2",
+                    middle_r,
+                    strategy.second_take_profit_pct,
+                ),
+                (
+                    "TP3",
+                    trader_r,
+                    strategy.third_take_profit_pct,
+                ),
+            ],
+            TakeProfitSource.TRADER,
+        )
+
+    def _derived_take_profits(
+        self,
+        side: Side,
+        rules: list[tuple[str, Decimal, Decimal]],
+        weighted_entry: Decimal,
+        risk_distance: Decimal,
+        tick_size: Decimal,
+        collapsed_targets_error: str,
+    ) -> list[PlannedTakeProfit]:
         targets: list[PlannedTakeProfit] = []
 
         previous_price: Decimal | None = None
@@ -901,17 +952,7 @@ class ExecutionPlanner:
 
             previous_price = price
 
-        if len(targets) != 3:
-            raise ExecutionPlanningError("Strategy V2 requires three fixed exits")
-
-        return (
-            (
-                targets[0],
-                targets[1],
-                targets[2],
-            ),
-            source,
-        )
+        return targets
 
     @classmethod
     def _validate_initial_exit_capacity(
