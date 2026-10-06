@@ -9,7 +9,11 @@ logger = logging.getLogger(__name__)
 
 
 class LLMResponseValidationError(ValueError):
-    pass
+    """Structured output failed validation; provider names the origin."""
+
+    def __init__(self, message: str, provider: str | None = None) -> None:
+        super().__init__(message)
+        self.provider = provider
 
 
 def strict_response_schema(

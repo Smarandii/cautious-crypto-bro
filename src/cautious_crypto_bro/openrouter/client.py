@@ -223,34 +223,10 @@ class OpenRouterProvider:
 
             provider_options["ignore"] = sorted(ignored_providers)
 
-            response_provider: str | None = None
             started = time.monotonic()
 
             try:
-                async with asyncio.timeout(self._inference_timeout_seconds):
-                    response = await self._client.post(
-                        "/chat/completions",
-                        json=payload,
-                    )
-
-                response.raise_for_status()
-
-                response_data = response.json()
-
-                if not isinstance(response_data, dict):
-                    raise ValueError("OpenRouter response is not a JSON object")
-
-                response_provider = _response_provider(response_data)
-
-                content = _completion_content(response_data)
-
-                if len(content) > 20_000:
-                    raise self._oversized_output_failure(
-                        response_provider, len(content)
-                    )
-
-                if request.response_validator is not None:
-                    request.response_validator(content)
+                content = await self._request_content(request, payload)
 
             except TimeoutError:
                 elapsed = time.monotonic() - started
@@ -263,7 +239,7 @@ class OpenRouterProvider:
 
             except LLMResponseValidationError as exc:
                 last_error = self._validation_failure(
-                    response_provider,
+                    exc.provider,
                     ignored_providers,
                 )
 
@@ -327,22 +303,68 @@ class OpenRouterProvider:
                     content=content,
                 )
 
-            if attempt < self._max_attempts:
-                logger.warning(
-                    "OpenRouter attempt %d/%d failed for %s: %s; retrying",
-                    attempt,
-                    self._max_attempts,
-                    label,
-                    last_error,
-                )
-
-                await asyncio.sleep(0.5 * attempt)
+            await self._backoff_after_failure(attempt, label, last_error)
 
         raise LLMProviderFailure(
             "OpenRouter inference failed after "
             f"{self._max_attempts} attempt(s): "
             f"{last_error}"
         ) from last_error
+
+    async def _backoff_after_failure(
+        self,
+        attempt: int,
+        label: str,
+        last_error: Exception | None,
+    ) -> None:
+        if attempt >= self._max_attempts:
+            return
+
+        logger.warning(
+            "OpenRouter attempt %d/%d failed for %s: %s; retrying",
+            attempt,
+            self._max_attempts,
+            label,
+            last_error,
+        )
+
+        await asyncio.sleep(0.5 * attempt)
+
+    async def _request_content(
+        self,
+        request: LLMRequest,
+        payload: dict,
+    ) -> str:
+        async with asyncio.timeout(self._inference_timeout_seconds):
+            response = await self._client.post(
+                "/chat/completions",
+                json=payload,
+            )
+
+        response.raise_for_status()
+
+        response_data = response.json()
+
+        if not isinstance(response_data, dict):
+            raise ValueError("OpenRouter response is not a JSON object")
+
+        response_provider = _response_provider(response_data)
+
+        content = _completion_content(response_data)
+
+        if len(content) > 20_000:
+            raise self._oversized_output_failure(response_provider, len(content))
+
+        if request.response_validator is not None:
+            try:
+                request.response_validator(content)
+            except LLMResponseValidationError as exc:
+                raise LLMResponseValidationError(
+                    str(exc),
+                    provider=response_provider,
+                ) from exc
+
+        return content
 
     def _build_payload(
         self,

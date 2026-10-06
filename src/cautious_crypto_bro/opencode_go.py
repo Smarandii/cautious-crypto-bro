@@ -179,37 +179,11 @@ class OpenCodeGoProvider:
             started = time.monotonic()
 
             try:
-                async with asyncio.timeout(self._inference_timeout_seconds):
-                    response = await self._client.post(
-                        "/responses",
-                        json=payload,
-                        headers={
-                            "x-opencode-session": (session_id),
-                        },
-                    )
-
-                response.raise_for_status()
-
-                response_data = response.json()
-
-                if not isinstance(
-                    response_data,
-                    dict,
-                ):
-                    raise ValueError("OpenCode Go response is not a JSON object")
-
-                content = _response_text(response_data)
-
-                if len(content) > 20_000:
-                    raise ValueError(
-                        "OpenCode Go returned "
-                        "unexpectedly large structured "
-                        f"output ({len(content)} "
-                        "characters)"
-                    )
-
-                if request.response_validator is not None:
-                    request.response_validator(content)
+                content = await self._post_and_validate(
+                    request,
+                    payload,
+                    session_id,
+                )
 
             except TimeoutError:
                 elapsed = time.monotonic() - started
@@ -232,18 +206,12 @@ class OpenCodeGoProvider:
                 )
 
             except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code
-                body = exc.response.text.strip()
+                failure = self._retryable_status_failure(exc)
 
-                if len(body) > 4000:
-                    body = body[:4000] + "..."
+                if failure is None:
+                    raise RuntimeError(self._status_message(exc)) from exc
 
-                message = f"OpenCode Go HTTP {status}" + (f": {body}" if body else "")
-
-                if status != 429 and status < 500:
-                    raise RuntimeError(message) from exc
-
-                last_error = RuntimeError(message)
+                last_error = failure
 
             except (
                 KeyError,
@@ -287,3 +255,65 @@ class OpenCodeGoProvider:
             f"{self._max_attempts} attempt(s): "
             f"{last_error}"
         ) from last_error
+
+    async def _post_and_validate(
+        self,
+        request: LLMRequest,
+        payload: dict,
+        session_id: str,
+    ) -> str:
+        async with asyncio.timeout(self._inference_timeout_seconds):
+            response = await self._client.post(
+                "/responses",
+                json=payload,
+                headers={
+                    "x-opencode-session": (session_id),
+                },
+            )
+
+        response.raise_for_status()
+
+        response_data = response.json()
+
+        if not isinstance(
+            response_data,
+            dict,
+        ):
+            raise ValueError("OpenCode Go response is not a JSON object")
+
+        content = _response_text(response_data)
+
+        if len(content) > 20_000:
+            raise ValueError(
+                "OpenCode Go returned "
+                "unexpectedly large structured "
+                f"output ({len(content)} "
+                "characters)"
+            )
+
+        if request.response_validator is not None:
+            request.response_validator(content)
+
+        return content
+
+    @staticmethod
+    def _status_message(exc: httpx.HTTPStatusError) -> str:
+        body = exc.response.text.strip()
+
+        if len(body) > 4000:
+            body = body[:4000] + "..."
+
+        return f"OpenCode Go HTTP {exc.response.status_code}" + (
+            f": {body}" if body else ""
+        )
+
+    @staticmethod
+    def _retryable_status_failure(
+        exc: httpx.HTTPStatusError,
+    ) -> RuntimeError | None:
+        status = exc.response.status_code
+
+        if status != 429 and status < 500:
+            return None
+
+        return RuntimeError(OpenCodeGoProvider._status_message(exc))
