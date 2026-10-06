@@ -535,11 +535,3 @@ class SignalContextProviderStore(
     Protocol,
 ):
     """Everything SignalContextProvider needs from durable storage."""
-
-
-class MainStore(
-    SourceRepository,
-    RecoveryRepository,
-    Protocol,
-):
-    """Everything the composition root needs for startup."""
