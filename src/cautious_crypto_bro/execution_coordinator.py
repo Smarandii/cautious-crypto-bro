@@ -131,70 +131,18 @@ class ExecutionCoordinator:
         action: PositionActionIntent,
         result: PositionActionExecutionResult,
     ) -> None:
-        expected_remaining: Decimal | None = None
-
-        if action.action is PositionActionType.REDUCE:
-            submitted = result.submitted_quantity
-
-            if submitted is None:
-                raise PositionActionConfirmationError(
-                    "REDUCE returned no submitted quantity"
-                )
-
-            expected_remaining = result.position_size_before - submitted
-
-            if expected_remaining <= 0:
-                raise PositionActionConfirmationError(
-                    "REDUCE confirmation geometry is invalid"
-                )
+        expected_remaining = self._expected_remaining(action, result)
 
         for attempt in range(20):
             state = await self._executor.account_state()
 
-            positions = tuple(
-                position
-                for position in state.positions
-                if (position.symbol == action.symbol)
-            )
-
-            if action.action is PositionActionType.CLOSE:
-                if not positions:
-                    return
-
-                if len(positions) != 1:
-                    raise PositionActionConfirmationError(
-                        "CLOSE confirmation found multiple live positions"
-                    )
-
-                position = positions[0]
-
-                if position.side is not result.position_side:
-                    raise PositionActionConfirmationError(
-                        "CLOSE confirmation found opposite-side exposure"
-                    )
-
-            else:
-                assert expected_remaining is not None
-
-                if not positions:
-                    raise PositionActionConfirmationError(
-                        "REDUCE unexpectedly closed the full position"
-                    )
-
-                if len(positions) != 1:
-                    raise PositionActionConfirmationError(
-                        "REDUCE confirmation found multiple live positions"
-                    )
-
-                position = positions[0]
-
-                if position.side is not result.position_side:
-                    raise PositionActionConfirmationError(
-                        "REDUCE confirmation found opposite-side exposure"
-                    )
-
-                if position.size <= expected_remaining:
-                    return
+            if self._confirms_position_action(
+                action,
+                result,
+                state,
+                expected_remaining,
+            ):
+                return
 
             if attempt < 19:
                 await asyncio.sleep(0.25)
@@ -207,6 +155,74 @@ class ExecutionCoordinator:
         raise PositionActionConfirmationError(
             f"Bybit accepted position action {result.order_id}, but {detail}"
         )
+
+    @staticmethod
+    def _expected_remaining(
+        action: PositionActionIntent,
+        result: PositionActionExecutionResult,
+    ) -> Decimal | None:
+        if action.action is not PositionActionType.REDUCE:
+            return None
+
+        submitted = result.submitted_quantity
+
+        if submitted is None:
+            raise PositionActionConfirmationError(
+                "REDUCE returned no submitted quantity"
+            )
+
+        expected_remaining = result.position_size_before - submitted
+
+        if expected_remaining <= 0:
+            raise PositionActionConfirmationError(
+                "REDUCE confirmation geometry is invalid"
+            )
+
+        return expected_remaining
+
+    @staticmethod
+    def _confirms_position_action(
+        action: PositionActionIntent,
+        result: PositionActionExecutionResult,
+        state: AccountStateSummary,
+        expected_remaining: Decimal | None,
+    ) -> bool:
+        positions = tuple(
+            position
+            for position in state.positions
+            if (position.symbol == action.symbol)
+        )
+
+        label = action.action.value
+
+        if action.action is PositionActionType.CLOSE:
+            if not positions:
+                return True
+
+        else:
+            if not positions:
+                raise PositionActionConfirmationError(
+                    "REDUCE unexpectedly closed the full position"
+                )
+
+        if len(positions) != 1:
+            raise PositionActionConfirmationError(
+                f"{label} confirmation found multiple live positions"
+            )
+
+        position = positions[0]
+
+        if position.side is not result.position_side:
+            raise PositionActionConfirmationError(
+                f"{label} confirmation found opposite-side exposure"
+            )
+
+        if action.action is PositionActionType.CLOSE:
+            return False
+
+        assert expected_remaining is not None
+
+        return position.size <= expected_remaining
 
     async def execute_intent(
         self,
