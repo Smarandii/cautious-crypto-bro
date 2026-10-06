@@ -391,6 +391,57 @@ def render_account_state(
             "The approval card follows normally."
         )
 
+    lines = [
+        "📊 <b>BYBIT DEMO — ACCOUNT</b>",
+        "",
+        "<b>Account P&amp;L</b>",
+    ]
+
+    lines.extend(_account_pnl_lines(state, pnl, pnl_error))
+    lines.extend(_open_position_lines(state))
+    lines.extend(_pending_order_lines(state))
+
+    return "\n".join(lines)
+
+
+def _account_pnl_lines(
+    state: AccountStateSummary,
+    pnl: AccountPnlSummary | None,
+    pnl_error: str | None,
+) -> list[str]:
+    if pnl is not None:
+        combined = pnl.realized_pnl + state.unrealised_pnl
+
+        return [
+            (f"Realized (tracked): <b>{fmt_signed(pnl.realized_pnl)} USDT</b>"),
+            (f"Live uPnL (Bybit): <b>{fmt_signed(state.unrealised_pnl)} USDT</b>"),
+            (f"Combined: <b>{fmt_signed(combined)} USDT</b>"),
+            (
+                "History: since "
+                f"<b>{pnl.history_start_at.date().isoformat()}</b>"
+                " · "
+                f"{pnl.record_count} realized record(s)"
+                " · "
+                f"{pnl.positive_count} positive"
+                " / "
+                f"{pnl.negative_count} negative"
+            ),
+            "",
+        ]
+
+    if pnl_error is not None:
+        tracked = "unavailable"
+    else:
+        tracked = "not synced"
+
+    return [
+        f"Realized (tracked): <b>{tracked}</b>",
+        (f"Live uPnL (Bybit): <b>{fmt_signed(state.unrealised_pnl)} USDT</b>"),
+        "",
+    ]
+
+
+def _open_position_lines(state: AccountStateSummary) -> list[str]:
     total_notional = sum(
         (position.size * position.mark_price for position in state.positions),
         Decimal("0"),
@@ -399,110 +450,65 @@ def render_account_state(
     position_word = "position" if len(state.positions) == 1 else "positions"
 
     lines = [
-        "📊 <b>BYBIT DEMO — ACCOUNT</b>",
-        "",
+        (
+            f"<b>{len(state.positions)} "
+            f"{position_word}</b>"
+            " · Notional ≈ "
+            f"<b>{total_notional:.2f} USDT</b>"
+        ),
     ]
 
-    lines.append("<b>Account P&amp;L</b>")
-
-    if pnl is not None:
-        combined = pnl.realized_pnl + state.unrealised_pnl
-
-        lines.extend(
-            [
-                (f"Realized (tracked): <b>{fmt_signed(pnl.realized_pnl)} USDT</b>"),
-                (f"Live uPnL (Bybit): <b>{fmt_signed(state.unrealised_pnl)} USDT</b>"),
-                (f"Combined: <b>{fmt_signed(combined)} USDT</b>"),
-                (
-                    "History: since "
-                    f"<b>{pnl.history_start_at.date().isoformat()}</b>"
-                    " · "
-                    f"{pnl.record_count} realized record(s)"
-                    " · "
-                    f"{pnl.positive_count} positive"
-                    " / "
-                    f"{pnl.negative_count} negative"
-                ),
-                "",
-            ]
-        )
-
-    elif pnl_error is not None:
-        lines.extend(
-            [
-                "Realized (tracked): <b>unavailable</b>",
-                (f"Live uPnL (Bybit): <b>{fmt_signed(state.unrealised_pnl)} USDT</b>"),
-                "",
-            ]
-        )
-
-    else:
-        lines.extend(
-            [
-                "Realized (tracked): <b>not synced</b>",
-                (f"Live uPnL (Bybit): <b>{fmt_signed(state.unrealised_pnl)} USDT</b>"),
-                "",
-            ]
-        )
-
-    lines.extend(
-        [
-            (
-                f"<b>{len(state.positions)} "
-                f"{position_word}</b>"
-                " · Notional ≈ "
-                f"<b>{total_notional:.2f} USDT</b>"
-            ),
-        ]
-    )
-
-    if state.positions:
-        for position in state.positions[:6]:
-            notional = position.size * position.mark_price
-
-            lines.extend(
-                [
-                    "",
-                    (
-                        f"<b>{html.escape(position.symbol)} "
-                        f"{html.escape(position.side.value)}</b>"
-                        " · "
-                        f"{fmt_decimal(position.size)}"
-                        " · ≈ "
-                        f"{notional:.2f} USDT"
-                    ),
-                    (
-                        "Entry "
-                        f"{fmt_decimal(position.avg_price)}"
-                        " → Mark "
-                        f"{fmt_decimal(position.mark_price)}"
-                        " · uPnL "
-                        f"{fmt_signed(position.unrealised_pnl)} "
-                        "USDT"
-                    ),
-                    render_position_protection(
-                        position,
-                        state.open_orders,
-                    ),
-                ]
-            )
-
-        if len(state.positions) > 6:
-            lines.extend(
-                [
-                    "",
-                    (f"… +{len(state.positions) - 6} more positions"),
-                ]
-            )
-
-    else:
+    if not state.positions:
         lines.extend(
             [
                 "",
                 "No open positions.",
             ]
         )
+        return lines
 
+    for position in state.positions[:6]:
+        notional = position.size * position.mark_price
+
+        lines.extend(
+            [
+                "",
+                (
+                    f"<b>{html.escape(position.symbol)} "
+                    f"{html.escape(position.side.value)}</b>"
+                    " · "
+                    f"{fmt_decimal(position.size)}"
+                    " · ≈ "
+                    f"{notional:.2f} USDT"
+                ),
+                (
+                    "Entry "
+                    f"{fmt_decimal(position.avg_price)}"
+                    " → Mark "
+                    f"{fmt_decimal(position.mark_price)}"
+                    " · uPnL "
+                    f"{fmt_signed(position.unrealised_pnl)} "
+                    "USDT"
+                ),
+                render_position_protection(
+                    position,
+                    state.open_orders,
+                ),
+            ]
+        )
+
+    if len(state.positions) > 6:
+        lines.extend(
+            [
+                "",
+                (f"… +{len(state.positions) - 6} more positions"),
+            ]
+        )
+
+    return lines
+
+
+def _pending_order_lines(state: AccountStateSummary) -> list[str]:
     entry_count = sum(
         1
         for order in state.open_orders
@@ -525,21 +531,17 @@ def render_account_state(
         if order.kind == "REDUCE" and not order.is_v2_take_profit
     )
 
-    lines.extend(
-        [
-            "",
-            (
-                "Pending orders: "
-                f"<b>{entry_count}</b> entry"
-                " · "
-                f"<b>{protective_count}</b> protective"
-                " · "
-                f"<b>{reduce_count}</b> reduce/close"
-            ),
-        ]
-    )
-
-    return "\n".join(lines)
+    return [
+        "",
+        (
+            "Pending orders: "
+            f"<b>{entry_count}</b> entry"
+            " · "
+            f"<b>{protective_count}</b> protective"
+            " · "
+            f"<b>{reduce_count}</b> reduce/close"
+        ),
+    ]
 
 
 def render(
