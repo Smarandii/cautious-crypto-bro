@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
+from uuid import UUID
 
 from .approval_bot import ApprovalBot
 from .bybit import BybitDemoExecutor
-from .config import get_settings
+from .config import Settings, get_settings
 from .execution import ExecutionPlanner
 from .execution_coordinator import ExecutionCoordinator
 from .llm_factory import build_intent_extractor
+from .ports import IntentExtractor
 from .position_supervisor import PositionSupervisor
 from .runtime_store import RedisRuntimeStore
 from .service import SignalService
@@ -45,13 +48,53 @@ async def async_main() -> None:
             stale_sources,
         )
 
+    runtime_store = await _build_runtime_store(settings)
+
+    runtime = await _build_runtime(
+        settings,
+        store=store,
+        runtime_store=runtime_store,
+    )
+
+    try:
+        await _run_application(
+            runtime,
+            interrupted_intents=interrupted_intents,
+            interrupted_actions=interrupted_actions,
+        )
+    finally:
+        await _close_runtime(runtime)
+
+
+@dataclass(frozen=True, slots=True)
+class _Runtime:
+    """Every collaborator the process needs, wired once at startup."""
+
+    runtime_store: RedisRuntimeStore
+    extractor: IntentExtractor
+    executor: BybitDemoExecutor
+    bot: ApprovalBot
+    supervisor: PositionSupervisor
+    service: SignalService
+    source: TelegramSource
+
+
+async def _build_runtime_store(settings: Settings) -> RedisRuntimeStore:
     runtime_store = RedisRuntimeStore(
         settings.redis_url,
         max_connections=(settings.redis_max_connections),
         pool_timeout_seconds=(settings.redis_pool_timeout_seconds),
     )
     await runtime_store.initialize()
+    return runtime_store
 
+
+async def _build_runtime(
+    settings: Settings,
+    *,
+    store: IntentStore,
+    runtime_store: RedisRuntimeStore,
+) -> _Runtime:
     extractor = build_intent_extractor(
         settings,
         evaluation_cache=runtime_store,
@@ -117,42 +160,60 @@ async def async_main() -> None:
         catchup_interval_seconds=(settings.telegram_catchup_interval_seconds),
     )
 
+    return _Runtime(
+        runtime_store=runtime_store,
+        extractor=extractor,
+        executor=executor,
+        bot=bot,
+        supervisor=supervisor,
+        service=service,
+        source=source,
+    )
+
+
+async def _run_application(
+    runtime: _Runtime,
+    *,
+    interrupted_intents: tuple[UUID, ...],
+    interrupted_actions: tuple[UUID, ...],
+) -> None:
+    await runtime.bot.start()
     try:
-        await bot.start()
-        try:
-            await bot.send_recovery_warning(
-                uncertain_intents=len(interrupted_intents),
-                uncertain_actions=len(interrupted_actions),
-            )
-        except Exception:
-            logging.getLogger(__name__).exception(
-                "Failed to send interrupted-execution recovery warning"
-            )
+        await runtime.bot.send_recovery_warning(
+            uncertain_intents=len(interrupted_intents),
+            uncertain_actions=len(interrupted_actions),
+        )
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Failed to send interrupted-execution recovery warning"
+        )
 
-        # Quarantine is durable before the first supervisor reconciliation.
-        # Fail startup if the resulting account-state reconciliation fails.
-        await supervisor.reconcile_once()
-        await service.recover_auto_execution()
-        # AUTO recovery may open new positions; protect them before ingestion.
-        await supervisor.reconcile_once()
+    # Quarantine is durable before the first supervisor reconciliation.
+    # Fail startup if the resulting account-state reconciliation fails.
+    await runtime.supervisor.reconcile_once()
+    await runtime.service.recover_auto_execution()
+    # AUTO recovery may open new positions; protect them before ingestion.
+    await runtime.supervisor.reconcile_once()
 
-        async with asyncio.TaskGroup() as tg:
-            # Approval callbacks must already be active
-            # while startup lookback is creating cards.
-            tg.create_task(bot.run())
-            tg.create_task(supervisor.run())
-            tg.create_task(service.run_manual_delivery_recovery())
+    async with asyncio.TaskGroup() as tg:
+        # Approval callbacks must already be active
+        # while startup lookback is creating cards.
+        tg.create_task(runtime.bot.run())
+        tg.create_task(runtime.supervisor.run())
+        tg.create_task(runtime.service.run_manual_delivery_recovery())
 
-            await source.start()
+        await runtime.source.start()
 
-            tg.create_task(source.run_until_disconnected())
-            tg.create_task(source.run_catchup())
-    finally:
-        await source.disconnect()
-        await bot.close()
-        await extractor.close()
-        await runtime_store.close()
-        executor.close()
+        tg.create_task(runtime.source.run_until_disconnected())
+        tg.create_task(runtime.source.run_catchup())
+
+
+async def _close_runtime(runtime: _Runtime) -> None:
+    await runtime.source.disconnect()
+    await runtime.bot.close()
+    await runtime.extractor.close()
+    await runtime.runtime_store.close()
+    runtime.executor.close()
 
 
 def main() -> None:

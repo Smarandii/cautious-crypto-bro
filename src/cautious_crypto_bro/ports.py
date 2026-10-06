@@ -175,6 +175,8 @@ class IntentExtractor(Protocol):
         position_context: SignalPositionContext | None = None,
     ) -> SignalExtraction: ...
 
+    async def close(self) -> None: ...
+
 
 class ExecutionCoordinator(Protocol):
     def auto_open_safety_reason(
