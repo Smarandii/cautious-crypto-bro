@@ -198,43 +198,7 @@ class OpenRouterProvider:
         self,
         request: LLMRequest,
     ) -> LLMResponse:
-        payload = {
-            "model": self._model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": request.system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": self._user_content(request),
-                },
-            ],
-            "max_tokens": request.max_tokens,
-            "reasoning": {
-                "effort": "none",
-            },
-            "provider": {
-                "sort": "latency",
-                "require_parameters": True,
-                "allow_fallbacks": True,
-                "ignore": list(STATIC_IGNORED_PROVIDERS),
-            },
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": request.response_schema_name,
-                    "strict": True,
-                    "schema": strict_response_schema(request.response_schema)
-                    if self._model == "openai/gpt-5.6-luna"
-                    else request.response_schema,
-                },
-            },
-        }
-
-        # Luna does not support temperature; strict routing rejects that parameter.
-        if self._model != "openai/gpt-5.6-luna":
-            payload["temperature"] = request.temperature
+        payload = self._build_payload(request)
 
         last_error: Exception | None = None
 
@@ -281,19 +245,9 @@ class OpenRouterProvider:
                 content = _completion_content(response_data)
 
                 if len(content) > 20_000:
-                    message = (
-                        "OpenRouter returned unexpectedly "
-                        "large structured output "
-                        f"({len(content)} characters)"
+                    raise self._oversized_output_failure(
+                        response_provider, len(content)
                     )
-
-                    if response_provider is not None:
-                        raise OpenRouterProviderFailure(
-                            response_provider,
-                            message,
-                        )
-
-                    raise ValueError(message)
 
                 if request.response_validator is not None:
                     request.response_validator(content)
@@ -308,20 +262,10 @@ class OpenRouterProvider:
                 )
 
             except LLMResponseValidationError as exc:
-                message = "OpenRouter returned invalid structured output"
-
-                if response_provider is not None:
-                    provider = response_provider.strip().casefold()
-
-                    if provider:
-                        ignored_providers.add(provider)
-
-                    last_error = OpenRouterProviderFailure(
-                        response_provider,
-                        message,
-                    )
-                else:
-                    last_error = RuntimeError(message)
+                last_error = self._validation_failure(
+                    response_provider,
+                    ignored_providers,
+                )
 
                 logger.warning(
                     "Invalid OpenRouter structured output for %s on attempt %d/%d: %s",
@@ -347,32 +291,15 @@ class OpenRouterProvider:
 
                 last_error = exc
 
-                if status >= 500:
-                    try:
-                        error_data = exc.response.json()
-                    except ValueError:
-                        error_data = None
+                failure = self._status_provider_failure(exc)
 
-                    if isinstance(error_data, dict):
-                        provider = _response_provider(error_data)
+                if failure is not None:
+                    last_error = failure
 
-                        if provider is not None:
-                            failure = OpenRouterProviderFailure(
-                                provider,
-                                (
-                                    "OpenRouter HTTP "
-                                    f"{status} provider "
-                                    "failure: "
-                                    f"provider={provider}"
-                                ),
-                            )
-
-                            last_error = failure
-
-                            await self._cooldown_provider(
-                                failure,
-                                ignored_providers,
-                            )
+                    await self._cooldown_provider(
+                        failure,
+                        ignored_providers,
+                    )
 
             except (
                 KeyError,
@@ -416,3 +343,113 @@ class OpenRouterProvider:
             f"{self._max_attempts} attempt(s): "
             f"{last_error}"
         ) from last_error
+
+    def _build_payload(
+        self,
+        request: LLMRequest,
+    ) -> dict:
+        payload = {
+            "model": self._model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": request.system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": self._user_content(request),
+                },
+            ],
+            "max_tokens": request.max_tokens,
+            "reasoning": {
+                "effort": "none",
+            },
+            "provider": {
+                "sort": "latency",
+                "require_parameters": True,
+                "allow_fallbacks": True,
+                "ignore": list(STATIC_IGNORED_PROVIDERS),
+            },
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": request.response_schema_name,
+                    "strict": True,
+                    "schema": strict_response_schema(request.response_schema)
+                    if self._model == "openai/gpt-5.6-luna"
+                    else request.response_schema,
+                },
+            },
+        }
+
+        # Luna does not support temperature; strict routing rejects that parameter.
+        if self._model != "openai/gpt-5.6-luna":
+            payload["temperature"] = request.temperature
+
+        return payload
+
+    def _oversized_output_failure(
+        self,
+        response_provider: str | None,
+        length: int,
+    ) -> Exception:
+        message = (
+            "OpenRouter returned unexpectedly "
+            "large structured output "
+            f"({length} characters)"
+        )
+
+        if response_provider is not None:
+            return OpenRouterProviderFailure(
+                response_provider,
+                message,
+            )
+
+        return ValueError(message)
+
+    def _validation_failure(
+        self,
+        response_provider: str | None,
+        ignored_providers: set[str],
+    ) -> Exception:
+        message = "OpenRouter returned invalid structured output"
+
+        if response_provider is None:
+            return RuntimeError(message)
+
+        provider = response_provider.strip().casefold()
+
+        if provider:
+            ignored_providers.add(provider)
+
+        return OpenRouterProviderFailure(
+            response_provider,
+            message,
+        )
+
+    def _status_provider_failure(
+        self,
+        exc: httpx.HTTPStatusError,
+    ) -> OpenRouterProviderFailure | None:
+        status = exc.response.status_code
+
+        if status < 500:
+            return None
+
+        try:
+            error_data = exc.response.json()
+        except ValueError:
+            return None
+
+        if not isinstance(error_data, dict):
+            return None
+
+        provider = _response_provider(error_data)
+
+        if provider is None:
+            return None
+
+        return OpenRouterProviderFailure(
+            provider,
+            (f"OpenRouter HTTP {status} provider failure: provider={provider}"),
+        )
