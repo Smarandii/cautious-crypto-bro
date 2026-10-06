@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import (
     ROUND_CEILING,
@@ -51,6 +52,21 @@ class TakeProfitRequest:
     collapsed_targets_error: str
 
 
+def _weighted_entry(orders: Sequence[PlannedOrder]) -> Decimal:
+    total_quantity = sum(
+        (order.quantity for order in orders),
+        Decimal("0"),
+    )
+
+    return (
+        sum(
+            (order.reference_price * order.quantity for order in orders),
+            Decimal("0"),
+        )
+        / total_quantity
+    )
+
+
 class ExecutionPlanner:
     def plan(
         self,
@@ -82,44 +98,14 @@ class ExecutionPlanner:
             context.market_price,
         )
 
-        orders = tuple(
-            self._planned_order(
-                spec,
-                policy,
-                context,
-                stop_loss,
-            )
-            for spec in entry_specs
+        orders, planned_max_loss = self._risk_checked_orders(
+            entry_specs,
+            policy,
+            context,
+            stop_loss,
         )
 
-        planned_max_loss = sum(
-            (
-                order.quantity * abs(order.reference_price - stop_loss)
-                for order in orders
-            ),
-            Decimal("0"),
-        )
-
-        if planned_max_loss <= 0:
-            raise ExecutionPlanningError("Planned maximum loss must be positive")
-
-        if planned_max_loss > policy.risk_budget_usdt:
-            raise ExecutionPlanningError(
-                "Strategy V2 entry ladder exceeds the configured risk budget"
-            )
-
-        total_quantity = sum(
-            (order.quantity for order in orders),
-            Decimal("0"),
-        )
-
-        weighted_entry = (
-            sum(
-                (order.reference_price * order.quantity for order in orders),
-                Decimal("0"),
-            )
-            / total_quantity
-        )
+        weighted_entry = _weighted_entry(orders)
 
         (
             take_profit_targets,
@@ -171,6 +157,58 @@ class ExecutionPlanner:
             policy=policy.model_copy(deep=True),
             planned_max_loss_usdt=(planned_max_loss),
         )
+
+    def _risk_checked_orders(
+        self,
+        entry_specs: tuple[
+            EntrySpec,
+            EntrySpec,
+            EntrySpec,
+        ],
+        policy: ExecutionPolicy,
+        context: InstrumentContext,
+        stop_loss: Decimal,
+    ) -> tuple[
+        tuple[PlannedOrder, PlannedOrder, PlannedOrder],
+        Decimal,
+    ]:
+        (
+            primary,
+            secondary,
+            tertiary,
+        ) = (
+            self._planned_order(
+                spec,
+                policy,
+                context,
+                stop_loss,
+            )
+            for spec in entry_specs
+        )
+
+        orders = (
+            primary,
+            secondary,
+            tertiary,
+        )
+
+        planned_max_loss = sum(
+            (
+                order.quantity * abs(order.reference_price - stop_loss)
+                for order in orders
+            ),
+            Decimal("0"),
+        )
+
+        if planned_max_loss <= 0:
+            raise ExecutionPlanningError("Planned maximum loss must be positive")
+
+        if planned_max_loss > policy.risk_budget_usdt:
+            raise ExecutionPlanningError(
+                "Strategy V2 entry ladder exceeds the configured risk budget"
+            )
+
+        return orders, planned_max_loss
 
     def _resolve_stop_loss(
         self,
@@ -370,18 +408,7 @@ class ExecutionPlanner:
                 "Actual-fill V2 plan exceeds the configured risk budget"
             )
 
-        total_quantity = sum(
-            (order.quantity for order in orders),
-            Decimal("0"),
-        )
-
-        weighted_entry = (
-            sum(
-                (order.reference_price * order.quantity for order in orders),
-                Decimal("0"),
-            )
-            / total_quantity
-        )
+        weighted_entry = _weighted_entry(orders)
 
         target_tuple, take_profit_source, trader_target = self._resolve_rebase_targets(
             plan,
@@ -616,60 +643,94 @@ class ExecutionPlanner:
         entry = intent.entry
 
         if entry.type is EntryType.RANGE:
-            assert entry.range_low is not None
-            assert entry.range_high is not None
+            prices = self._range_entry_prices(intent, context)
 
-            low = Decimal(str(entry.range_low))
-            high = Decimal(str(entry.range_high))
+            primary_type = ExecutionOrderType.LIMIT
 
-            middle = (low + high) / Decimal("2")
-
-            if intent.side is Side.LONG:
-                raw_prices = (
-                    high,
-                    middle,
-                    low,
-                )
-            else:
-                raw_prices = (
-                    low,
-                    middle,
-                    high,
-                )
-
-            prices = tuple(
-                self._round_price(
-                    price,
-                    context.tick_size,
-                )
-                for price in raw_prices
+        else:
+            prices, primary_type = self._ladder_entry_prices(
+                intent,
+                strategy,
+                context,
+                stop_loss,
             )
 
-            if len(set(prices)) != 3:
-                raise ExecutionPlanningError(
-                    "Entry range is too narrow for three distinct V2 legs"
-                )
+        return (
+            EntrySpec(
+                name="E1",
+                order_type=primary_type,
+                reference_price=prices[0],
+                risk_pct=weights[0],
+            ),
+            EntrySpec(
+                name="E2",
+                order_type=(ExecutionOrderType.LIMIT),
+                reference_price=prices[1],
+                risk_pct=weights[1],
+            ),
+            EntrySpec(
+                name="E3",
+                order_type=(ExecutionOrderType.LIMIT),
+                reference_price=prices[2],
+                risk_pct=weights[2],
+            ),
+        )
 
-            return (
-                EntrySpec(
-                    name="E1",
-                    order_type=ExecutionOrderType.LIMIT,
-                    reference_price=prices[0],
-                    risk_pct=weights[0],
-                ),
-                EntrySpec(
-                    name="E2",
-                    order_type=ExecutionOrderType.LIMIT,
-                    reference_price=prices[1],
-                    risk_pct=weights[1],
-                ),
-                EntrySpec(
-                    name="E3",
-                    order_type=ExecutionOrderType.LIMIT,
-                    reference_price=prices[2],
-                    risk_pct=weights[2],
-                ),
+    def _range_entry_prices(
+        self,
+        intent: TradingIntent,
+        context: InstrumentContext,
+    ) -> tuple[Decimal, Decimal, Decimal]:
+        entry = intent.entry
+
+        assert entry.range_low is not None
+        assert entry.range_high is not None
+
+        low = Decimal(str(entry.range_low))
+        high = Decimal(str(entry.range_high))
+
+        middle = (low + high) / Decimal("2")
+
+        if intent.side is Side.LONG:
+            raw_prices = (
+                high,
+                middle,
+                low,
             )
+        else:
+            raw_prices = (
+                low,
+                middle,
+                high,
+            )
+
+        prices = tuple(
+            self._round_price(
+                price,
+                context.tick_size,
+            )
+            for price in raw_prices
+        )
+
+        if len(set(prices)) != 3:
+            raise ExecutionPlanningError(
+                "Entry range is too narrow for three distinct V2 legs"
+            )
+
+        return (
+            prices[0],
+            prices[1],
+            prices[2],
+        )
+
+    def _ladder_entry_prices(
+        self,
+        intent: TradingIntent,
+        strategy: StrategyV2Policy,
+        context: InstrumentContext,
+        stop_loss: Decimal,
+    ) -> tuple[tuple[Decimal, Decimal, Decimal], ExecutionOrderType]:
+        entry = intent.entry
 
         if entry.type is EntryType.MARKET:
             primary_price = context.market_price
@@ -714,26 +775,7 @@ class ExecutionPlanner:
                 "V2 entry levels collapse after tick-size rounding"
             )
 
-        return (
-            EntrySpec(
-                name="E1",
-                order_type=primary_type,
-                reference_price=primary_price,
-                risk_pct=weights[0],
-            ),
-            EntrySpec(
-                name="E2",
-                order_type=(ExecutionOrderType.LIMIT),
-                reference_price=second,
-                risk_pct=weights[1],
-            ),
-            EntrySpec(
-                name="E3",
-                order_type=(ExecutionOrderType.LIMIT),
-                reference_price=third,
-                risk_pct=weights[2],
-            ),
-        )
+        return prices, primary_type
 
     def _planned_order(
         self,
