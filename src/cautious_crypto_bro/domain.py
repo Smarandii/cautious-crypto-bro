@@ -688,15 +688,7 @@ class TradingIntent(BaseModel):
         self.symbol = _normalize_usdt_symbol(self.symbol)
 
         if self.entry.type is EntryType.MARKET:
-            if self.take_profit is None or self.stop_loss is None:
-                return self
-
-            if self.side is Side.LONG and not self.stop_loss < self.take_profit:
-                raise ValueError("LONG requires stop_loss < take_profit")
-
-            if self.side is Side.SHORT and not self.take_profit < self.stop_loss:
-                raise ValueError("SHORT requires take_profit < stop_loss")
-
+            self._validate_market_targets()
             return self
 
         if self.entry.type is EntryType.LIMIT:
@@ -725,6 +717,16 @@ class TradingIntent(BaseModel):
                 raise ValueError("SHORT requires take_profit below entry/range")
 
         return self
+
+    def _validate_market_targets(self) -> None:
+        if self.take_profit is None or self.stop_loss is None:
+            return
+
+        if self.side is Side.LONG and not self.stop_loss < self.take_profit:
+            raise ValueError("LONG requires stop_loss < take_profit")
+
+        if self.side is Side.SHORT and not self.take_profit < self.stop_loss:
+            raise ValueError("SHORT requires take_profit < stop_loss")
 
 
 class PositionActionIntent(BaseModel):
@@ -1184,53 +1186,57 @@ class ExecutionPlan(BaseModel):
             raise ValueError("Execution plan exceeds configured risk budget")
 
         if self.strategy_version >= 2:
-            if len(self.orders) != 3:
-                raise ValueError("Strategy V2 requires exactly three entry legs")
+            self._validate_v2_ladder()
 
-            if tuple(order.name for order in self.orders) != (
-                "E1",
-                "E2",
-                "E3",
-            ):
-                raise ValueError("Strategy V2 entries must be E1, E2, E3")
-
-            if any(order.risk_pct is None for order in self.orders):
-                raise ValueError("Strategy V2 entries require risk allocations")
-
-            entry_risk_total = sum(
-                (order.risk_pct for order in self.orders if order.risk_pct is not None),
-                Decimal("0"),
-            )
-
-            if entry_risk_total != Decimal("100"):
-                raise ValueError("Strategy V2 entry risk allocations must total 100")
-
-            if any(order.take_profit is not None for order in self.orders):
-                raise ValueError("Strategy V2 entry orders must not own take profits")
-
-            if len(self.take_profit_targets) != 3:
-                raise ValueError("Strategy V2 requires exactly three fixed exits")
-
-            total_close_pct = sum(
-                (target.close_pct for target in self.take_profit_targets),
-                Decimal("0"),
-            )
-
-            if total_close_pct + self.runner_pct != Decimal("100"):
-                raise ValueError("Strategy V2 fixed exits and runner must total 100")
-
-            return self
-
-        if self.take_profit_targets:
-            total_close_pct = sum(
-                (target.close_pct for target in self.take_profit_targets),
-                Decimal("0"),
-            )
-
-            if total_close_pct != Decimal("100"):
-                raise ValueError("Planned TP close percentages must total 100")
+        elif self.take_profit_targets:
+            self._validate_target_percentages_total_100()
 
         return self
+
+    def _validate_v2_ladder(self) -> None:
+        if len(self.orders) != 3:
+            raise ValueError("Strategy V2 requires exactly three entry legs")
+
+        if tuple(order.name for order in self.orders) != (
+            "E1",
+            "E2",
+            "E3",
+        ):
+            raise ValueError("Strategy V2 entries must be E1, E2, E3")
+
+        if any(order.risk_pct is None for order in self.orders):
+            raise ValueError("Strategy V2 entries require risk allocations")
+
+        entry_risk_total = sum(
+            (order.risk_pct for order in self.orders if order.risk_pct is not None),
+            Decimal("0"),
+        )
+
+        if entry_risk_total != Decimal("100"):
+            raise ValueError("Strategy V2 entry risk allocations must total 100")
+
+        if any(order.take_profit is not None for order in self.orders):
+            raise ValueError("Strategy V2 entry orders must not own take profits")
+
+        if len(self.take_profit_targets) != 3:
+            raise ValueError("Strategy V2 requires exactly three fixed exits")
+
+        total_close_pct = sum(
+            (target.close_pct for target in self.take_profit_targets),
+            Decimal("0"),
+        )
+
+        if total_close_pct + self.runner_pct != Decimal("100"):
+            raise ValueError("Strategy V2 fixed exits and runner must total 100")
+
+    def _validate_target_percentages_total_100(self) -> None:
+        total_close_pct = sum(
+            (target.close_pct for target in self.take_profit_targets),
+            Decimal("0"),
+        )
+
+        if total_close_pct != Decimal("100"):
+            raise ValueError("Planned TP close percentages must total 100")
 
 
 class PositionStrategy(BaseModel):
