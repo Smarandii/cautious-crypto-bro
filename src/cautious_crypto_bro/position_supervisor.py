@@ -8,9 +8,11 @@ from decimal import Decimal
 from uuid import UUID
 
 from .domain import (
+    AccountOrder,
     AccountPosition,
     AccountStateSummary,
     ExecutionPlan,
+    PlannedOrder,
     PositionStrategy,
     Side,
     StoreError,
@@ -673,6 +675,28 @@ class PositionSupervisor:
         account: AccountStateSummary,
         position: AccountPosition,
     ) -> str | None:
+        for check in (
+            self._unattributed_partial_stop,
+            self._owned_entry_drift,
+            self._size_increased_after_freeze,
+            self._average_changed_after_freeze,
+            self._protection_drift,
+            self._trailing_drift,
+        ):
+            reason = check(state, plan, account, position)
+
+            if reason is not None:
+                return reason
+
+        return None
+
+    def _unattributed_partial_stop(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+        position: AccountPosition,
+    ) -> str | None:
         # Bybit carries the originating entry's orderLinkId on attached
         # TP/SL orders. Stop price and side alone cannot prove ownership.
         expected_parents = {
@@ -688,44 +712,77 @@ class PositionSupervisor:
         ):
             return "unattributed partial stop-loss at the strategy stop; manual review required"
 
-        if not state.entry_frozen:
-            expected = {
-                self._fill_detector.entry_link_id(
-                    state,
-                    planned.name,
-                ): planned
-                for planned in plan.orders
-            }
+        return None
 
-            prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-e"
+    def _owned_entry_drift(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+        position: AccountPosition,
+    ) -> str | None:
+        if state.entry_frozen:
+            return None
 
-            for order in account.open_orders:
-                if (
-                    order.symbol != state.symbol
-                    or order.kind != "ENTRY"
-                    or not order.order_link_id.startswith(prefix)
-                ):
-                    continue
+        expected = {
+            self._fill_detector.entry_link_id(
+                state,
+                planned.name,
+            ): planned
+            for planned in plan.orders
+        }
 
-                planned = expected.get(order.order_link_id)
+        prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-e"
 
-                if planned is None:
-                    return f"unexpected owned V2 entry {order.order_link_id}"
+        for order in account.open_orders:
+            if (
+                order.symbol != state.symbol
+                or order.kind != "ENTRY"
+                or not order.order_link_id.startswith(prefix)
+            ):
+                continue
 
-                if order.side is not state.side:
-                    return f"owned entry side changed for {order.order_link_id}"
+            reason = self._entry_order_drift(state, order, expected)
 
-                if order.quantity != planned.quantity:
-                    return f"owned entry quantity changed for {order.order_link_id}"
+            if reason is not None:
+                return reason
 
-                if planned.price is not None and order.price != planned.price:
-                    return (
-                        "owned entry price changed "
-                        f"for {order.order_link_id}: "
-                        f"expected={planned.price}, "
-                        f"live={order.price}"
-                    )
+        return None
 
+    @staticmethod
+    def _entry_order_drift(
+        state: PositionStrategy,
+        order: AccountOrder,
+        expected: dict[str, PlannedOrder],
+    ) -> str | None:
+        planned = expected.get(order.order_link_id)
+
+        if planned is None:
+            return f"unexpected owned V2 entry {order.order_link_id}"
+
+        if order.side is not state.side:
+            return f"owned entry side changed for {order.order_link_id}"
+
+        if order.quantity != planned.quantity:
+            return f"owned entry quantity changed for {order.order_link_id}"
+
+        if planned.price is not None and order.price != planned.price:
+            return (
+                "owned entry price changed "
+                f"for {order.order_link_id}: "
+                f"expected={planned.price}, "
+                f"live={order.price}"
+            )
+
+        return None
+
+    @staticmethod
+    def _size_increased_after_freeze(
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+        position: AccountPosition,
+    ) -> str | None:
         if (
             state.entry_frozen
             and not state.rebalance_needed
@@ -734,6 +791,15 @@ class PositionSupervisor:
         ):
             return "position size increased after entry freeze"
 
+        return None
+
+    @staticmethod
+    def _average_changed_after_freeze(
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+        position: AccountPosition,
+    ) -> str | None:
         if (
             state.entry_frozen
             and not state.rebalance_needed
@@ -742,6 +808,15 @@ class PositionSupervisor:
         ):
             return "average entry changed after entry freeze"
 
+        return None
+
+    def _protection_drift(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+        position: AccountPosition,
+    ) -> str | None:
         if (
             state.protected_stop_loss is not None
             and position.stop_loss != state.protected_stop_loss
@@ -758,6 +833,15 @@ class PositionSupervisor:
                 f"live={position.stop_loss}"
             )
 
+        return None
+
+    @staticmethod
+    def _trailing_drift(
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+        position: AccountPosition,
+    ) -> str | None:
         if state.trailing_active:
             if state.trailing_distance is None:
                 return "persisted trailing state is inconsistent"
