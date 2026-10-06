@@ -84,6 +84,9 @@ Enforced by `ruff` (line length 88, `py312`) and `pyright` (basic mode):
 - Every new branch in `src/` needs a test that fails without it.
 - Deterministic time and ordering. No sleeps to synchronize.
 - Anything touching exchange responses needs a malformed/partial-payload case.
+- `uv run pytest -q` measures branch coverage and fails below the `fail_under`
+  floor in `pyproject.toml`. New code without tests drops the number and fails
+  the gate. Raise the floor when you improve coverage; never lower it.
 
 ## Commit and PR conventions
 

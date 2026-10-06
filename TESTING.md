@@ -16,6 +16,18 @@ uv run pre-commit run --all-files
 git diff --check
 ```
 
+`uv run pytest -q` always reports branch coverage and fails below the
+`fail_under` floor in `pyproject.toml`. The floor is a ratchet: it sits just
+under the measured value and is raised whenever coverage improves, so a drop
+fails the gate rather than passing unnoticed. Raise it, never lower it.
+
+To find what is untested:
+
+```sh
+uv run pytest -q --cov-report=html
+# report written to htmlcov/
+```
+
 Default pytest uses offline/mocked boundaries and real temporary SQLite.
 Live Demo testing is opt-in; passing tests does not prove complete reliability.
 
