@@ -120,6 +120,11 @@ class BybitAuth:
 
         signature_payload = timestamp + self._api_key + str(RECV_WINDOW_MS) + payload
 
+        # HMAC-SHA256, which is what the Bybit V5 API specifies. CodeQL's
+        # py/weak-sensitive-data-hashing rule flags SHA-256 here because it
+        # targets password hashing and does not distinguish HMAC from a bare
+        # digest. HMAC-SHA256 is not a weak choice, and the fix it appears to
+        # suggest -- a different hash function -- would break API auth.
         return hmac.new(
             self._api_secret.encode(),
             signature_payload.encode(),
