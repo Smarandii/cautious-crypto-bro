@@ -11,6 +11,8 @@ import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 database = (
@@ -19,6 +21,56 @@ database = (
     else ROOT / "data" / "cautious_crypto_bro.sqlite3"
 )
 output = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "docs" / "data.json"
+
+
+def btc_buy_hold(history_start_at: str | None, snapshot_at: datetime) -> dict | None:
+    if not history_start_at:
+        return None
+    start = datetime.fromisoformat(history_start_at).astimezone(UTC)
+    start_ms = int(start.timestamp() * 1000)
+    end_ms = int(snapshot_at.timestamp() * 1000)
+    rows: list[list[str]] = []
+    cursor = start_ms
+    hour_ms = 60 * 60 * 1000
+    while cursor <= end_ms:
+        query = urlencode(
+            {
+                "category": "linear",
+                "symbol": "BTCUSDT",
+                "interval": "60",
+                "start": cursor,
+                "end": min(cursor + hour_ms * 999, end_ms),
+                "limit": 1000,
+            }
+        )
+        with urlopen(
+            f"https://api-demo.bybit.com/v5/market/kline?{query}", timeout=10
+        ) as response:
+            payload = json.load(response)
+        batch = payload["result"]["list"]
+        if not batch:
+            break
+        rows.extend(batch)
+        last_ms = max(int(row[0]) for row in batch)
+        if last_ms < cursor:
+            break
+        cursor = last_ms + hour_ms
+    rows = sorted({row[0]: row for row in rows}.values(), key=lambda row: int(row[0]))
+    if not rows:
+        return None
+    start_price = float(rows[0][1])
+    end_price = float(rows[-1][4])
+    return {
+        "symbol": "BTCUSDT",
+        "interval": "60m",
+        "start_at": datetime.fromtimestamp(int(rows[0][0]) / 1000, UTC).isoformat(),
+        "end_at": datetime.fromtimestamp(int(rows[-1][0]) / 1000, UTC).isoformat(),
+        "start_price_usdt": round(start_price, 2),
+        "end_price_usdt": round(end_price, 2),
+        "return_pct": round((end_price / start_price - 1) * 100, 4),
+        "hypothetical_1000_usdt_pnl": round(1000 * (end_price / start_price - 1), 2),
+    }
+
 
 with sqlite3.connect(database) as db:
 
@@ -77,6 +129,7 @@ snapshot = {
         "strategies": table_counts["position_strategies"],
     },
     "risk": {"risk_per_trade_pct": float(policy[0]) if policy else None},
+    "benchmark": None,
     "pnl": {
         "available": bool(sync),
         "realized_pnl_usdt": round(sum(pnl), 8),
@@ -120,6 +173,9 @@ snapshot = {
         "expectancy_usdt": round(sum(pnl) / len(pnl), 8) if pnl else None,
     },
 }
+snapshot["benchmark"] = btc_buy_hold(
+    sync[0] if sync else None, datetime.fromisoformat(snapshot["generated_at"])
+)
 output.parent.mkdir(parents=True, exist_ok=True)
 output.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
 data_js = ROOT / "docs" / "data.js"

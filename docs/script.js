@@ -46,8 +46,18 @@ async function hydrateLiveData(){
       }
     }
     renderOperations(data);
+    renderBenchmark(data);
     document.querySelector('.kicker').textContent=`● live production snapshot · ${new Date(data.generated_at).toLocaleString()}`;
   }catch(error){ console.info('Dashboard is using the authored evidence view:',error.message); }
+}
+
+function renderBenchmark(data){
+  if(document.querySelector('.benchmark') || !data.benchmark) return;
+  const b=data.benchmark;
+  const section=document.createElement('section');
+  section.className='benchmark shell';
+  section.innerHTML=`<div><small class="eyebrow">PASSIVE BENCHMARK</small><h2>What if we just bought and held BTC?</h2><p>Same start window as the reconciled ledger. Spot BTCUSDT, hourly Bybit candles, no leverage, fees, or rebalancing.</p></div><div class="benchmark-values"><div><strong>${b.return_pct.toFixed(2)}%</strong><small>BTC return</small></div><div><strong>${b.hypothetical_1000_usdt_pnl>=0?'+':''}${b.hypothetical_1000_usdt_pnl.toFixed(2)}</strong><small>USDT on $1,000</small></div><div><strong>${b.start_price_usdt.toLocaleString()}</strong><small>start price</small></div><div><strong>${b.end_price_usdt.toLocaleString()}</strong><small>end price</small></div></div><footer>Window: ${new Date(b.start_at).toLocaleDateString()} → ${new Date(b.end_at).toLocaleString()} · benchmark is not directly comparable to realized PnL without starting capital.</footer>`;
+  document.querySelector('#method').before(section);
 }
 
 function renderOperations(data){
