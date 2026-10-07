@@ -29,7 +29,7 @@ async function hydrateLiveData(){
       metrics[3].querySelector('label em').textContent='LIVE SNAPSHOT';
       metrics[3].querySelector('strong').innerHTML=`${data.pnl.profit_factor.toFixed(2)}<small>×</small>`;
       metrics[3].querySelector('h3').textContent='Profit factor';
-      metrics[3].querySelector('p').textContent=`${data.pnl.expectancy_usdt.toFixed(2)} USDT expectancy per closed trade.`;
+      metrics[3].querySelector('p').textContent=`Avg win ${data.pnl.avg_win_usdt.toFixed(2)} USDT · ${data.pnl.expectancy_usdt.toFixed(2)} USDT expectancy per trade.`;
       metrics[3].querySelector('footer').innerHTML=`synced <b>${new Date(data.pnl.last_synced_at).toLocaleString()}</b>`;
       metrics[1].querySelector('h3').textContent='Win rate';
       metrics[1].querySelector('strong').innerHTML=`${data.pnl.win_rate_pct}<small>%</small>`;
@@ -55,7 +55,7 @@ function renderOperations(data){
   const e=data.engineering, f=data.funnel, p=data.pnl;
   const section=document.createElement('section');
   section.className='live-ops shell';
-  section.innerHTML=`<div class="ops-heading"><div><small class="eyebrow">LIVE OPERATIONS</small><h2>Everything the ledger knows right now</h2></div><span>source: Docker SQLite snapshot</span></div><div class="ops-grid"><div><strong>${e.source_messages.toLocaleString()}</strong><small>source messages</small></div><div><strong>${f.intents.toLocaleString()}</strong><small>intents</small></div><div><strong>${f.plans.toLocaleString()}</strong><small>plans</small></div><div><strong>${f.actions.toLocaleString()}</strong><small>actions</small></div><div><strong>${f.strategies.toLocaleString()}</strong><small>active strategies</small></div><div><strong>${e.execution_success_pct}%</strong><small>execution success</small></div><div><strong>${p.positive_count} / ${p.negative_count}</strong><small>wins / losses</small></div><div><strong>${p.avg_loss_usdt.toFixed(2)}</strong><small>avg loss · USDT</small></div></div>`;
+  section.innerHTML=`<div class="ops-heading"><div><small class="eyebrow">LIVE OPERATIONS</small><h2>Everything the ledger knows right now</h2></div><span>source: Docker SQLite snapshot</span></div><div class="ops-grid"><div><strong>${e.source_messages.toLocaleString()}</strong><small>source messages</small></div><div><strong>${f.intents.toLocaleString()}</strong><small>intents</small></div><div><strong>${f.plans.toLocaleString()}</strong><small>plans</small></div><div><strong>${f.actions.toLocaleString()}</strong><small>actions</small></div><div><strong>${f.strategies.toLocaleString()}</strong><small>active strategies</small></div><div><strong>${e.execution_success_pct}%</strong><small>execution success</small></div><div><strong>${p.positive_count} / ${p.negative_count}</strong><small>wins / losses</small></div><div><strong>${p.avg_win_usdt.toFixed(2)}</strong><small>avg win · USDT</small></div><div><strong>${p.avg_loss_usdt.toFixed(2)}</strong><small>avg loss · USDT</small></div></div>`;
   document.querySelector('#funnel').before(section);
 }
 if(window.DASHBOARD_DATA){
