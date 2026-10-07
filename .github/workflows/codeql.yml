@@ -5,6 +5,12 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/codeql.yml"
   schedule:
     # Monday 04:10 UTC. Off the hour on purpose, so this does not pile onto the
     # same scheduler spike as Dependabot's Monday 07:00 run.

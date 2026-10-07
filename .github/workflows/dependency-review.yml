@@ -3,6 +3,11 @@ name: Dependency review
 on:
   pull_request:
     branches: [master]
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - "Dockerfile"
+      - "docker-compose.yaml"
 
 permissions:
   contents: read
