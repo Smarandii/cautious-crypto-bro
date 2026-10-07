@@ -1,0 +1,91 @@
+name: Containers
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yaml"
+      - ".dockerignore"
+      - "src/**"
+      - "scripts/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/container.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yaml"
+      - ".dockerignore"
+      - "src/**"
+      - "scripts/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/container.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: containers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  droast:
+    name: Dockerfile / droast
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint Dockerfiles
+        uses: immanuwell/dockerfile-roast@8bba30cfc51f32cd4d6bcb45d5e646d9fbd1972e # v1.7.0
+        with:
+          files: .
+          preset: production
+          min-severity: warning
+          fail-on: warning
+          no-roast: true
+          image-tag: 1.7.0
+
+  docker:
+    name: Docker / build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate Compose configuration
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+      - name: Build runtime image
+        run: docker build --target runtime --tag cautious-crypto-bro:ci .
+      - name: Scan runtime image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cautious-crypto-bro:ci
+          format: table
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 0
+          output: trivy-image.txt
+      - name: Generate SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cautious-crypto-bro:ci
+          format: cyclonedx
+          output: sbom.cdx.json
+      - name: Upload scan and SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-security
+          path: |
+            trivy-image.txt
+            sbom.cdx.json
+          if-no-files-found: error
+      # Full tests run once in Python / quality. Container job checks runtime
+      # packaging and importability without executing same suite again.
+      - name: Smoke test runtime image
+        run: docker run --rm cautious-crypto-bro:ci /app/.venv/bin/python -c "import cautious_crypto_bro; print('import ok')"

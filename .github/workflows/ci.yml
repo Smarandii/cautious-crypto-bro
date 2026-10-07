@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [master]
   pull_request:
 
 concurrency:
@@ -54,89 +55,3 @@ jobs:
 
       - name: Unit tests
         run: uv run pytest -q
-
-  droast:
-    name: Dockerfile / droast
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Lint Dockerfiles
-        uses: immanuwell/dockerfile-roast@1c87b2aa189338c24db4acde40864dae8994de8f # v1.7.0
-        with:
-          files: .
-          preset: production
-          min-severity: warning
-          fail-on: warning
-          no-roast: true
-          image-tag: 1.7.0
-
-  docker:
-    name: Docker / build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Validate Compose configuration
-        run: |
-          cp .env.example .env
-          docker compose config --quiet
-
-      - name: Build runtime image
-        run: docker build --target runtime --tag cautious-crypto-bro:ci .
-
-      # Report-only on purpose. Measured baseline for this image is 122
-      # fixable findings, of which 8 are in our Python dependencies (all
-      # MEDIUM or LOW) and 114 are Debian OS packages inherited from
-      # python3.12-bookworm-slim. Gating on HIGH today would fail on base
-      # image noise we cannot fix from this repository, which teaches everyone
-      # to ignore the gate. Unfixable findings are excluded because acting on
-      # them is not possible here either.
-      #
-      # To make this a gate: trim the base image of tooling the service never
-      # uses (apt lists, perl, gpgv, diffutils), then set exit-code to 1.
-      - name: Scan runtime image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: cautious-crypto-bro:ci
-          format: table
-          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 0
-          output: trivy-image.txt
-
-      - name: Generate SBOM
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: cautious-crypto-bro:ci
-          format: cyclonedx
-          output: sbom.cdx.json
-
-      - name: Upload scan and SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: image-security
-          path: |
-            trivy-image.txt
-            sbom.cdx.json
-          if-no-files-found: error
-
-      # The Dockerfile ships a `test` stage and docker-compose a `test` profile.
-      # Both existed without ever being exercised in CI, so a break in the
-      # containerized test path would only surface on an operator's machine.
-      - name: Build test image
-        run: docker build --target test --tag cautious-crypto-bro:test .
-
-      - name: Run tests inside the image
-        run: docker run --rm cautious-crypto-bro:test
-
-      # Proves the compose `test` profile resolves and runs, which is how
-      # TESTING.md tells operators to exercise the suite.
-      - name: Run tests through the compose profile
-        run: docker compose --profile test run --rm --build test
