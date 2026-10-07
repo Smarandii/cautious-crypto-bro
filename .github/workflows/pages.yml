@@ -3,9 +3,6 @@ name: Pages
 on:
   push:
     branches: [master]
-    paths:
-      - "docs/**"
-      - ".github/workflows/pages.yml"
   # Lets the site be rebuilt from the UI without a dummy commit.
   workflow_dispatch:
 

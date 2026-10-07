@@ -1,0 +1,43 @@
+{
+  "generated_at": "2026-10-07T11:25:35.394192+00:00",
+  "source": ".docker-live.sqlite3",
+  "engineering": {
+    "source_messages": 1452,
+    "intents": 128,
+    "plans": 123,
+    "active_strategies": 77,
+    "position_actions": 111,
+    "intent_statuses": {
+      "EXECUTED": 86,
+      "FAILED": 39,
+      "SKIPPED": 3
+    },
+    "execution_success_pct": 67.19,
+    "failure_pct": 30.47
+  },
+  "funnel": {
+    "signals": 1452,
+    "intents": 128,
+    "plans": 123,
+    "actions": 111,
+    "strategies": 77
+  },
+  "risk": {
+    "risk_per_trade_pct": 1.0
+  },
+  "pnl": {
+    "available": true,
+    "realized_pnl_usdt": 44.35224703,
+    "record_count": 150,
+    "positive_count": 121,
+    "negative_count": 29,
+    "history_start_at": "2026-01-01T00:00:00+00:00",
+    "last_synced_at": "2026-10-07T08:22:03.704162+00:00",
+    "win_rate_pct": 80.67,
+    "avg_win_usdt": 9.14483732,
+    "avg_loss_usdt": -36.62665752,
+    "avg_win_to_loss_ratio": 0.2497,
+    "profit_factor": 1.0418,
+    "expectancy_usdt": 0.29568165
+  }
+}
