@@ -85,7 +85,7 @@ jobs:
             trivy-image.txt
             sbom.cdx.json
           if-no-files-found: error
-      - name: Build test image
-        run: docker build --target test --tag cautious-crypto-bro:test .
-      - name: Run tests inside the image
-        run: docker run --rm cautious-crypto-bro:test
+      # Full tests run once in Python / quality. Container job checks runtime
+      # packaging and importability without executing same suite again.
+      - name: Smoke test runtime image
+        run: docker run --rm cautious-crypto-bro:ci python -c "import cautious_crypto_bro; print('import ok')"
