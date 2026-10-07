@@ -24,6 +24,9 @@ CMD ["/app/.venv/bin/cautious-crypto-bro"]
 FROM runtime AS test
 
 COPY tests ./tests
+COPY docs ./docs
+COPY .env.example ./.env.example
+COPY .github ./.github
 RUN uv sync --frozen --group dev
 
 CMD ["/app/.venv/bin/pytest", "-v"]
