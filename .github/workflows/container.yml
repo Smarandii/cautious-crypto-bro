@@ -88,4 +88,4 @@ jobs:
       # Full tests run once in Python / quality. Container job checks runtime
       # packaging and importability without executing same suite again.
       - name: Smoke test runtime image
-        run: docker run --rm cautious-crypto-bro:ci python -c "import cautious_crypto_bro; print('import ok')"
+        run: docker run --rm cautious-crypto-bro:ci /app/.venv/bin/python -c "import cautious_crypto_bro; print('import ok')"
