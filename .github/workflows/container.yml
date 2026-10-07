@@ -40,7 +40,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Lint Dockerfiles
-        uses: immanuwell/dockerfile-roast@1c87a2aa189338c24db4acde40864dae8994de8f # v1.7.0
+        uses: immanuwell/dockerfile-roast@8bba30cfc51f32cd4d6bcb45d5e646d9fbd1972e # v1.7.0
         with:
           files: .
           preset: production
