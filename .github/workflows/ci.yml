@@ -128,7 +128,10 @@ jobs:
             sbom.cdx.json
           if-no-files-found: error
 
-      # Compose builds the Dockerfile `test` stage and runs it through the
-      # operator path. A separate docker build/run would execute the suite twice.
-      - name: Run tests through the compose profile
-        run: docker compose --profile test run --rm --build test
+      # Run test stage once. Compose configuration is validated above; running
+      # the same suite through Compose would add a second full test run.
+      - name: Build test image
+        run: docker build --target test --tag cautious-crypto-bro:test .
+
+      - name: Run tests inside the image
+        run: docker run --rm cautious-crypto-bro:test
