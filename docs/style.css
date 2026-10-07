@@ -4,13 +4,13 @@
    prefers-reduced-motion. */
 
 :root {
-  --bg: #ffffff;
-  --bg-alt: #f4f6f8;
-  --bg-sunken: #eaeef2;
-  --fg: #14181d;
-  --fg-muted: #4a5560;
-  --border: #7d8791;
-  --accent: #0b5fa5;
+  --bg: #f7f5f0;
+  --bg-alt: #eeece5;
+  --bg-sunken: #e1ded5;
+  --fg: #18242a;
+  --fg-muted: #5c6768;
+  --border: #c8c7bf;
+  --accent: #174f5b;
   --accent-fg: #ffffff;
   --accent-soft: #e6f0fa;
   --warn-bg: #fdf3e3;
@@ -18,6 +18,7 @@
   --warn-border: #9a6d0a;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --serif: Georgia, "Times New Roman", serif;
   --measure: 68ch;
 }
 
@@ -86,10 +87,13 @@ code {
   gap: 0.6rem 1rem;
   align-items: center;
   justify-content: space-between;
-  padding: 0.9rem clamp(1rem, 5vw, 3rem);
+  padding: 1.1rem max(1rem, calc((100vw - 1100px) / 2));
   border-bottom: 1px solid var(--border);
   background: var(--bg-alt);
 }
+
+.topbar nav { display: flex; gap: 1rem; font-size: 0.88rem; }
+.topbar nav a { color: var(--fg-muted); text-decoration: none; }
 
 .wordmark {
   font-family: var(--mono);
@@ -124,13 +128,15 @@ code {
 /* --- layout --- */
 
 main > section {
-  padding: clamp(2rem, 6vw, 4rem) clamp(1rem, 5vw, 3rem);
+  padding: clamp(3rem, 7vw, 6rem) max(1rem, calc((100vw - 1100px) / 2));
   border-bottom: 1px solid var(--border);
 }
 
 main > section > * { max-width: var(--measure); }
 
 h1 {
+  font-family: var(--serif);
+  font-weight: 500;
   font-size: clamp(1.9rem, 5.2vw, 3.2rem);
   line-height: 1.12;
   letter-spacing: -0.02em;
@@ -138,6 +144,8 @@ h1 {
 }
 
 h2 {
+  font-family: var(--serif);
+  font-weight: 500;
   font-size: clamp(1.35rem, 3vw, 1.9rem);
   letter-spacing: -0.01em;
   margin: 0 0 0.9rem;
@@ -159,6 +167,17 @@ p { margin: 0 0 1rem; }
 /* --- hero --- */
 
 .hero { background: var(--bg-alt); }
+
+.hero { padding-top: clamp(4rem, 10vw, 8rem); padding-bottom: clamp(4rem, 9vw, 7rem); }
+.hero h1 { max-width: 16ch; }
+.eyebrow { color: var(--accent); font: 600 0.75rem/1.2 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+.section-intro { max-width: 42rem; }
+.proof { display: grid; grid-template-columns: minmax(0, 1fr) minmax(20rem, 1fr); gap: 2rem 5rem; align-items: end; }
+.proof .source-note { grid-column: 1 / -1; margin: 0; color: var(--fg-muted); font-size: 0.85rem; }
+.metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem 2rem; margin: 0; }
+.metrics div { border-top: 2px solid var(--accent); padding-top: 0.7rem; }
+.metrics dt { font: 500 clamp(2rem, 5vw, 3.3rem)/1 var(--serif); color: var(--accent); }
+.metrics dd { margin: 0.35rem 0 0; color: var(--fg-muted); }
 
 .cta {
   display: flex;
@@ -206,7 +225,7 @@ p { margin: 0 0 1rem; }
 
 .split-col {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 2px;
   padding: 1.1rem 1.3rem;
   background: var(--bg-alt);
 }
@@ -230,7 +249,7 @@ p { margin: 0 0 1rem; }
   overflow-x: auto;
   background: var(--bg-alt);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 2px;
 }
 
 .diagram-canvas svg {
@@ -307,7 +326,7 @@ p { margin: 0 0 1rem; }
 
 .card {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 2px;
   padding: 1.1rem 1.25rem;
   background: var(--bg-alt);
 }
@@ -361,7 +380,7 @@ p { margin: 0 0 1rem; }
   background: var(--warn-bg);
   color: var(--warn-fg);
   padding: 1.2rem 1.4rem;
-  border-radius: 10px;
+  border-radius: 2px;
   max-width: var(--measure);
 }
 .callout h3 { color: inherit; }
@@ -405,6 +424,12 @@ footer {
 footer p { max-width: var(--measure); margin: 0 0 0.6rem; }
 
 /* --- motion / print --- */
+
+@media (max-width: 640px) {
+  .topbar nav { display: none; }
+  .proof { display: block; }
+  .metrics { margin-top: 2rem; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

@@ -13,6 +13,11 @@
 
 <header class="topbar">
   <span class="wordmark">cautious-crypto-bro</span>
+  <nav aria-label="Page navigation">
+    <a href="#proof">Proof</a>
+    <a href="#pipeline">Pipeline</a>
+    <a href="#limits">Limits</a>
+  </nav>
   <span class="chip chip-warn">
     <span aria-hidden="true">&#9888;</span> Bybit Demo only
   </span>
@@ -39,8 +44,23 @@
            alt="CI status: passing">
       <span class="chip">Python 3.12</span>
       <span class="chip">GPL-3.0-only</span>
-      <span class="chip">358 tests</span>
+      <span class="chip">404 tests</span>
     </p>
+  </section>
+
+  <section id="proof" class="proof" aria-labelledby="proof-title">
+    <div class="section-intro">
+      <p class="eyebrow">Repository snapshot · 07 Oct 2026</p>
+      <h2 id="proof-title">Specifics, without a track record.</h2>
+      <p>What is measurable today is the engineering around execution—not investment performance.</p>
+    </div>
+    <dl class="metrics">
+      <div><dt>227</dt><dd>test definitions</dd></div>
+      <div><dt>38</dt><dd>test files</dd></div>
+      <div><dt>79%</dt><dd>coverage floor</dd></div>
+      <div><dt>1%</dt><dd>default risk budget</dd></div>
+    </dl>
+    <p class="source-note">Counts are from the committed repository snapshot. No return, drawdown, win-rate, or live-money result is being implied.</p>
   </section>
 
   <section aria-labelledby="principle">
@@ -219,7 +239,7 @@
     <ul class="checklist">
       <li><code>ruff format</code> and <code>ruff check</code> &mdash; formatting and lint</li>
       <li><code>pyright</code> &mdash; static types over <code>src/</code></li>
-      <li><code>pytest</code> &mdash; 358 tests, offline boundaries, real temporary SQLite</li>
+      <li><code>pytest</code> &mdash; 227 test definitions across 38 files</li>
       <li><code>uv build</code> and <code>uv lock --check</code> &mdash; reproducible packaging</li>
       <li><code>dockerfile-roast</code> &mdash; Dockerfile linting at warning severity</li>
       <li><code>docker compose config</code> and a real image build</li>
