@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -119,6 +120,20 @@ class Settings(BaseSettings):
     intent_max_age_seconds: int = Field(default=900, gt=0)
 
     auto_approval_mode: AutoApprovalMode = AutoApprovalMode.DISABLED
+
+    # Demo-only sizing experiment. A value of 0.10 means new LONG plans use
+    # 10% of their normal risk budget; 1.0 leaves sizing unchanged.
+    demo_long_risk_multiplier: Decimal = Field(
+        default=Decimal("1"),
+        gt=0,
+        le=1,
+    )
+
+    # Applies to new Demo plans only; existing execution plans retain their
+    # serialized Strategy V2 policy.
+    demo_exit_profile: Literal[
+        "baseline", "payoff_challenger", "payoff_early_trail"
+    ] = "baseline"
 
     log_level: str = "INFO"
 

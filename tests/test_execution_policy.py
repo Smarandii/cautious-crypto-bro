@@ -63,6 +63,7 @@ def test_policy_requires_frozen_capital_for_budget() -> None:
 def test_strategy_v2_defaults() -> None:
     policy = StrategyV2Policy()
 
+    assert policy.exit_profile == "baseline"
     assert policy.entry_rules == (
         (
             Decimal("0"),

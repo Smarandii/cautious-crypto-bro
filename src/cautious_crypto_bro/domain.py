@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -868,6 +869,10 @@ class ExitPolicy(BaseModel):
 
 class StrategyV2Policy(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    exit_profile: Literal["baseline", "payoff_challenger", "payoff_early_trail"] = (
+        "baseline"
+    )
 
     fallback_stop_distance_pct: Decimal = Field(default=Decimal("2"), gt=0, lt=100)
 

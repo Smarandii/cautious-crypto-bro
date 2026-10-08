@@ -148,6 +148,8 @@ async def _build_runtime(
         context_provider=context_provider,
         auto_approval_mode=(settings.auto_approval_mode),
         source_processing_lease_seconds=(settings.source_processing_lease_seconds),
+        demo_long_risk_multiplier=(settings.demo_long_risk_multiplier),
+        demo_exit_profile=(settings.demo_exit_profile),
     )
 
     source = TelegramSource(

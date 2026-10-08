@@ -82,6 +82,8 @@ def test_initial_reconciliation_precedes_any_execution(
         telegram_approver_user_id=1,
         auto_approval_mode="all",
         source_processing_lease_seconds=300,
+        demo_long_risk_multiplier=1,
+        demo_exit_profile="baseline",
         telegram_api_id=1,
         telegram_api_hash="test-hash",
         telegram_session_name="test",

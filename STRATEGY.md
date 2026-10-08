@@ -70,6 +70,54 @@ entries. At +0.50R, native trailing distance is 0.30R with a +0.05R minimum floo
 The anchor uses Bybit break-even price when available, otherwise average entry.
 This does not guarantee positive realized PnL after all costs.
 
+## Demo payoff-exit experiment
+
+The Compose Demo app selects `DEMO_EXIT_PROFILE=payoff_early_trail` for newly
+planned trades. It keeps the 60/25/15 entry allocation and uses 15/20/25%
+reductions at +1/+2/+4R, a 40% runner, and a 0.10R trail distance. Its trail
+activates at +0.20R. This is separately tagged from the original
+`payoff_challenger` profile, which used +0.40R activation. Existing plans and
+open positions continue using their saved policy.
+
+This is an experiment, not a promoted strategy: historical replay gains were
+concentrated and uncertainty intervals crossed zero. Score only complete,
+reconciled positions tagged with this profile using
+`analyze_forensic_pnl.py BUNDLE --prospective-demo-exit-profile`; review after
+20 completed `payoff_early_trail` positions, including payoff ratio, expectancy,
+costs, and concentration before deciding whether to keep it.
+
+An exact-profile replay on the 54 fully reconciled historical positions found
+baseline vs challenger net results of −1.859R vs +0.370R in train (27 cases),
++0.347R vs +2.334R in validation (10), and −2.264R vs +0.701R in the already
+inspected holdout (17). In that holdout the challenger had 0.041R expectancy
+(76.5% wins, +0.290R average win, −0.766R average loss), versus −0.133R for
+baseline. Its paired holdout delta was +2.965R, but the IID 95% interval was
+[−0.491R, +7.147R]; removing the three largest positive case contributions
+leaves −0.140R. Treat this as a fragile replay hypothesis, not evidence of
+live profitability. No plans were created under that original profile.
+
+The early-trail variant was compared on the same previously inspected cases.
+Relative to +0.40R activation, +0.20R returned +0.938R vs +0.370R in train,
++1.189R vs +2.334R in validation, and +1.748R vs +0.701R in holdout. Its
+holdout paired delta was +1.047R (IID 95% interval [−2.633R, +5.195R]);
+removing its three largest positive case contributions changes the delta to
+−1.902R. This evidence is also fragile; the new profile is a Demo-only
+prospective experiment, not a proven improvement. Replay suggests the earlier
+trail improves many smaller outcomes but validation gave back about 1.145R.
+Score only new positions tagged `payoff_early_trail`. The profile started with
+no tagged plans; after deployment, catch-up created two plan records: one was
+blocked by the existing-position ownership guard, and one XRPUSDT LONG was
+executed at 0.25% risk. At the 2026-10-08 08:33Z snapshot, that position is
+filled/open (1/20 filled, 0/20 complete), with a 1.3825 stop. All three
+account-open positions have stops; the pre-existing DOGE/SOL positions retain
+their saved policies. Do not count the open trade as realized performance.
+
+As of 2026-10-08 08:49:47Z, newly planned LONGs use 0.10x the base risk; SHORTs
+remain at base risk. This is a new prospective Demo sizing cohort. Existing
+plans, including the open XRP LONG at 0.25x, keep their frozen sizing and exits.
+Evaluate LONG risk in dollars and risk-weighted return; do not combine different
+risk multipliers when comparing dollar average wins/losses.
+
 ## Lifecycle actions
 
 REDUCE/CLOSE require an explicit current-caption instruction. Images may identify

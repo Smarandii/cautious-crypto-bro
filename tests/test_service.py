@@ -262,6 +262,7 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
     class Planner:
         def __init__(self) -> None:
             self.capital_snapshots = []
+            self.risk_percentages = []
 
         def plan(
             self,
@@ -270,6 +271,7 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
             context,
         ):
             self.capital_snapshots.append(policy.trading_capital_usdt)
+            self.risk_percentages.append(policy.risk_per_trade_pct)
 
             return SimpleNamespace(
                 intent_id=intent.intent_id,
@@ -366,6 +368,7 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
             approval_bot=bot,
             coordinator=MustNotBeCalled(),
             context_provider=ContextProvider(AccountState()),
+            demo_long_risk_multiplier=Decimal("0.25"),
         )
 
         await service.on_message(source_post)
@@ -381,6 +384,10 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
         assert planner.capital_snapshots == [
             Decimal("7400"),
             Decimal("7400"),
+        ]
+        assert planner.risk_percentages == [
+            Decimal("0.25"),
+            Decimal("1"),
         ]
 
         assert len(bot.calls) == 2

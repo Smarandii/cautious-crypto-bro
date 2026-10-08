@@ -30,6 +30,8 @@ services:
       TELEGRAM_SESSION_NAME: /state/cautious_crypto_bro
       DATABASE_PATH: /state/cautious_crypto_bro.sqlite3
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DEMO_LONG_RISK_MULTIPLIER: "0.10"
+      DEMO_EXIT_PROFILE: payoff_early_trail
     volumes:
       - app_state:/state
       - ./src:/app/src:ro
@@ -48,6 +50,7 @@ services:
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
       - ./tests:/app/tests:ro
+      - ./docs:/app/docs:ro
 
 volumes:
   app_state:
