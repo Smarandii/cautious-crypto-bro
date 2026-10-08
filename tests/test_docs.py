@@ -12,6 +12,7 @@ either option is too slow or too fragile for every invocation. The count
 is maintained by hand.
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -19,6 +20,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 INDEX = REPO / "docs" / "index.html"
+DASHBOARD_SCRIPT = REPO / "docs" / "script.js"
+DASHBOARD_DATA = REPO / "docs" / "data.json"
+DASHBOARD_DATA_JS = REPO / "docs" / "data.js"
 
 
 def _landing_page() -> str:
@@ -32,6 +36,10 @@ def _flat_page() -> str:
 
 def _pyproject() -> str:
     return (REPO / "pyproject.toml").read_text(encoding="utf-8")
+
+
+def _dashboard_script() -> str:
+    return DASHBOARD_SCRIPT.read_text(encoding="utf-8")
 
 
 def test_landing_page_has_a_test_count_chip() -> None:
@@ -100,3 +108,64 @@ def test_landing_page_codeql_query_suite_matches_workflow() -> None:
 def test_landing_page_keeps_its_safety_claims(needle: str) -> None:
     """These are the promises the page makes. Do not quietly drop one."""
     assert needle in _flat_page(), f"landing page no longer states: {needle}"
+
+
+def test_dashboard_separates_whole_positions_from_account_pnl_rows() -> None:
+    script = _dashboard_script()
+
+    assert "renderStrategyPnl(data.strategy_pnl);" in script
+    assert "data.account_pnl_records" in script
+    assert "account P&amp;L rows · not whole trades" in script
+    assert "Not inferred from partial closed-PnL rows." in script
+    assert "performance_bootstrap_95ci" in script
+    assert "block-bootstrap 95% intervals" in script
+    assert "intent_outcomes" in script
+    assert "safety stops" in script
+    assert "break_even_avg_win_usdt_at_observed_counts" in script
+    assert "holding the other outcome constant" in script
+    assert "sizing/fill mix therefore matters" in script
+    assert "account_open_positions" in script
+    assert "unrealized P&amp;L · not realized strategy P&amp;L" in script
+    assert "mark-to-stop estimate" in script
+    assert "cache synced ${accountSync}" in script
+    assert "renderSideCohorts(data.strategy_pnl?.by_side)" in script
+    assert "Break-even WR" in script
+    assert "not a sizing signal" in script
+
+
+def test_dashboard_data_matches_renderer_contract() -> None:
+    data = json.loads(DASHBOARD_DATA.read_text(encoding="utf-8"))
+    script_data = DASHBOARD_DATA_JS.read_text(encoding="utf-8")
+    prefix = "window.DASHBOARD_DATA = "
+
+    assert script_data.startswith(prefix)
+    assert script_data.rstrip().endswith(";")
+    assert json.loads(script_data[len(prefix) :].rstrip()[:-1]) == data
+
+    strategy_pnl = data.get("strategy_pnl")
+    assert strategy_pnl is not None
+    assert strategy_pnl["available"] is True
+    assert strategy_pnl["avg_win_usdt"] is not None
+    assert strategy_pnl["avg_loss_usdt"] is not None
+    assert strategy_pnl["break_even_win_rate_pct"] is not None
+    experiment = data["risk"]["demo_long_experiment"]
+    assert experiment["active"] is True
+    assert experiment["multiplier"] == 0.10
+    assert experiment["completed_position_count"] <= experiment["filled_position_count"]
+    assert (
+        experiment["completed_position_count"]
+        == experiment["performance"]["position_count"]
+    )
+    exit_experiment = data["risk"]["demo_exit_experiment"]
+    assert exit_experiment["profile"] in {
+        "baseline",
+        "payoff_challenger",
+        "payoff_early_trail",
+    }
+    assert exit_experiment["review_target_completed_positions"] == 20
+    assert "renderLongRiskExperiment(data.risk?.demo_long_experiment)" in (
+        _dashboard_script()
+    )
+    assert "renderDemoExitExperiment(data.risk?.demo_exit_experiment)" in (
+        _dashboard_script()
+    )

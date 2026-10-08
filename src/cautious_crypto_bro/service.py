@@ -9,6 +9,7 @@ from datetime import (
     datetime,
     timedelta,
 )
+from decimal import Decimal
 
 from .domain import (
     AccountPnlSummary,
@@ -72,9 +73,19 @@ class SignalService:
         context_provider: SignalContextProvider,
         auto_approval_mode: AutoApprovalMode = (AutoApprovalMode.DISABLED),
         source_processing_lease_seconds: int = 300,
+        demo_long_risk_multiplier: Decimal = Decimal("1"),
+        demo_exit_profile: str = "baseline",
     ) -> None:
         if source_processing_lease_seconds <= 0:
             raise ValueError("Source processing lease must be positive")
+        if not Decimal("0") < demo_long_risk_multiplier <= Decimal("1"):
+            raise ValueError("Demo LONG risk multiplier must be in (0, 1]")
+        if demo_exit_profile not in {
+            "baseline",
+            "payoff_challenger",
+            "payoff_early_trail",
+        }:
+            raise ValueError("Unsupported Demo exit profile")
 
         self._store = store
         self._extractor = extractor
@@ -85,6 +96,8 @@ class SignalService:
         self._context_provider = context_provider
         self._auto_approval_mode = auto_approval_mode
         self._source_processing_lease_seconds = source_processing_lease_seconds
+        self._demo_long_risk_multiplier = demo_long_risk_multiplier
+        self._demo_exit_profile = demo_exit_profile
 
     async def _deliver_manual(
         self,
@@ -579,7 +592,21 @@ class SignalService:
                 open_counts,
             )
 
-            plan = await self._plan_single_intent(intent, policy, planning_errors)
+            intent_policy = policy
+            if intent.side is Side.LONG:
+                intent_policy = policy.model_copy(
+                    update={
+                        "risk_per_trade_pct": (
+                            policy.risk_per_trade_pct * self._demo_long_risk_multiplier
+                        )
+                    }
+                )
+
+            plan = await self._plan_single_intent(
+                intent,
+                intent_policy,
+                planning_errors,
+            )
 
             if plan is not None:
                 planned.append((intent, plan))
@@ -589,9 +616,31 @@ class SignalService:
     async def _capital_frozen_policy(self) -> ExecutionPolicy:
         policy = await self._store.get_execution_policy()
         trading_capital_usdt = await self._executor.wallet_balance_usdt()
-        return policy.model_copy(
-            update={"trading_capital_usdt": (trading_capital_usdt)}
-        )
+        updates: dict[str, object] = {"trading_capital_usdt": trading_capital_usdt}
+        if self._demo_exit_profile in {
+            "payoff_challenger",
+            "payoff_early_trail",
+        }:
+            trailing_activation_r = (
+                Decimal("0.2")
+                if self._demo_exit_profile == "payoff_early_trail"
+                else Decimal("0.4")
+            )
+            updates["strategy_v2"] = policy.strategy_v2.model_copy(
+                update={
+                    "exit_profile": self._demo_exit_profile,
+                    "first_take_profit_r": Decimal("1"),
+                    "second_take_profit_r": Decimal("2"),
+                    "third_take_profit_r": Decimal("4"),
+                    "first_take_profit_pct": Decimal("15"),
+                    "second_take_profit_pct": Decimal("20"),
+                    "third_take_profit_pct": Decimal("25"),
+                    "runner_pct": Decimal("40"),
+                    "trailing_activation_r": trailing_activation_r,
+                    "trailing_distance_r": Decimal("0.1"),
+                }
+            )
+        return policy.model_copy(update=updates)
 
     def _routed_intent(
         self,
