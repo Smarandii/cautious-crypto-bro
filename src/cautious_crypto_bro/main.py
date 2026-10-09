@@ -117,6 +117,7 @@ async def _build_runtime(
         planner=planner,
         max_age_seconds=(settings.intent_max_age_seconds),
         execution_lock=(account_mutation_lock),
+        portfolio_stop_risk_cap_usdt=(settings.demo_portfolio_stop_risk_cap_usdt),
     )
 
     supervisor = PositionSupervisor(
@@ -149,7 +150,13 @@ async def _build_runtime(
         auto_approval_mode=(settings.auto_approval_mode),
         source_processing_lease_seconds=(settings.source_processing_lease_seconds),
         demo_long_risk_multiplier=(settings.demo_long_risk_multiplier),
+        demo_long_exit_control_fraction=(settings.demo_long_exit_control_fraction),
+        demo_long_participation_skip_fraction=(
+            settings.demo_long_participation_skip_fraction
+        ),
         demo_exit_profile=(settings.demo_exit_profile),
+        demo_portfolio_stop_risk_cap_usdt=(settings.demo_portfolio_stop_risk_cap_usdt),
+        demo_entry_order_ttl_minutes=(settings.demo_entry_order_ttl_minutes),
     )
 
     source = TelegramSource(
@@ -203,6 +210,7 @@ async def _run_application(
         tg.create_task(runtime.bot.run())
         tg.create_task(runtime.supervisor.run())
         tg.create_task(runtime.service.run_manual_delivery_recovery())
+        tg.create_task(runtime.service.run_periodic_account_pnl_sync())
 
         await runtime.source.start()
 

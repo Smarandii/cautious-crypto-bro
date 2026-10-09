@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections import Counter
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from datetime import (
     timedelta,
 )
 from decimal import Decimal
+from uuid import UUID
 
 from .domain import (
     AccountPnlSummary,
@@ -34,6 +36,10 @@ from .domain import (
     TradingIntent,
 )
 from .execution import ExecutionPlanner
+from .portfolio_risk import (
+    open_stop_risk_usdt,
+    policy_with_remaining_portfolio_risk,
+)
 from .ports import (
     AccountGateway,
     ApprovalSender,
@@ -44,6 +50,7 @@ from .ports import (
 )
 
 logger = logging.getLogger(__name__)
+ACCOUNT_PNL_SYNC_INTERVAL_SECONDS = 15 * 60
 
 
 @dataclass(frozen=True)
@@ -74,18 +81,46 @@ class SignalService:
         auto_approval_mode: AutoApprovalMode = (AutoApprovalMode.DISABLED),
         source_processing_lease_seconds: int = 300,
         demo_long_risk_multiplier: Decimal = Decimal("1"),
+        demo_long_exit_control_fraction: Decimal = Decimal("0"),
+        demo_long_participation_skip_fraction: Decimal = Decimal("0"),
         demo_exit_profile: str = "baseline",
+        demo_portfolio_stop_risk_cap_usdt: Decimal | None = None,
+        demo_entry_order_ttl_minutes: int = 0,
     ) -> None:
         if source_processing_lease_seconds <= 0:
             raise ValueError("Source processing lease must be positive")
         if not Decimal("0") < demo_long_risk_multiplier <= Decimal("1"):
             raise ValueError("Demo LONG risk multiplier must be in (0, 1]")
+        if not Decimal("0") <= demo_long_exit_control_fraction <= Decimal("1"):
+            raise ValueError(
+                "Demo LONG exit control fraction must be between zero and one"
+            )
+        if not Decimal("0") <= demo_long_participation_skip_fraction <= Decimal("1"):
+            raise ValueError(
+                "Demo LONG participation skip fraction must be between zero and one"
+            )
+        if (
+            demo_long_exit_control_fraction > 0
+            and demo_exit_profile != "payoff_early_tight_trail_long_015"
+        ):
+            raise ValueError(
+                "Demo LONG exit control split requires the long_015 profile"
+            )
         if demo_exit_profile not in {
             "baseline",
             "payoff_challenger",
             "payoff_early_trail",
+            "payoff_early_tight_trail",
+            "payoff_early_tight_trail_long_015",
         }:
             raise ValueError("Unsupported Demo exit profile")
+        if (
+            demo_portfolio_stop_risk_cap_usdt is not None
+            and demo_portfolio_stop_risk_cap_usdt <= 0
+        ):
+            raise ValueError("Demo portfolio stop-risk cap must be positive")
+        if demo_entry_order_ttl_minutes < 0:
+            raise ValueError("Demo entry order TTL must not be negative")
 
         self._store = store
         self._extractor = extractor
@@ -97,7 +132,13 @@ class SignalService:
         self._auto_approval_mode = auto_approval_mode
         self._source_processing_lease_seconds = source_processing_lease_seconds
         self._demo_long_risk_multiplier = demo_long_risk_multiplier
+        self._demo_long_exit_control_fraction = demo_long_exit_control_fraction
+        self._demo_long_participation_skip_fraction = (
+            demo_long_participation_skip_fraction
+        )
         self._demo_exit_profile = demo_exit_profile
+        self._demo_portfolio_stop_risk_cap_usdt = demo_portfolio_stop_risk_cap_usdt
+        self._demo_entry_order_ttl_minutes = demo_entry_order_ttl_minutes
 
     async def _deliver_manual(
         self,
@@ -158,6 +199,14 @@ class SignalService:
             except Exception:
                 logger.exception("Manual approval recovery failed")
             await asyncio.sleep(30)
+
+    async def run_periodic_account_pnl_sync(self) -> None:
+        while True:
+            try:
+                await self._sync_account_pnl()
+            except Exception:
+                logger.exception("Periodic account P&L sync failed")
+            await asyncio.sleep(ACCOUNT_PNL_SYNC_INTERVAL_SECONDS)
 
     async def _sync_account_pnl(
         self,
@@ -584,6 +633,15 @@ class SignalService:
             )
             return planned, planning_errors
 
+        existing_portfolio_risk = await self._existing_portfolio_stop_risk(
+            account_state,
+            planning_errors,
+        )
+        if existing_portfolio_risk is None:
+            return planned, planning_errors
+
+        batch_reserved_risk = Decimal("0")
+
         for extracted_intent in signals.open_intents:
             intent = self._routed_intent(
                 extracted_intent,
@@ -592,15 +650,35 @@ class SignalService:
                 open_counts,
             )
 
-            intent_policy = policy
-            if intent.side is Side.LONG:
-                intent_policy = policy.model_copy(
-                    update={
-                        "risk_per_trade_pct": (
-                            policy.risk_per_trade_pct * self._demo_long_risk_multiplier
-                        )
-                    }
+            intent_policy = self._policy_for_intent_side(
+                policy,
+                intent.side,
+                intent.intent_id,
+                participation_eligible=(intent.approval_mode is ApprovalMode.AUTO),
+            )
+
+            if self._demo_portfolio_stop_risk_cap_usdt is not None:
+                remaining_portfolio_risk = (
+                    self._demo_portfolio_stop_risk_cap_usdt
+                    - existing_portfolio_risk
+                    - batch_reserved_risk
                 )
+                if remaining_portfolio_risk <= 0:
+                    logger.info(
+                        "Skipping %s because portfolio stop-risk cap is full",
+                        intent.symbol,
+                    )
+                    continue
+                try:
+                    intent_policy = policy_with_remaining_portfolio_risk(
+                        intent_policy,
+                        remaining_portfolio_risk,
+                    )
+                except ValueError as exc:
+                    planning_errors.append(
+                        f"{intent.symbol}: portfolio stop-risk cap: {exc}"
+                    )
+                    continue
 
             plan = await self._plan_single_intent(
                 intent,
@@ -609,24 +687,149 @@ class SignalService:
             )
 
             if plan is not None:
+                if intent_policy.strategy_v2.long_participation_arm == "skip":
+                    intent = intent.model_copy(
+                        update={
+                            "approval_mode": ApprovalMode.SKIPPED,
+                            "status": IntentStatus.SKIPPED,
+                        }
+                    )
+                else:
+                    batch_reserved_risk += plan.planned_max_loss_usdt
                 planned.append((intent, plan))
 
         return planned, planning_errors
+
+    async def _existing_portfolio_stop_risk(
+        self,
+        account_state: AccountStateSummary | None,
+        planning_errors: list[str],
+    ) -> Decimal | None:
+        cap = self._demo_portfolio_stop_risk_cap_usdt
+        if cap is None:
+            return Decimal("0")
+        if account_state is None:
+            planning_errors.append(
+                "Portfolio stop-risk cap: live account snapshot is unavailable"
+            )
+            return None
+        try:
+            active_strategies = await self._store.get_active_position_strategies()
+            return open_stop_risk_usdt(account_state, active_strategies)
+        except Exception as exc:
+            planning_errors.append(
+                f"Portfolio stop-risk cap: {type(exc).__name__}: {exc}"
+            )
+            logger.exception("Portfolio stop-risk snapshot failed")
+            return None
+
+    def _policy_for_intent_side(
+        self,
+        policy: ExecutionPolicy,
+        side: Side,
+        intent_id: UUID | None = None,
+        *,
+        participation_eligible: bool = True,
+    ) -> ExecutionPolicy:
+        strategy = policy.strategy_v2
+        updates = {}
+        if side is Side.LONG:
+            updates["risk_per_trade_pct"] = (
+                policy.risk_per_trade_pct * self._demo_long_risk_multiplier
+            )
+
+        if (
+            self._demo_long_exit_control_fraction > 0
+            and self._demo_exit_profile == "payoff_early_tight_trail_long_015"
+        ):
+            if side is Side.SHORT:
+                strategy = strategy.model_copy(
+                    update={"exit_profile": "payoff_early_tight_trail"}
+                )
+            else:
+                if intent_id is None:
+                    raise ValueError(
+                        "Randomized LONG exit assignment requires an intent ID"
+                    )
+                control_bucket = int.from_bytes(
+                    hashlib.sha256(intent_id.bytes).digest()[:8],
+                    "big",
+                )
+                control_threshold = int(
+                    self._demo_long_exit_control_fraction * (1 << 64)
+                )
+                is_control = control_bucket < control_threshold
+                strategy = strategy.model_copy(
+                    update={
+                        "exit_profile": (
+                            "payoff_early_tight_trail_long_ab_020_control"
+                            if is_control
+                            else "payoff_early_tight_trail_long_ab_015"
+                        ),
+                        "trailing_activation_r": (
+                            Decimal("0.20") if is_control else Decimal("0.15")
+                        ),
+                    }
+                )
+        elif (
+            side is Side.LONG
+            and self._demo_exit_profile == "payoff_early_tight_trail_long_015"
+        ):
+            strategy = strategy.model_copy(
+                update={"trailing_activation_r": Decimal("0.15")}
+            )
+        if (
+            side is Side.LONG
+            and participation_eligible
+            and self._demo_long_participation_skip_fraction > 0
+        ):
+            if intent_id is None:
+                raise ValueError(
+                    "Randomized LONG participation assignment requires an intent ID"
+                )
+            participation_bucket = int.from_bytes(
+                hashlib.sha256(b"long-participation-v1:" + intent_id.bytes).digest()[
+                    :8
+                ],
+                "big",
+            )
+            skip_threshold = int(
+                self._demo_long_participation_skip_fraction * (1 << 64)
+            )
+            strategy = strategy.model_copy(
+                update={
+                    "long_participation_arm": (
+                        "skip" if participation_bucket < skip_threshold else "take"
+                    )
+                }
+            )
+        if strategy != policy.strategy_v2:
+            updates["strategy_v2"] = strategy
+        return policy.model_copy(update=updates) if updates else policy
 
     async def _capital_frozen_policy(self) -> ExecutionPolicy:
         policy = await self._store.get_execution_policy()
         trading_capital_usdt = await self._executor.wallet_balance_usdt()
         updates: dict[str, object] = {"trading_capital_usdt": trading_capital_usdt}
+        strategy = policy.strategy_v2
+        strategy_changed = False
         if self._demo_exit_profile in {
             "payoff_challenger",
             "payoff_early_trail",
+            "payoff_early_tight_trail",
+            "payoff_early_tight_trail_long_015",
         }:
             trailing_activation_r = (
                 Decimal("0.2")
-                if self._demo_exit_profile == "payoff_early_trail"
+                if self._demo_exit_profile
+                in {
+                    "payoff_early_trail",
+                    "payoff_early_tight_trail",
+                    "payoff_early_tight_trail_long_015",
+                }
                 else Decimal("0.4")
             )
-            updates["strategy_v2"] = policy.strategy_v2.model_copy(
+            strategy = strategy.model_copy(
                 update={
                     "exit_profile": self._demo_exit_profile,
                     "first_take_profit_r": Decimal("1"),
@@ -637,9 +840,27 @@ class SignalService:
                     "third_take_profit_pct": Decimal("25"),
                     "runner_pct": Decimal("40"),
                     "trailing_activation_r": trailing_activation_r,
-                    "trailing_distance_r": Decimal("0.1"),
+                    "trailing_distance_r": (
+                        Decimal("0.05")
+                        if self._demo_exit_profile
+                        in {
+                            "payoff_early_tight_trail",
+                            "payoff_early_tight_trail_long_015",
+                        }
+                        else Decimal("0.1")
+                    ),
                 }
             )
+            strategy_changed = True
+        if self._demo_entry_order_ttl_minutes:
+            strategy = strategy.model_copy(
+                update={
+                    "entry_order_ttl_minutes": self._demo_entry_order_ttl_minutes,
+                }
+            )
+            strategy_changed = True
+        if strategy_changed:
+            updates["strategy_v2"] = strategy
         return policy.model_copy(update=updates)
 
     def _routed_intent(
@@ -797,6 +1018,9 @@ class SignalService:
         manual_cards_sent = 0
 
         for intent, plan in planned:
+            if intent.approval_mode is ApprovalMode.SKIPPED:
+                continue
+
             if intent.approval_mode is ApprovalMode.AUTO:
                 outcome = await self._coordinator.execute_intent(
                     intent.intent_id,

@@ -14,6 +14,8 @@ from cautious_crypto_bro.config import get_settings
 
 WINDOW = timedelta(days=7)
 KLINE_CHUNK_MS = 1_000 * 60_000
+MARKET_CANDLE_LOOKBACK_MINUTES = 240
+MARKET_CANDLE_LOOKBACK_MS = MARKET_CANDLE_LOOKBACK_MINUTES * 60_000
 
 
 def _timestamp_ms(value: str) -> int:
@@ -21,6 +23,26 @@ def _timestamp_ms(value: str) -> int:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return int(parsed.timestamp() * 1000)
+
+
+def _market_candle_coverage(
+    filled_symbols: set[str],
+    first_fill_times: list[int],
+    participation_assignments: list[dict],
+) -> tuple[list[str], int]:
+    symbols = {symbol.upper() for symbol in filled_symbols}
+    start_times = list(first_fill_times)
+    for assignment in participation_assignments:
+        symbol = assignment.get("symbol")
+        if symbol:
+            symbols.add(str(symbol).upper())
+        created_at = assignment.get("created_at")
+        if created_at:
+            start_times.append(_timestamp_ms(str(created_at)))
+
+    if not start_times:
+        raise ValueError("Forensic market-candle export requires a timestamp")
+    return sorted(symbols), min(start_times) - MARKET_CANDLE_LOOKBACK_MS
 
 
 def _private_rows(
@@ -141,7 +163,7 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
             database.execute(
                 """
                 SELECT p.intent_id, p.payload_json, p.bybit_order_ids_json,
-                       p.created_at, i.status,
+                       p.created_at, i.status, i.approval_mode,
                        i.payload_json AS intent_payload_json
                 FROM execution_plans AS p
                 JOIN intents AS i ON i.intent_id = p.intent_id
@@ -161,8 +183,32 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
         )
 
     plans = []
+    participation_assignments = []
     for row in plan_rows:
         plan = json.loads(row["payload_json"])
+        policy = plan.get("policy") or {}
+        strategy = policy.get("strategy_v2") or {}
+        arm = strategy.get("long_participation_arm")
+        if arm in {"take", "skip"}:
+            intent_payload = json.loads(row["intent_payload_json"])
+            participation_assignments.append(
+                {
+                    "intent_id": row["intent_id"],
+                    "created_at": row["created_at"],
+                    "status": row["status"],
+                    "approval_mode": row["approval_mode"],
+                    "bybit_order_ids": json.loads(row["bybit_order_ids_json"] or "[]"),
+                    "arm": arm,
+                    "symbol": plan.get("symbol"),
+                    "side": plan.get("side"),
+                    "risk_per_trade_pct": policy.get("risk_per_trade_pct"),
+                    "planned_max_loss_usdt": plan.get("planned_max_loss_usdt"),
+                    "exit_profile": strategy.get("exit_profile", "baseline"),
+                    "source_channel_id": (intent_payload.get("source") or {}).get(
+                        "channel_id"
+                    ),
+                }
+            )
         order_ids = json.loads(row["bybit_order_ids_json"] or "[]")
         if (
             plan.get("strategy_version", 1) == 2
@@ -200,6 +246,53 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
         start_ms,
         end_ms,
         limit=1_000,
+    )
+    entry_order_ids = {
+        str(order_id) for plan, order_ids, *_ in plans for order_id in order_ids
+    }
+    order_history = _historical_rows(
+        client,
+        "/v5/order/history",
+        {"category": "linear", "settleCoin": "USDT"},
+        start_ms,
+        end_ms,
+        limit=50,
+    )
+    entry_order_history = [
+        order
+        for order in order_history
+        if str(order.get("orderId") or "") in entry_order_ids
+    ]
+    open_account_orders = _private_rows(
+        client,
+        "/v5/order/realtime",
+        {"category": "linear", "settleCoin": "USDT", "limit": 50},
+    )
+    open_account_orders_as_of = datetime.now(UTC).isoformat()
+    open_entry_orders_as_of = open_account_orders_as_of
+    tracked_entry_order_ids = {str(order_id) for order_id in entry_order_ids}
+    current_entry_orders = [
+        order
+        for order in open_account_orders
+        if str(order.get("orderId") or "") in entry_order_ids
+    ]
+    protective_order_types = {
+        "TakeProfit",
+        "PartialTakeProfit",
+        "StopLoss",
+        "PartialStopLoss",
+        "TrailingStop",
+    }
+    unmatched_entry_order_count = sum(
+        str(order.get("orderId") or "") not in tracked_entry_order_ids
+        and not (
+            order.get("reduceOnly") is True
+            or str(order.get("reduceOnly")).casefold() == "true"
+            or order.get("closeOnTrigger") is True
+            or str(order.get("closeOnTrigger")).casefold() == "true"
+            or order.get("stopOrderType") in protective_order_types
+        )
+        for order in open_account_orders
     )
     transactions = _historical_rows(
         client,
@@ -267,6 +360,12 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
                     "exit_profile": (policy.get("strategy_v2") or {}).get(
                         "exit_profile", "baseline"
                     ),
+                    "long_participation_arm": (policy.get("strategy_v2") or {}).get(
+                        "long_participation_arm"
+                    ),
+                    "entry_order_ttl_minutes": (policy.get("strategy_v2") or {}).get(
+                        "entry_order_ttl_minutes", 0
+                    ),
                 },
                 "intent": {
                     "symbol": plan["symbol"],
@@ -310,7 +409,31 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
                     "analysis/trade_lineage.jsonl",
                     [{"intents": lineage}],
                 )
+                _write_jsonl(
+                    archive,
+                    root,
+                    "analysis/long_participation_assignments.jsonl",
+                    [{"assignments": participation_assignments}],
+                )
                 _write_jsonl(archive, root, "bybit/executions.jsonl", executions)
+                _write_jsonl(
+                    archive,
+                    root,
+                    "bybit/entry_order_history.jsonl",
+                    entry_order_history,
+                )
+                _write_jsonl(
+                    archive,
+                    root,
+                    "bybit/open_entry_orders.jsonl",
+                    current_entry_orders,
+                )
+                _write_jsonl(
+                    archive,
+                    root,
+                    "bybit/open_account_orders.jsonl",
+                    open_account_orders,
+                )
                 _write_jsonl(
                     archive,
                     root,
@@ -340,8 +463,12 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
                     open_positions,
                 )
 
-                candle_start = min(first_fill_times)
-                for index, symbol in enumerate(sorted(symbols), start=1):
+                candle_symbols, candle_start = _market_candle_coverage(
+                    symbols,
+                    first_fill_times,
+                    participation_assignments,
+                )
+                for index, symbol in enumerate(candle_symbols, start=1):
                     candles = _market_candles(
                         client,
                         symbol,
@@ -354,17 +481,51 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
                         f"market_1m/{symbol}.jsonl",
                         (candles[key] for key in sorted(candles)),
                     )
-                    print(f"candles {index}/{len(symbols)} {symbol}: {len(candles)}")
+                    print(
+                        f"candles {index}/{len(candle_symbols)} "
+                        f"{symbol}: {len(candles)}"
+                    )
 
                 metadata = {
                     "created_at": datetime.now(UTC).isoformat(),
                     "exchange": "Bybit Demo",
                     "category": "linear",
                     "interval_minutes": 1,
+                    "market_candle_lookback_minutes": (MARKET_CANDLE_LOOKBACK_MINUTES),
                     "filled_v2_cases": len(lineage),
-                    "symbols": len(symbols),
+                    "long_participation_assignment_count": len(
+                        participation_assignments
+                    ),
+                    "symbols": len(candle_symbols),
                     "execution_rows": len(executions),
+                    "entry_order_history_rows": len(entry_order_history),
+                    "open_entry_order_rows": len(current_entry_orders),
+                    "open_account_order_rows": len(open_account_orders),
+                    "open_account_orders_as_of": open_account_orders_as_of,
+                    "open_entry_orders_as_of": open_entry_orders_as_of,
+                    "unmatched_entry_order_count": unmatched_entry_order_count,
+                    "entry_order_history_coverage_start": datetime.fromtimestamp(
+                        start_ms / 1000,
+                        UTC,
+                    ).isoformat(),
+                    "entry_order_history_as_of": datetime.fromtimestamp(
+                        end_ms / 1000,
+                        UTC,
+                    ).isoformat(),
+                    "entry_order_history_note": (
+                        "Bybit history retention varies by status; cancelled, "
+                        "rejected, and deactivated orders may be unavailable "
+                        "outside the recent 24-hour window."
+                    ),
                     "closed_pnl_rows": len(closed_pnl),
+                    "closed_pnl_coverage_start": datetime.fromtimestamp(
+                        start_ms / 1000,
+                        UTC,
+                    ).isoformat(),
+                    "closed_pnl_as_of": datetime.fromtimestamp(
+                        end_ms / 1000,
+                        UTC,
+                    ).isoformat(),
                     "open_position_rows": len(open_positions),
                     "open_positions_as_of": open_positions_as_of,
                     "funding_settlements": sum(

@@ -1,9 +1,10 @@
-"""Compare frozen entry/exit and LONG-risk candidates on reconciled trades only."""
+"""Compare frozen exit and entry-allocation candidates on reconciled trades."""
 
 from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import replay_strategy_v2 as replay
@@ -21,19 +22,26 @@ def chronological_splits(cases: list[dict]) -> dict[str, list[dict]]:
     }
 
 
-def summary(results: list[replay.Result]) -> dict[str, float | int]:
+def summary(results: list[replay.Result]) -> dict[str, float | int | None]:
     """Add payoff and break-even metrics to the shared replay summary."""
     metrics = replay.summarize_results(results)
     average_win = metrics["avg_win_r"]
-    average_loss = abs(metrics["avg_loss_r"])
-    metrics["avg_win_loss_ratio_r"] = (
-        average_win / average_loss if average_loss else float("inf")
+    average_loss = (
+        abs(metrics["avg_loss_r"]) if metrics["avg_loss_r"] is not None else None
     )
-    metrics["breakeven_win_rate"] = (
-        average_loss / (average_win + average_loss)
-        if average_win + average_loss
-        else 0.0
-    )
+
+    if average_win is None and average_loss is None:
+        metrics["avg_win_loss_ratio_r"] = None
+        metrics["breakeven_win_rate"] = None
+    elif average_loss is None:
+        metrics["avg_win_loss_ratio_r"] = float("inf")
+        metrics["breakeven_win_rate"] = 0.0
+    elif average_win is None:
+        metrics["avg_win_loss_ratio_r"] = 0.0
+        metrics["breakeven_win_rate"] = 1.0
+    else:
+        metrics["avg_win_loss_ratio_r"] = average_win / average_loss
+        metrics["breakeven_win_rate"] = average_loss / (average_win + average_loss)
     return metrics
 
 
@@ -53,33 +61,50 @@ def compare(bundle: Path) -> None:
     print("split_rule=chronological 50/20/30; inputs are fully reconciled positions")
     print(f"complete_cases={len(cases)}")
 
+    payoff_challenger = replay.live_demo_payoff_exit_candidate()
+    live_demo_early_trail = replay.live_demo_early_trail_candidate()
+    live_demo_early_trail_reduced_e3 = replace(
+        live_demo_early_trail,
+        weights=(0.70, 0.25, 0.05),
+    )
+    reduced_e3_research = replay.late_target_reduced_e3_candidate()
+
     for name, selected in partitions.items():
         current = [
             replay.replay(case, replay.current_policy(), fee_rate, use_events=True)
             for case in selected
         ]
-        live_demo_exit = [
+        payoff_challenger_results = [
             replay.replay(
                 case,
-                replay.live_demo_payoff_exit_candidate(),
+                payoff_challenger,
                 fee_rate,
                 use_events=True,
             )
             for case in selected
         ]
-        live_demo_exit_reduced_e3 = [
+        live_demo_early_trail_results = [
             replay.replay(
                 case,
-                replay.live_demo_payoff_exit_reduced_e3_candidate(),
+                live_demo_early_trail,
                 fee_rate,
                 use_events=True,
             )
             for case in selected
         ]
-        reduced_e3_exit = [
+        live_demo_early_trail_reduced_e3_results = [
             replay.replay(
                 case,
-                replay.late_target_reduced_e3_candidate(),
+                live_demo_early_trail_reduced_e3,
+                fee_rate,
+                use_events=True,
+            )
+            for case in selected
+        ]
+        reduced_e3_research_results = [
+            replay.replay(
+                case,
+                reduced_e3_research,
                 fee_rate,
                 use_events=True,
             )
@@ -91,27 +116,49 @@ def compare(bundle: Path) -> None:
         )
         for label, results in (
             ("current", current),
-            ("live_demo_payoff_exit_exact", live_demo_exit),
-            ("live_demo_exit_plus_reduced_e3", live_demo_exit_reduced_e3),
-            ("reduced_e3_research_candidate", reduced_e3_exit),
+            ("payoff_challenger_040", payoff_challenger_results),
+            ("live_demo_early_trail_exact", live_demo_early_trail_results),
+            (
+                "live_demo_early_trail_reduced_e3",
+                live_demo_early_trail_reduced_e3_results,
+            ),
+            ("reduced_e3_research_candidate", reduced_e3_research_results),
         ):
             print(
                 f"metrics={name}/{label}",
                 json.dumps(summary(results), sort_keys=True),
             )
         for label, comparator, candidate_results in (
-            ("live_demo_payoff_exit_vs_current", current, live_demo_exit),
             (
-                "live_demo_exit_plus_reduced_e3_vs_current",
+                "payoff_challenger_040_vs_current",
                 current,
-                live_demo_exit_reduced_e3,
+                payoff_challenger_results,
             ),
             (
-                "live_demo_exit_plus_reduced_e3_vs_live_demo_exit",
-                live_demo_exit,
-                live_demo_exit_reduced_e3,
+                "live_demo_early_trail_vs_current",
+                current,
+                live_demo_early_trail_results,
             ),
-            ("reduced_e3_candidate_vs_current", current, reduced_e3_exit),
+            (
+                "payoff_challenger_040_vs_live_demo_early_trail_exact",
+                live_demo_early_trail_results,
+                payoff_challenger_results,
+            ),
+            (
+                "live_demo_early_trail_reduced_e3_vs_current",
+                current,
+                live_demo_early_trail_reduced_e3_results,
+            ),
+            (
+                "live_demo_early_trail_reduced_e3_vs_live_demo_early_trail",
+                live_demo_early_trail_results,
+                live_demo_early_trail_reduced_e3_results,
+            ),
+            (
+                "reduced_e3_candidate_vs_current",
+                current,
+                reduced_e3_research_results,
+            ),
         ):
             print(
                 f"paired={name}/{label}",

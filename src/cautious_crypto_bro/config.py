@@ -129,10 +129,38 @@ class Settings(BaseSettings):
         le=1,
     )
 
+    # Randomized LONG-exit control share; only used with the long_015 profile.
+    demo_long_exit_control_fraction: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        le=1,
+    )
+
+    # Randomized fraction of auto-approved Demo LONG signals assigned to skip.
+    demo_long_participation_skip_fraction: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        le=1,
+    )
+
+    # Caps combined exchange stop risk for new Demo entries. Existing positions
+    # are never resized; unset disables the portfolio-level cap.
+    demo_portfolio_stop_risk_cap_usdt: Decimal | None = Field(
+        default=None,
+        gt=0,
+    )
+
+    # Applies only to newly created Strategy V2 plans; zero leaves entries GTC.
+    demo_entry_order_ttl_minutes: int = Field(default=0, ge=0)
+
     # Applies to new Demo plans only; existing execution plans retain their
     # serialized Strategy V2 policy.
     demo_exit_profile: Literal[
-        "baseline", "payoff_challenger", "payoff_early_trail"
+        "baseline",
+        "payoff_challenger",
+        "payoff_early_trail",
+        "payoff_early_tight_trail",
+        "payoff_early_tight_trail_long_015",
     ] = "baseline"
 
     log_level: str = "INFO"

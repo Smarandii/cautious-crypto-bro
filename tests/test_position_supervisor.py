@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import (
     UTC,
     datetime,
+    timedelta,
 )
 from decimal import Decimal
 from unittest.mock import AsyncMock
@@ -53,7 +54,6 @@ def plan(symbol: str = "BTCUSDT"):
         summary="test",
         confidence=1,
     )
-
     return ExecutionPlanner().plan(
         intent,
         ExecutionPolicy(
@@ -68,6 +68,57 @@ def plan(symbol: str = "BTCUSDT"):
             min_qty=Decimal("0.001"),
             min_notional=Decimal("5"),
         ),
+    )
+
+
+def _with_entry_ttl(strategy_plan, *, ttl_minutes: int, age_minutes: int):
+    return strategy_plan.model_copy(
+        update={
+            "created_at": datetime.now(UTC) - timedelta(minutes=age_minutes),
+            "policy": strategy_plan.policy.model_copy(
+                update={
+                    "strategy_v2": strategy_plan.policy.strategy_v2.model_copy(
+                        update={"entry_order_ttl_minutes": ttl_minutes}
+                    )
+                }
+            ),
+        }
+    )
+
+
+def _entry_order(strategy_plan, name: str, *, order_id: str | None = None):
+    return AccountOrder(
+        symbol=strategy_plan.symbol,
+        side=strategy_plan.side,
+        order_type="Limit",
+        status="New",
+        quantity=Decimal("1"),
+        remaining_quantity=Decimal("1"),
+        price=Decimal("100"),
+        avg_price=None,
+        order_id=order_id or name,
+        order_link_id=(f"ccb-v2-{strategy_plan.intent_id.hex[:20]}-{name.lower()}"),
+        reduce_only=False,
+        updated_at=datetime.now(UTC),
+    )
+
+
+def _entry_stop_order(strategy_plan):
+    return AccountOrder(
+        symbol=strategy_plan.symbol,
+        side=Side.SHORT,
+        order_type="Market",
+        status="Untriggered",
+        quantity=Decimal("1"),
+        remaining_quantity=Decimal("1"),
+        price=None,
+        avg_price=None,
+        order_id="protective-stop",
+        order_link_id=f"ccb-v2-{strategy_plan.intent_id.hex[:20]}-s1",
+        reduce_only=True,
+        updated_at=datetime.now(UTC),
+        stop_order_type="StopLoss",
+        trigger_price=strategy_plan.stop_loss,
     )
 
 
@@ -318,10 +369,122 @@ def test_supervisor_freezes_entries_and_protects_profit() -> None:
 
     assert store.state.protected_stop_loss == Decimal("100.7")
     assert store.state.trailing_distance == Decimal("3.0")
-
     assert store.state.status is StrategyStatus.PROFIT_PROTECTED
-
     assert store.state.exit_revision == 1
+
+
+@pytest.mark.parametrize(
+    ("ttl_minutes", "age_minutes"),
+    [(0, 300), (240, 60)],
+)
+def test_supervisor_preserves_legacy_and_young_gtc_entries(
+    ttl_minutes: int,
+    age_minutes: int,
+) -> None:
+    strategy_plan = _with_entry_ttl(
+        plan(),
+        ttl_minutes=ttl_minutes,
+        age_minutes=age_minutes,
+    )
+    state = PositionStrategy(
+        strategy_id=strategy_plan.intent_id,
+        symbol=strategy_plan.symbol,
+        side=strategy_plan.side,
+    )
+    executor = Executor()
+    executor.state = replace(
+        executor.state,
+        positions=(),
+        open_orders=(_entry_order(strategy_plan, "E1"),),
+    )
+    supervisor = PositionSupervisor(
+        store=Store(state, strategy_plan),
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+    )
+
+    asyncio.run(supervisor.reconcile_once())
+
+    assert executor.cancelled_orders == []
+    assert len(executor.state.open_orders) == 1
+
+
+def test_supervisor_expires_only_owned_entries_and_closes_unfilled_plan() -> None:
+    strategy_plan = _with_entry_ttl(
+        plan(),
+        ttl_minutes=240,
+        age_minutes=300,
+    )
+    state = PositionStrategy(
+        strategy_id=strategy_plan.intent_id,
+        symbol=strategy_plan.symbol,
+        side=strategy_plan.side,
+    )
+    executor = Executor()
+    owned_entries = (
+        _entry_order(strategy_plan, "E1"),
+        _entry_order(strategy_plan, "E2"),
+    )
+    foreign_entry = _entry_order(plan(), "E1", order_id="foreign-entry")
+    protective_stop = _entry_stop_order(strategy_plan)
+    executor.state = replace(
+        executor.state,
+        positions=(),
+        open_orders=(*owned_entries, foreign_entry, protective_stop),
+    )
+    store = Store(state, strategy_plan)
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+    )
+
+    asyncio.run(supervisor.reconcile_once())
+
+    assert executor.cancelled_orders == [order.order_id for order in owned_entries]
+    assert store.state.status is StrategyStatus.CLOSED
+    assert {order.order_id for order in executor.state.open_orders} == {
+        "foreign-entry",
+        protective_stop.order_id,
+    }
+
+
+def test_supervisor_expires_remaining_entries_but_protects_partial_position() -> None:
+    strategy_plan = _with_entry_ttl(
+        plan(),
+        ttl_minutes=240,
+        age_minutes=300,
+    )
+    state = PositionStrategy(
+        strategy_id=strategy_plan.intent_id,
+        symbol=strategy_plan.symbol,
+        side=strategy_plan.side,
+    )
+    executor = Executor()
+    remaining_entries = (
+        _entry_order(strategy_plan, "E2"),
+        _entry_order(strategy_plan, "E3"),
+    )
+    protective_stop = _entry_stop_order(strategy_plan)
+    executor.state = replace(
+        executor.state,
+        open_orders=(*remaining_entries, protective_stop),
+    )
+    store = Store(state, strategy_plan)
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+    )
+
+    asyncio.run(supervisor.reconcile_once())
+
+    assert executor.cancelled_orders == [order.order_id for order in remaining_entries]
+    assert executor.cancelled_entries == 0
+    assert executor.state.positions[0].size == Decimal("4.08")
+    assert executor.state.positions[0].stop_loss >= strategy_plan.stop_loss
+    assert store.state.entry_frozen is True
+    assert store.state.status is StrategyStatus.PROFIT_PROTECTED
 
 
 def test_supervisor_installs_exits_before_profit_threshold() -> None:

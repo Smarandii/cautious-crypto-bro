@@ -10,6 +10,8 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from cautious_crypto_bro.domain import StrategyV2Policy
 
 spec = importlib.util.spec_from_file_location(
@@ -38,6 +40,62 @@ def test_summary_uses_closed_r_results_and_chronological_drawdown() -> None:
     assert summary["avg_loss_r"] == -1.5
     assert summary["profit_factor"] == 1.0
     assert summary["max_drawdown_r"] == 1.5
+
+
+def test_fills_reports_first_fill_separately_from_final_average_entry() -> None:
+    executions = [
+        {"execType": "Trade", "execTime": "1000", "execQty": "1", "execPrice": "100"},
+        {"execType": "Trade", "execTime": "5000", "execQty": "3", "execPrice": "80"},
+    ]
+
+    assert replay.fills(executions) == (1000, 85.0, 100.0)
+
+
+def test_empty_side_summary_reports_unavailable_metrics() -> None:
+    summary = replay.summarize_results([])
+
+    assert summary == {
+        "count": 0,
+        "net_r": 0,
+        "expectancy_r": None,
+        "win_rate": None,
+        "avg_win_r": None,
+        "avg_loss_r": None,
+        "profit_factor": None,
+        "max_drawdown_r": 0.0,
+    }
+
+
+def test_optional_r_formatter_handles_missing_loss_sample() -> None:
+    assert replay.format_optional_r(None) == "n/a"
+    assert replay.format_optional_r(-0.375) == "-0.375R"
+
+
+def test_prospective_candidate_reports_empty_direction_without_crashing(
+    monkeypatch,
+) -> None:
+    result = replay.Result(start=1, net_r=0.1, mfe_r=0.2, stopped=False)
+    monkeypatch.setattr(replay, "replay", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(
+        replay,
+        "paired_difference_summary",
+        lambda _baseline, _challenger: {"count": 1},
+    )
+    output = io.StringIO()
+
+    with redirect_stdout(output):
+        replay.report_prospective_candidate_shadow(
+            [{"side": "LONG"}],
+            0.00055,
+            challenger=replay.current_policy(),
+            frozen_after="2026-10-01T00:00:00+00:00",
+        )
+
+    assert 'prospective_shadow_metrics=SHORT/current {"avg_loss_r": null' in (
+        output.getvalue()
+    )
+    assert '"count": 0' in output.getvalue()
+    assert '"expectancy_r": null' in output.getvalue()
 
 
 def test_summarize_by_side_keeps_directional_samples_separate() -> None:
@@ -158,6 +216,29 @@ def test_live_demo_early_trail_candidate_matches_separate_experiment() -> None:
     assert candidate.take_profit_pcts == (15.0, 20.0, 25.0)
 
 
+def test_live_demo_tight_trail_candidate_matches_current_profile() -> None:
+    candidate = replay.live_demo_tight_trail_candidate()
+
+    assert candidate.weights == (0.60, 0.25, 0.15)
+    assert candidate.depths == (0.33, 0.66)
+    assert candidate.trail_at == 0.20
+    assert candidate.trail_by == 0.05
+    assert candidate.take_profit_rs == (1.0, 2.0, 4.0)
+    assert candidate.take_profit_pcts == (15.0, 20.0, 25.0)
+
+
+def test_live_demo_long_015_candidate_changes_only_trail_activation() -> None:
+    baseline = replay.live_demo_tight_trail_candidate()
+    candidate = replay.live_demo_long_015_candidate()
+
+    assert candidate.weights == baseline.weights
+    assert candidate.depths == baseline.depths
+    assert candidate.trail_at == 0.15
+    assert candidate.trail_by == baseline.trail_by == 0.05
+    assert candidate.take_profit_rs == baseline.take_profit_rs
+    assert candidate.take_profit_pcts == baseline.take_profit_pcts
+
+
 def test_live_demo_payoff_candidate_with_reduced_e3_is_policy_valid() -> None:
     candidate = replay.live_demo_payoff_exit_reduced_e3_candidate()
 
@@ -241,6 +322,150 @@ def test_prospective_early_trail_shadow_freezes_only_the_new_exit_profile(
 
     assert captured["frozen_after"] == replay.EARLY_TRAIL_FROZEN_AFTER
     assert captured["challenger"] == replay.early_trail_candidate()
+
+
+def test_prospective_demo_trail_shadow_compares_exact_live_exit_profiles(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def capture_candidate(_cases, _fee_rate, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        replay,
+        "report_prospective_candidate_shadow",
+        capture_candidate,
+    )
+
+    replay.report_prospective_demo_trail_shadow([], 0.00055)
+
+    baseline = replay.live_demo_early_trail_candidate()
+    challenger = replay.live_demo_payoff_exit_candidate()
+    assert captured["frozen_after"] == replay.DEMO_TRAIL_SHADOW_FROZEN_AFTER
+    assert captured["baseline"] == baseline
+    assert captured["challenger"] == challenger
+    assert baseline.weights == challenger.weights
+    assert baseline.depths == challenger.depths
+    assert baseline.take_profit_rs == challenger.take_profit_rs
+    assert baseline.take_profit_pcts == challenger.take_profit_pcts
+    assert (baseline.trail_at, baseline.trail_by) == (0.20, 0.10)
+    assert (challenger.trail_at, challenger.trail_by) == (0.40, 0.10)
+
+
+def test_demo_target_sweep_changes_only_profit_target_distances() -> None:
+    profiles = replay.demo_target_sweep_candidates()
+    baseline = replay.live_demo_tight_trail_candidate()
+
+    assert profiles[0] == ("active_1_2_4R", baseline)
+    assert [name for name, _ in profiles] == [
+        "active_1_2_4R",
+        "targets_1.25_2.5_5R",
+        "targets_1.5_3_6R",
+        "targets_2_4_8R",
+    ]
+    for _, candidate in profiles:
+        assert candidate.weights == baseline.weights
+        assert candidate.depths == baseline.depths
+        assert (candidate.trail_at, candidate.trail_by) == (
+            baseline.trail_at,
+            baseline.trail_by,
+        )
+        assert candidate.take_profit_pcts == baseline.take_profit_pcts
+
+
+def test_demo_runner_allocation_sweep_preserves_tight_trail_geometry() -> None:
+    profiles = replay.demo_runner_allocation_candidates()
+    baseline = replay.live_demo_tight_trail_candidate()
+
+    assert profiles[1] == ("active_runner_40pct", baseline)
+    assert [name for name, _ in profiles] == [
+        "runner_30pct",
+        "active_runner_40pct",
+        "runner_50pct",
+        "runner_60pct",
+        "runner_70pct",
+    ]
+    assert [100 - sum(candidate.take_profit_pcts) for _, candidate in profiles] == [
+        30.0,
+        40.0,
+        50.0,
+        60.0,
+        70.0,
+    ]
+    for _, candidate in profiles:
+        assert candidate.weights == baseline.weights
+        assert candidate.depths == baseline.depths
+        assert (candidate.trail_at, candidate.trail_by) == (
+            baseline.trail_at,
+            baseline.trail_by,
+        )
+        assert candidate.take_profit_rs == baseline.take_profit_rs
+
+
+def test_demo_trail_activation_sweep_changes_only_activation_threshold() -> None:
+    profiles = replay.demo_trail_activation_candidates()
+    baseline = replay.live_demo_tight_trail_candidate()
+
+    assert [candidate.trail_at for _, candidate in profiles] == [
+        0.10,
+        0.15,
+        0.20,
+        0.25,
+        0.30,
+    ]
+    assert profiles[2] == ("activation_0.20R", baseline)
+    for _, candidate in profiles:
+        assert candidate.weights == baseline.weights
+        assert candidate.depths == baseline.depths
+        assert candidate.trail_by == baseline.trail_by
+        assert candidate.take_profit_rs == baseline.take_profit_rs
+        assert candidate.take_profit_pcts == baseline.take_profit_pcts
+
+
+def test_demo_trail_distance_sweep_changes_only_trailing_distance() -> None:
+    profiles = replay.demo_trail_distance_candidates()
+    baseline = replay.live_demo_tight_trail_candidate()
+
+    assert profiles[0] == ("active_0.05R", baseline)
+    assert [candidate.trail_by for _, candidate in profiles] == [0.05, 0.10, 0.15]
+    for _, candidate in profiles:
+        assert candidate.weights == baseline.weights
+        assert candidate.depths == baseline.depths
+        assert candidate.trail_at == baseline.trail_at
+        assert candidate.take_profit_rs == baseline.take_profit_rs
+        assert candidate.take_profit_pcts == baseline.take_profit_pcts
+
+
+def test_no_e3_candidate_preserves_exits_and_reallocates_e1_e2_risk() -> None:
+    baseline = replay.live_demo_tight_trail_candidate()
+    candidate = replay.no_e3_candidate(baseline)
+
+    assert sum(candidate.weights) == pytest.approx(1.0)
+    assert candidate.weights[2] == 0.0
+    assert candidate.weights[0] / candidate.weights[1] == pytest.approx(0.60 / 0.25)
+    assert candidate.depths == baseline.depths
+    assert candidate.trail_at == baseline.trail_at
+    assert candidate.trail_by == baseline.trail_by
+    assert candidate.take_profit_rs == baseline.take_profit_rs
+    assert candidate.take_profit_pcts == baseline.take_profit_pcts
+
+
+def test_exit_excursion_separates_losses_before_and_after_trail_activation() -> None:
+    results = [
+        replay.Result(start=1, net_r=-1.0, mfe_r=0.1, stopped=True),
+        replay.Result(start=2, net_r=-1.0, mfe_r=0.25, stopped=True),
+        replay.Result(start=3, net_r=0.1, mfe_r=0.3, stopped=False),
+    ]
+
+    summary = replay.summarize_exit_excursion(results, trail_activation_r=0.2)
+
+    assert summary == {
+        "mean_mfe_r": pytest.approx(0.2166666667),
+        "losing_cases": 2,
+        "losing_cases_below_trail_activation": 1,
+        "losing_cases_reaching_trail_activation": 1,
+    }
 
 
 def test_frozen_depth_exit_candidate_has_expected_policy_geometry() -> None:
@@ -783,6 +1008,86 @@ def test_time_stop_does_not_exit_when_close_recovers_above_loss_threshold() -> N
     )
 
     assert time_stopped.net_r == held.net_r
+
+
+def test_untriggered_time_stop_does_not_fire_after_trail_activation() -> None:
+    case = {
+        "start": 0,
+        "side": "LONG",
+        "entry": 100.0,
+        "stop": 90.0,
+        "trader_tp": None,
+        "candles": [
+            {"time": 0, "high": 100.0, "low": 98.0, "close": 99.0},
+            {"time": 60_000, "high": 103.0, "low": 95.0, "close": 96.0},
+            {"time": 120_000, "high": 104.0, "low": 100.0, "close": 103.0},
+        ],
+        "events": [],
+    }
+    candidate = replay.Candidate(
+        weights=(1.0, 0.0, 0.0),
+        depths=(0.33, 0.66),
+        trail_at=0.20,
+        trail_by=0.10,
+        take_profit_rs=(3.0, 4.0, 5.0),
+    )
+
+    stopped_before_trigger = replay.replay(
+        case,
+        candidate,
+        0.0,
+        use_events=False,
+        time_stop=replay.TimeStop(after_minutes=2, max_close_r=-0.30),
+    )
+    protected_after_trigger = replay.replay(
+        case,
+        candidate,
+        0.0,
+        use_events=False,
+        time_stop=replay.TimeStop(
+            after_minutes=2,
+            max_close_r=-0.30,
+            only_before_trail_activation=True,
+        ),
+    )
+
+    assert stopped_before_trigger.net_r == -0.4
+    assert protected_after_trigger.net_r > 0.0
+
+
+def test_close_confirmed_trail_does_not_activate_on_intrabar_spike_alone() -> None:
+    case = {
+        "start": 0,
+        "side": "LONG",
+        "entry": 100.0,
+        "stop": 90.0,
+        "trader_tp": None,
+        "candles": [
+            {"time": 0, "high": 100.0, "low": 99.0, "close": 100.0},
+            {"time": 60_000, "high": 103.0, "low": 100.5, "close": 100.5},
+            {"time": 120_000, "high": 102.5, "low": 100.5, "close": 100.5},
+        ],
+        "events": [],
+    }
+    candidate = replay.Candidate(
+        weights=(1.0, 0.0, 0.0),
+        depths=(0.33, 0.66),
+        trail_at=0.20,
+        trail_by=0.10,
+        take_profit_rs=(3.0, 4.0, 5.0),
+    )
+
+    intrabar = replay.replay(case, candidate, 0.0, use_events=False)
+    close_confirmed = replay.replay(
+        case,
+        candidate,
+        0.0,
+        use_events=False,
+        trail_activation_on_close=True,
+    )
+
+    assert intrabar.net_r == 0.2
+    assert close_confirmed.net_r == 0.05
 
 
 def test_time_stop_rejects_nonpositive_age_and_nonfinite_threshold() -> None:

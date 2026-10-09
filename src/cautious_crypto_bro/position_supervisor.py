@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -241,15 +241,16 @@ class PositionSupervisor:
         plan: ExecutionPlan,
         account: AccountStateSummary,
     ) -> AccountStateSummary:
-        position = self._position(
+        account, expiry_handled = await self._handle_expired_entries(
             state,
+            plan,
             account,
         )
+        if expiry_handled:
+            return account
 
-        pending_entries = self._pending_entries(
-            state,
-            account,
-        )
+        position = self._position(state, account)
+        pending_entries = self._pending_entries(state, account)
 
         blocked = await self._blocked_reconcile_outcome(
             state,
@@ -547,8 +548,11 @@ class PositionSupervisor:
         plan: ExecutionPlan,
         account: AccountStateSummary,
         strategy: StrategyV2Policy,
+        *,
+        cancel_pending: bool = True,
     ) -> AccountStateSummary:
-        await self._executor.cancel_pending_entries(state.symbol)
+        if cancel_pending:
+            await self._executor.cancel_pending_entries(state.symbol)
         account = await self._executor.account_state()
         updated_position = self._position(state, account)
 
@@ -991,17 +995,106 @@ class PositionSupervisor:
         state: PositionStrategy,
         account: AccountStateSummary,
     ) -> tuple[str, ...]:
-        prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-e"
-
         return tuple(
             order.order_link_id
             for order in account.open_orders
             if (
                 order.symbol == state.symbol
                 and not order.reduce_only
-                and order.order_link_id.startswith(prefix)
+                and order.order_link_id.startswith(
+                    f"ccb-v2-{state.strategy_id.hex[:20]}-e"
+                )
             )
         )
+
+    @staticmethod
+    def _planned_entry_link_ids(
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+    ) -> set[str]:
+        return {
+            f"ccb-v2-{state.strategy_id.hex[:20]}-{planned.name.lower()}"
+            for planned in plan.orders
+        }
+
+    async def _handle_expired_entries(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+    ) -> tuple[AccountStateSummary, bool]:
+        position = self._position(state, account)
+        account, expired = await self._expire_stale_entries(
+            state,
+            plan,
+            account,
+            position,
+        )
+        if not expired:
+            return account, False
+
+        position = self._position(state, account)
+        pending_entries = self._pending_entries(state, account)
+        if position is None and not pending_entries:
+            await self._save(state.model_copy(update={"status": StrategyStatus.CLOSED}))
+            return account, True
+        if position is not None and not state.entry_frozen:
+            account = await self._freeze_entries(
+                state,
+                plan,
+                account,
+                plan.policy.strategy_v2,
+                cancel_pending=False,
+            )
+            return account, True
+        return account, False
+
+    async def _expire_stale_entries(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+        position: AccountPosition | None,
+    ) -> tuple[AccountStateSummary, bool]:
+        if state.status in {
+            StrategyStatus.CLOSING,
+            StrategyStatus.MANUAL_OVERRIDE,
+            StrategyStatus.UNCERTAIN,
+        }:
+            return account, False
+        ttl_minutes = plan.policy.strategy_v2.entry_order_ttl_minutes
+        expires_at = plan.created_at + timedelta(minutes=ttl_minutes)
+        if ttl_minutes == 0 or datetime.now(UTC) < expires_at:
+            return account, False
+
+        expected_link_ids = self._planned_entry_link_ids(state, plan)
+        stale_entries = tuple(
+            order
+            for order in account.open_orders
+            if (
+                order.symbol == state.symbol
+                and not order.reduce_only
+                and order.order_link_id in expected_link_ids
+            )
+        )
+        if stale_entries:
+            logger.info(
+                "Expiring %d Strategy V2 entry leg(s) for %s after %d minutes",
+                len(stale_entries),
+                state.symbol,
+                ttl_minutes,
+            )
+            for order in stale_entries:
+                await self._executor.cancel_order(state.symbol, order.order_id)
+            account = await self._executor.account_state()
+        elif position is None:
+            logger.info(
+                "Closing expired unfilled Strategy V2 plan for %s after %d minutes",
+                state.symbol,
+                ttl_minutes,
+            )
+
+        return account, True
 
     @staticmethod
     def _live_r(

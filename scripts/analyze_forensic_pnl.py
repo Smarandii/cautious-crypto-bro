@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import statistics
 import zipfile
@@ -17,12 +18,16 @@ LONG_RISK_CURVE_FROZEN_AFTER = "2026-10-07T19:50:18+00:00"
 LONG_RISK_CURVE_MULTIPLIERS = (0.0, 0.25, 0.5, 1.0)
 LIVE_LONG_RISK_STARTED_AT = "2026-10-08T08:49:47+00:00"
 LIVE_LONG_RISK_MULTIPLIER = 0.10
+LIVE_LONG_RISK_EXIT_PROFILE = "payoff_early_trail"
 BASELINE_RISK_PER_TRADE_PCT = 1.0
 SOURCE_SIDE_HEALTH_SHADOW_FROZEN_AFTER = "2026-10-07T17:42:41+00:00"
 SOURCE_SIDE_HEALTH_WINDOW = 3
 PROSPECTIVE_SHADOW_REVIEW_CASES = 20
 DEMO_EXIT_PROFILE_REVIEW_CASES = 20
+DEMO_ENTRY_TTL_REVIEW_CASES = 20
 DEMO_PAYOFF_EXIT_PROFILE = "payoff_early_trail"
+DEMO_LONG_EXIT_AB_TREATMENT_PROFILE = "payoff_early_tight_trail_long_ab_015"
+DEMO_LONG_EXIT_AB_CONTROL_PROFILE = "payoff_early_tight_trail_long_ab_020_control"
 
 
 def jsonl(archive: zipfile.ZipFile, root: str, name: str) -> list[dict]:
@@ -51,6 +56,35 @@ def read_open_positions_snapshot(path: Path) -> tuple[list[dict], str | None]:
             json.loads(archive.read(metadata_name)) if metadata_name in members else {}
         )
         return positions, metadata.get("open_positions_as_of")
+
+
+def read_open_entry_orders_snapshot(
+    path: Path,
+) -> tuple[list[dict] | None, str | None, int | None]:
+    """Read tracked entries and unmatched-entry count from the account snapshot."""
+    with zipfile.ZipFile(path) as archive:
+        if not archive.namelist():
+            return None, None, None
+        root = archive.namelist()[0].split("/", 1)[0]
+        members = set(archive.namelist())
+        name = f"{root}/bybit/open_entry_orders.jsonl"
+        metadata_name = f"{root}/metadata.json"
+        if name not in members:
+            return None, None, None
+        metadata = (
+            json.loads(archive.read(metadata_name)) if metadata_name in members else {}
+        )
+        orders_as_of = (
+            metadata.get("open_entry_orders_as_of")
+            or metadata.get("open_account_orders_as_of")
+            or metadata.get("open_positions_as_of")
+        )
+        unmatched = metadata.get("unmatched_entry_order_count")
+        return (
+            jsonl(archive, root, "bybit/open_entry_orders.jsonl"),
+            orders_as_of,
+            int(unmatched) if unmatched is not None else None,
+        )
 
 
 def read_open_positions(path: Path) -> list[dict]:
@@ -124,6 +158,10 @@ def reconcile(path: Path) -> list[dict]:
                     "entry_type": metadata.get("entry_type"),
                     "risk_per_trade_pct": metadata.get("risk_per_trade_pct"),
                     "exit_profile": metadata.get("exit_profile", "baseline"),
+                    "long_participation_arm": metadata.get("long_participation_arm"),
+                    "entry_order_ttl_minutes": int(
+                        metadata.get("entry_order_ttl_minutes") or 0
+                    ),
                     "planned_max_loss_usdt": (
                         float(metadata["planned_max_loss_usdt"])
                         if metadata.get("planned_max_loss_usdt") is not None
@@ -356,6 +394,46 @@ def summarize(
     }
 
 
+def concentration_summary(positions: list[dict]) -> dict[str, float | int | None]:
+    """Show how much realized profit depends on the three largest winners."""
+    winners_usdt = sorted(
+        (position["net_pnl"] for position in positions if position["net_pnl"] > 0),
+        reverse=True,
+    )
+    winners_r = sorted(
+        (position["net_r"] for position in positions if position["net_r"] > 0),
+        reverse=True,
+    )
+    top_three_usdt = sum(winners_usdt[:3])
+    top_three_r = sum(winners_r[:3])
+    gross_wins_usdt = sum(winners_usdt)
+    gross_wins_r = sum(winners_r)
+
+    return {
+        "positive_positions": len(winners_usdt),
+        "top_three_positive_pnl_usdt": round(top_three_usdt, 8),
+        "top_three_share_of_gross_wins_pct": round(
+            100 * top_three_usdt / gross_wins_usdt, 4
+        )
+        if gross_wins_usdt
+        else None,
+        "net_pnl_ex_top_three_positive_usdt": round(
+            sum(position["net_pnl"] for position in positions) - top_three_usdt,
+            8,
+        ),
+        "top_three_positive_r": round(top_three_r, 8),
+        "top_three_share_of_gross_winning_r_pct": round(
+            100 * top_three_r / gross_wins_r, 4
+        )
+        if gross_wins_r
+        else None,
+        "net_r_ex_top_three_positive": round(
+            sum(position["net_r"] for position in positions) - top_three_r,
+            8,
+        ),
+    }
+
+
 def bootstrap_performance_intervals(
     positions: list[dict],
     *,
@@ -367,7 +445,12 @@ def bootstrap_performance_intervals(
     if iterations < 1 or block_size < 1:
         raise ValueError("Bootstrap iterations and block size must be positive")
 
-    metric_names = ("mean_net_r", "mean_net_pnl_usdt", "avg_win_loss_ratio")
+    metric_names = (
+        "mean_net_r",
+        "mean_net_pnl_usdt",
+        "avg_win_loss_ratio",
+        "avg_win_loss_ratio_r",
+    )
     method_names = ("iid", f"circular_block_{block_size}")
     if not positions:
         return {method: dict.fromkeys(metric_names) for method in method_names}
@@ -398,18 +481,28 @@ def bootstrap_performance_intervals(
     }
 
 
-def _performance_metrics(positions: list[dict]) -> tuple[float, float, float | None]:
+def _performance_metrics(
+    positions: list[dict],
+) -> tuple[float, float, float | None, float | None]:
     winners = [position["net_pnl"] for position in positions if position["net_pnl"] > 0]
     losers = [position["net_pnl"] for position in positions if position["net_pnl"] < 0]
+    winner_rs = [position["net_r"] for position in positions if position["net_r"] > 0]
+    loser_rs = [position["net_r"] for position in positions if position["net_r"] < 0]
     payoff_ratio = (
         statistics.mean(winners) / abs(statistics.mean(losers))
         if winners and losers
+        else None
+    )
+    payoff_ratio_r = (
+        statistics.mean(winner_rs) / abs(statistics.mean(loser_rs))
+        if winner_rs and loser_rs
         else None
     )
     return (
         statistics.mean(position["net_r"] for position in positions),
         statistics.mean(position["net_pnl"] for position in positions),
         payoff_ratio,
+        payoff_ratio_r,
     )
 
 
@@ -545,8 +638,12 @@ def _complete_reconciled_positions_after(
 
 
 def report_prospective_live_long_risk(positions: list[dict]) -> None:
-    """Report actual Demo LONG results at the configured reduced-risk size."""
-    live_longs = prospective_live_long_risk_positions(positions)
+    """Report reduced-risk LONGs within their frozen exit-profile cohort."""
+    live_longs = [
+        position
+        for position in prospective_live_long_risk_positions(positions)
+        if position.get("exit_profile") == LIVE_LONG_RISK_EXIT_PROFILE
+    ]
     cutoff = datetime.fromisoformat(LIVE_LONG_RISK_STARTED_AT).astimezone(UTC)
     cutoff_ms = int(cutoff.timestamp() * 1000)
     short_controls = [
@@ -555,6 +652,7 @@ def report_prospective_live_long_risk(positions: list[dict]) -> None:
         if position.get("complete")
         and position.get("side") == "SHORT"
         and position.get("start", 0) > cutoff_ms
+        and position.get("exit_profile") == LIVE_LONG_RISK_EXIT_PROFILE
         and _risk_pct_matches(
             position.get("risk_per_trade_pct"),
             BASELINE_RISK_PER_TRADE_PCT,
@@ -567,6 +665,7 @@ def report_prospective_live_long_risk(positions: list[dict]) -> None:
     )
     print(f"prospective_live_long_risk_started_at={LIVE_LONG_RISK_STARTED_AT}")
     print(f"prospective_live_long_risk_multiplier={LIVE_LONG_RISK_MULTIPLIER:.2f}")
+    print(f"prospective_live_long_risk_exit_profile={LIVE_LONG_RISK_EXIT_PROFILE}")
     print(f"prospective_live_long_risk_long_cases={len(live_longs)}")
     print(f"prospective_live_long_risk_short_controls={len(short_controls)}")
     status = (
@@ -591,17 +690,31 @@ def report_prospective_live_long_risk(positions: list[dict]) -> None:
         else "unavailable/no_cases",
     )
     print(
+        "prospective_live_long_risk_costs=LONG",
+        json.dumps(cost_summary(live_longs), sort_keys=True),
+    )
+    print(
+        "prospective_live_long_risk_costs=SHORT_CONTROL",
+        json.dumps(cost_summary(short_controls), sort_keys=True),
+    )
+    print(
         "prospective_live_long_risk_bootstrap_95ci=LONG",
         json.dumps(bootstrap_performance_intervals(live_longs), sort_keys=True),
     )
+    print(
+        "prospective_live_long_risk_bootstrap_95ci=SHORT_CONTROL",
+        json.dumps(bootstrap_performance_intervals(short_controls), sort_keys=True),
+    )
 
 
-def report_prospective_demo_exit_profile(positions: list[dict]) -> None:
+def report_prospective_demo_exit_profile(
+    positions: list[dict],
+    *,
+    profile: str = DEMO_PAYOFF_EXIT_PROFILE,
+) -> None:
     """Report realized results for the tagged Demo payoff-exit cohort."""
     filled = [
-        position
-        for position in positions
-        if position.get("exit_profile") == DEMO_PAYOFF_EXIT_PROFILE
+        position for position in positions if position.get("exit_profile") == profile
     ]
     complete = [position for position in filled if position.get("complete")]
     status = (
@@ -609,7 +722,7 @@ def report_prospective_demo_exit_profile(positions: list[dict]) -> None:
         if len(complete) >= DEMO_EXIT_PROFILE_REVIEW_CASES
         else "collecting"
     )
-    print(f"prospective_demo_exit_profile={DEMO_PAYOFF_EXIT_PROFILE}")
+    print(f"prospective_demo_exit_profile={profile}")
     print(f"prospective_demo_exit_profile_filled_positions={len(filled)}")
     print(f"prospective_demo_exit_profile_completed_positions={len(complete)}")
     print(
@@ -625,6 +738,110 @@ def report_prospective_demo_exit_profile(positions: list[dict]) -> None:
     print(
         "prospective_demo_exit_profile_bootstrap_95ci=",
         json.dumps(bootstrap_performance_intervals(complete), sort_keys=True),
+    )
+    print(
+        "prospective_demo_exit_profile_concentration=",
+        json.dumps(concentration_summary(complete), sort_keys=True),
+    )
+    if not complete:
+        return
+
+    for side in ("LONG", "SHORT"):
+        selected = [position for position in complete if position["side"] == side]
+        if selected:
+            _report_cohort_breakdown(
+                "prospective_demo_exit_profile",
+                f"side_{side}",
+                selected,
+            )
+
+    source_ids = sorted(
+        {
+            str(position["source_channel_id"])
+            for position in complete
+            if position.get("source_channel_id") is not None
+        }
+    )
+    for source_id in source_ids:
+        for side in ("LONG", "SHORT"):
+            selected = [
+                position
+                for position in complete
+                if str(position.get("source_channel_id")) == source_id
+                and position["side"] == side
+            ]
+            if selected:
+                _report_cohort_breakdown(
+                    "prospective_demo_exit_profile",
+                    f"source_side_{source_id}_{side}",
+                    selected,
+                )
+
+
+def report_prospective_demo_entry_order_ttl(
+    positions: list[dict],
+    *,
+    ttl_minutes: int,
+) -> None:
+    """Report fully reconciled positions from one persisted entry-TTL cohort."""
+    if ttl_minutes <= 0:
+        raise ValueError("Prospective Demo entry-order TTL must be positive")
+    filled = [
+        position
+        for position in positions
+        if position.get("entry_order_ttl_minutes", 0) == ttl_minutes
+    ]
+    complete = [position for position in filled if position.get("complete")]
+    status = (
+        "ready_for_review"
+        if len(complete) >= DEMO_ENTRY_TTL_REVIEW_CASES
+        else "collecting"
+    )
+    print(f"prospective_demo_entry_order_ttl_minutes={ttl_minutes}")
+    print(f"prospective_demo_entry_order_ttl_filled_positions={len(filled)}")
+    print(f"prospective_demo_entry_order_ttl_completed_positions={len(complete)}")
+    print(
+        "prospective_demo_entry_order_ttl_status="
+        f"{status}/target:{DEMO_ENTRY_TTL_REVIEW_CASES}"
+    )
+    print(
+        "prospective_demo_entry_order_ttl_metrics=",
+        json.dumps(summarize(complete), sort_keys=True)
+        if complete
+        else "unavailable/no_cases",
+    )
+    print(
+        "prospective_demo_entry_order_ttl_bootstrap_95ci=",
+        json.dumps(bootstrap_performance_intervals(complete), sort_keys=True),
+    )
+    if not complete:
+        return
+
+    for side in ("LONG", "SHORT"):
+        selected = [position for position in complete if position["side"] == side]
+        if selected:
+            _report_cohort_breakdown(
+                "prospective_demo_entry_order_ttl",
+                f"side_{side}",
+                selected,
+            )
+
+
+def _report_cohort_breakdown(
+    namespace: str,
+    label: str,
+    positions: list[dict],
+) -> None:
+    prefix = f"{namespace}_{label}"
+    print(f"{prefix}_metrics=", json.dumps(summarize(positions), sort_keys=True))
+    print(f"{prefix}_costs=", json.dumps(cost_summary(positions), sort_keys=True))
+    print(
+        f"{prefix}_bootstrap_95ci=",
+        json.dumps(bootstrap_performance_intervals(positions), sort_keys=True),
+    )
+    print(
+        f"{prefix}_concentration=",
+        json.dumps(concentration_summary(positions), sort_keys=True),
     )
 
 
@@ -779,6 +996,95 @@ def scale_long_risk(positions: list[dict], multiplier: float) -> list[dict]:
     return scaled
 
 
+def apply_current_demo_long_sizing(
+    positions: list[dict],
+    multiplier: float = LIVE_LONG_RISK_MULTIPLIER,
+) -> list[dict]:
+    """Scale only baseline-risk LONGs; preserve cases already traded at reduced risk."""
+    if not 0 <= multiplier <= 1:
+        raise ValueError("Long risk multiplier must be between 0 and 1")
+    scaled = []
+    for position in positions:
+        is_baseline_long = position.get("side") == "LONG" and _risk_pct_matches(
+            position.get("risk_per_trade_pct"),
+            BASELINE_RISK_PER_TRADE_PCT,
+        )
+        factor = multiplier if is_baseline_long else 1.0
+        scaled.append(
+            {
+                **position,
+                "net_pnl": position["net_pnl"] * factor,
+                "risk_usdt": position["risk_usdt"] * factor,
+                "planned_max_loss_usdt": (
+                    position["planned_max_loss_usdt"] * factor
+                    if position.get("planned_max_loss_usdt") is not None
+                    else None
+                ),
+            }
+        )
+    return scaled
+
+
+def report_retrospective_current_demo_sizing(positions: list[dict]) -> None:
+    """Compare the current LONG sizing rule without double-scaling live cohorts."""
+    complete = [position for position in positions if position.get("complete")]
+    ordered = sorted(complete, key=lambda position: position["start"])
+    scaled = apply_current_demo_long_sizing(ordered)
+    deltas = [
+        candidate["net_pnl"] - baseline["net_pnl"]
+        for baseline, candidate in zip(ordered, scaled, strict=True)
+    ]
+    positive_deltas = sorted((delta for delta in deltas if delta > 0), reverse=True)
+    rng = random.Random(20261008)
+    iid_totals = []
+    block_totals = []
+    for _ in range(10_000):
+        iid_totals.append(sum(rng.choices(deltas, k=len(deltas))))
+        sample = []
+        while len(sample) < len(deltas):
+            start = rng.randrange(len(deltas))
+            sample.extend(deltas[(start + offset) % len(deltas)] for offset in range(4))
+        block_totals.append(sum(sample[: len(deltas)]))
+    split = int(len(ordered) * 0.70)
+    print(
+        "retrospective_demo_sizing_note=linear counterfactual; only 1.0%-risk LONGs "
+        f"scaled to {LIVE_LONG_RISK_MULTIPLIER:.2f}; actual 0.10%/0.25% LONGs and "
+        "all SHORTs preserved; assumes PnL, fees and risk scale with size; ignores "
+        "fill/minimum-size/slippage changes; not proof of profitability"
+    )
+    print(
+        "retrospective_demo_sizing_counts="
+        f"complete:{len(ordered)} baseline_longs_scaled:"
+        f"{sum(position.get('side') == 'LONG' and _risk_pct_matches(position.get('risk_per_trade_pct'), BASELINE_RISK_PER_TRADE_PCT) for position in ordered)} "
+        f"live_0.10_longs_preserved:{sum(position.get('side') == 'LONG' and _risk_pct_matches(position.get('risk_per_trade_pct'), BASELINE_RISK_PER_TRADE_PCT * LIVE_LONG_RISK_MULTIPLIER) for position in ordered)}"
+    )
+    print(
+        "retrospective_demo_sizing_metrics=current",
+        json.dumps(summarize(ordered), sort_keys=True),
+    )
+    print(
+        "retrospective_demo_sizing_metrics=counterfactual",
+        json.dumps(summarize(scaled), sort_keys=True),
+    )
+    print(
+        "retrospective_demo_sizing_paired_delta=",
+        json.dumps(
+            {
+                "delta_net_pnl_usdt": sum(deltas),
+                "delta_ex_top_three_positive_usdt": sum(deltas)
+                - sum(positive_deltas[:3]),
+                "iid_bootstrap_95ci_usdt": _percentile_95_interval(iid_totals),
+                "circular_block_4_bootstrap_95ci_usdt": _percentile_95_interval(
+                    block_totals
+                ),
+                "early70_delta_usdt": sum(deltas[:split]),
+                "latest30_delta_usdt": sum(deltas[split:]),
+            },
+            sort_keys=True,
+        ),
+    )
+
+
 def portfolio_risk_cap_sensitivity(
     positions: list[dict],
     cap_multiples: tuple[float, ...] = (3.0, 5.0),
@@ -900,6 +1206,205 @@ def portfolio_risk_cap_sensitivity(
             }
         )
     return reports
+
+
+def apply_portfolio_stop_risk_cap(
+    positions: list[dict],
+    cap_usdt: float,
+    *,
+    risk_basis: str = "actual",
+) -> list[dict]:
+    """Scale complete positions to a fixed concurrent initial-stop-risk cap."""
+    if cap_usdt <= 0:
+        raise ValueError("Portfolio stop-risk cap must be positive")
+    if risk_basis not in {"actual", "planned"}:
+        raise ValueError("Risk basis must be 'actual' or 'planned'")
+
+    ordered = sorted(
+        (position for position in positions if position.get("complete") is True),
+        key=lambda position: position["start"],
+    )
+    active_risk: list[tuple[int, float]] = []
+    capped = []
+    for position in ordered:
+        active_risk = [
+            (closed_at, risk)
+            for closed_at, risk in active_risk
+            if closed_at > position["start"]
+        ]
+        actual_risk = position["risk_usdt"]
+        risk = (
+            actual_risk
+            if risk_basis == "actual"
+            else position.get("planned_max_loss_usdt")
+        )
+        if risk is None or risk < 0:
+            raise ValueError(f"Missing or invalid {risk_basis} risk for position")
+        available = max(0.0, cap_usdt - sum(amount for _, amount in active_risk))
+        factor = min(1.0, available / risk) if risk > 0 else 0.0
+        capped.append(
+            {
+                **position,
+                "net_pnl": position["net_pnl"] * factor,
+                "risk_usdt": actual_risk * factor,
+                "planned_max_loss_usdt": (
+                    position["planned_max_loss_usdt"] * factor
+                    if position.get("planned_max_loss_usdt") is not None
+                    else None
+                ),
+                "net_r": position["net_r"] if factor > 0 else 0.0,
+                "portfolio_cap_factor": factor,
+                "portfolio_cap_risk_basis": risk_basis,
+            }
+        )
+        active_risk.append((position["closed_at"], risk * factor))
+    return capped
+
+
+def report_retrospective_live_sizing_with_cap(
+    positions: list[dict],
+    cap_usdt: float,
+    *,
+    risk_basis: str = "actual",
+    bootstrap_iterations: int = 10_000,
+    seed: int = 20261008,
+) -> None:
+    """Report the joint LONG-sizing and concurrent portfolio-cap counterfactual."""
+    if bootstrap_iterations < 1:
+        raise ValueError("Bootstrap iterations must be positive")
+    complete = sorted(
+        (position for position in positions if position.get("complete") is True),
+        key=lambda position: position["start"],
+    )
+    current_sizing = apply_current_demo_long_sizing(complete)
+    combined = apply_portfolio_stop_risk_cap(
+        current_sizing,
+        cap_usdt,
+        risk_basis=risk_basis,
+    )
+    paired_deltas = [
+        candidate["net_pnl"] - baseline["net_pnl"]
+        for baseline, candidate in zip(complete, combined, strict=True)
+    ]
+    positive_deltas = sorted(
+        (delta for delta in paired_deltas if delta > 0), reverse=True
+    )
+    rng = random.Random(seed)
+    iid_means = []
+    block_means = []
+    for _ in range(bootstrap_iterations):
+        iid_means.append(
+            statistics.mean(rng.choices(paired_deltas, k=len(paired_deltas)))
+        )
+        block = []
+        while len(block) < len(paired_deltas):
+            start = rng.randrange(len(paired_deltas))
+            block.extend(
+                paired_deltas[(start + offset) % len(paired_deltas)]
+                for offset in range(4)
+            )
+        block_means.append(statistics.mean(block[: len(paired_deltas)]))
+
+    split_train_end = int(len(complete) * 0.5)
+    split_validation_end = int(len(complete) * 0.7)
+    print(
+        "retrospective_live_sizing_cap_note=linear counterfactual; only 1.0%-risk "
+        f"LONGs scaled to {LIVE_LONG_RISK_MULTIPLIER:.2f}; existing reduced-risk "
+        "LONG cohorts and SHORTs preserved; fixed cap applied to overlapping "
+        f"complete-position stop risk basis={risk_basis}; planned basis reserves "
+        "full entry risk to closure; assumes PnL "
+        "and fees scale linearly; ignores changed fills, minimums, slippage, and "
+        "market impact; not proof of profitability"
+    )
+    print(f"retrospective_live_sizing_cap_usdt={cap_usdt:.2f}")
+    print(
+        "retrospective_live_sizing_cap_counts="
+        f"complete:{len(complete)} "
+        f"cap_partially_scaled:{sum(0 < item['portfolio_cap_factor'] < 0.999999 for item in combined)} "
+        f"cap_skipped:{sum(item['portfolio_cap_factor'] == 0 for item in combined)}"
+    )
+    print(
+        "retrospective_live_sizing_before_cap="
+        + json.dumps(
+            {
+                "net_pnl_usdt": sum(item["net_pnl"] for item in current_sizing),
+                "baseline_net_pnl_usdt": sum(item["net_pnl"] for item in complete),
+            },
+            sort_keys=True,
+        )
+    )
+    print(
+        "retrospective_live_sizing_metrics=actual",
+        json.dumps(summarize(complete), sort_keys=True),
+    )
+    print(
+        "retrospective_live_sizing_metrics=combined",
+        json.dumps(summarize(combined), sort_keys=True),
+    )
+    print(
+        "retrospective_live_sizing_bootstrap=combined",
+        json.dumps(
+            bootstrap_performance_intervals(
+                combined,
+                iterations=bootstrap_iterations,
+                block_size=4,
+                seed=seed,
+            ),
+            sort_keys=True,
+        ),
+    )
+    print(
+        "retrospective_live_sizing_with_cap="
+        + json.dumps(
+            {
+                "net_pnl_usdt": sum(item["net_pnl"] for item in combined),
+                "delta_vs_actual_usdt": sum(paired_deltas),
+                "delta_ex_top_three_positive_usdt": sum(paired_deltas)
+                - sum(positive_deltas[:3]),
+                "iid_mean_delta_95ci_usdt": _percentile_95_interval(iid_means),
+                "circular_block_4_mean_delta_95ci_usdt": _percentile_95_interval(
+                    block_means
+                ),
+            },
+            sort_keys=True,
+        )
+    )
+    for name, start, end in (
+        ("train", 0, split_train_end),
+        ("validation", split_train_end, split_validation_end),
+        ("holdout", split_validation_end, len(complete)),
+    ):
+        print(
+            f"retrospective_live_sizing_cap_split={name}/"
+            + json.dumps(
+                {
+                    "positions": end - start,
+                    "baseline_net_pnl_usdt": sum(
+                        item["net_pnl"] for item in complete[start:end]
+                    ),
+                    "baseline_net_r": sum(
+                        item["net_r"] for item in complete[start:end]
+                    ),
+                    "net_pnl_usdt": sum(
+                        item["net_pnl"] for item in combined[start:end]
+                    ),
+                    "net_r": sum(item["net_r"] for item in combined[start:end]),
+                    "delta_usdt": sum(paired_deltas[start:end]),
+                    "delta_net_r": sum(
+                        combined[index]["net_r"] - complete[index]["net_r"]
+                        for index in range(start, end)
+                    ),
+                    "delta_ex_top_three_positive_usdt": sum(paired_deltas[start:end])
+                    - sum(
+                        sorted(
+                            (delta for delta in paired_deltas[start:end] if delta > 0),
+                            reverse=True,
+                        )[:3]
+                    ),
+                },
+                sort_keys=True,
+            )
+        )
 
 
 def report_prospective_long_risk_shadow(positions: list[dict]) -> None:
@@ -1112,11 +1617,66 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--retrospective-current-demo-sizing",
+        action="store_true",
+        help=(
+            "Compare the current 0.10x LONG sizing with completed history, scaling "
+            "only baseline-sized LONGs and preserving already-scaled cohorts."
+        ),
+    )
+    parser.add_argument(
+        "--retrospective-live-sizing-cap",
+        action="store_true",
+        help=(
+            "Apply live LONG sizing, then the fixed open stop-risk cap, to complete "
+            "history as one retrospective linear counterfactual."
+        ),
+    )
+    parser.add_argument(
+        "--portfolio-stop-risk-cap-usdt",
+        type=float,
+        nargs="+",
+        default=float(os.environ.get("DEMO_PORTFOLIO_STOP_RISK_CAP_USDT", "340")),
+        help=(
+            "One or more fixed concurrent stop-risk caps for the combined "
+            "counterfactual."
+        ),
+    )
+    parser.add_argument(
+        "--portfolio-cap-risk-basis",
+        choices=("actual", "planned"),
+        default="actual",
+        help=(
+            "Use realized filled-position risk or frozen planned max loss as "
+            "concurrent cap exposure."
+        ),
+    )
+    parser.add_argument(
         "--prospective-demo-exit-profile",
         action="store_true",
         help=(
             "Report fully reconciled Demo positions whose persisted policy is "
-            "tagged with the active Demo payoff-exit profile."
+            "tagged with the selected Demo payoff-exit profile."
+        ),
+    )
+    parser.add_argument(
+        "--demo-exit-profile",
+        choices=(
+            "payoff_early_trail",
+            "payoff_early_tight_trail",
+            "payoff_early_tight_trail_long_015",
+            DEMO_LONG_EXIT_AB_TREATMENT_PROFILE,
+            DEMO_LONG_EXIT_AB_CONTROL_PROFILE,
+        ),
+        default=DEMO_PAYOFF_EXIT_PROFILE,
+        help="Profile tag selected by --prospective-demo-exit-profile.",
+    )
+    parser.add_argument(
+        "--prospective-demo-entry-order-ttl-minutes",
+        type=int,
+        help=(
+            "Report fully reconciled Demo positions whose persisted plan uses "
+            "this entry-order TTL in minutes."
         ),
     )
     parser.add_argument(
@@ -1131,6 +1691,21 @@ def main() -> None:
 
     positions = reconcile(args.bundle)
     complete = [position for position in positions if position["complete"]]
+    if args.retrospective_current_demo_sizing:
+        report_retrospective_current_demo_sizing(complete)
+        return
+    if args.retrospective_live_sizing_cap:
+        for cap_usdt in (
+            args.portfolio_stop_risk_cap_usdt
+            if isinstance(args.portfolio_stop_risk_cap_usdt, list)
+            else [args.portfolio_stop_risk_cap_usdt]
+        ):
+            report_retrospective_live_sizing_with_cap(
+                complete,
+                cap_usdt,
+                risk_basis=args.portfolio_cap_risk_basis,
+            )
+        return
     if args.prospective_source_side_health_shadow:
         report_prospective_source_side_health_shadow(positions)
         return
@@ -1146,9 +1721,21 @@ def main() -> None:
         return
     if args.prospective_live_long_risk:
         report_prospective_live_long_risk(positions)
-        return
     if args.prospective_demo_exit_profile:
-        report_prospective_demo_exit_profile(positions)
+        report_prospective_demo_exit_profile(
+            positions,
+            profile=args.demo_exit_profile,
+        )
+    if args.prospective_demo_entry_order_ttl_minutes is not None:
+        report_prospective_demo_entry_order_ttl(
+            positions,
+            ttl_minutes=args.prospective_demo_entry_order_ttl_minutes,
+        )
+    if (
+        args.prospective_live_long_risk
+        or args.prospective_demo_exit_profile
+        or args.prospective_demo_entry_order_ttl_minutes is not None
+    ):
         return
 
     print(f"positions={len(positions)} complete_size_reconciled={len(complete)}")

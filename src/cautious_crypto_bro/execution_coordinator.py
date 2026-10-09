@@ -24,6 +24,7 @@ from .domain import (
     TradingIntent,
 )
 from .execution import ExecutionPlanner
+from .portfolio_risk import open_stop_risk_usdt
 from .ports import AccountGateway, ExecutionCoordinatorStore
 
 logger = logging.getLogger(__name__)
@@ -46,14 +47,21 @@ class ExecutionCoordinator:
         planner: ExecutionPlanner,
         max_age_seconds: int,
         execution_lock: asyncio.Lock | None = None,
+        portfolio_stop_risk_cap_usdt: Decimal | None = None,
     ) -> None:
         if max_age_seconds <= 0:
             raise ValueError("max_age_seconds must be positive")
+        if (
+            portfolio_stop_risk_cap_usdt is not None
+            and portfolio_stop_risk_cap_usdt <= 0
+        ):
+            raise ValueError("Portfolio stop-risk cap must be positive")
 
         self._store = store
         self._executor = executor
         self._planner = planner
         self._max_age_seconds = max_age_seconds
+        self._portfolio_stop_risk_cap_usdt = portfolio_stop_risk_cap_usdt
 
         # Serialize every account mutation, including
         # supervisor reconciliation.
@@ -395,6 +403,20 @@ class ExecutionCoordinator:
                 f"Existing strategy owns {plan.symbol}; resolve it before opening another"
             )
         live_state = await self._executor.account_state()
+        if self._portfolio_stop_risk_cap_usdt is not None:
+            try:
+                open_risk = open_stop_risk_usdt(live_state, active)
+            except ValueError as exc:
+                raise EntryPreflightError(
+                    f"Portfolio stop-risk cap cannot be verified: {exc}"
+                ) from exc
+            projected_risk = open_risk + plan.planned_max_loss_usdt
+            if projected_risk > self._portfolio_stop_risk_cap_usdt:
+                raise EntryPreflightError(
+                    "Portfolio stop-risk cap exceeded: "
+                    f"open={open_risk}, new={plan.planned_max_loss_usdt}, "
+                    f"cap={self._portfolio_stop_risk_cap_usdt}"
+                )
         # V2 owns a whole net position. Manual approval cannot make two
         # independent entry/exit ladders safe on the same symbol.
         conflict = self.auto_open_safety_reason(
