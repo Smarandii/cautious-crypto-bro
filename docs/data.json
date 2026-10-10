@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-10-09T16:38:14.665184+00:00",
+  "generated_at": "2026-10-10T09:52:36.617036+00:00",
   "source": "read-only SQLite snapshot",
   "engineering": {
-    "source_messages": 1575,
+    "source_messages": 1596,
     "intents": 144,
     "plans": 139,
     "active_strategies": 88,
-    "position_actions": 118,
+    "position_actions": 121,
     "intent_statuses": {
       "EXECUTED": 97,
       "FAILED": 41,
@@ -31,10 +31,10 @@
     "failure_pct": 28.47
   },
   "funnel": {
-    "signals": 1575,
+    "signals": 1596,
     "intents": 144,
     "plans": 139,
-    "actions": 118,
+    "actions": 121,
     "strategies": 88
   },
   "risk": {
@@ -254,22 +254,22 @@
           "planned_count": 2,
           "executed_plan_count": 2,
           "filled_position_count": 2,
-          "completed_position_count": 1,
+          "completed_position_count": 2,
           "review_target_completed_positions": 20,
           "status": "collecting",
           "performance": {
             "available": true,
             "basis": "fully_reconciled_positions",
-            "position_count": 1,
-            "positive_count": 1,
+            "position_count": 2,
+            "positive_count": 2,
             "negative_count": 0,
             "win_rate_pct": 100.0,
-            "net_pnl_usdt": 0.63339088,
-            "gross_price_pnl_usdt": 0.87305,
-            "fees_usdt": 0.23965912,
-            "signed_funding_usdt": 0.0,
-            "fee_share_of_abs_gross_pct": 27.4508,
-            "avg_win_usdt": 0.63339088,
+            "net_pnl_usdt": 1.9368714,
+            "gross_price_pnl_usdt": 2.02151,
+            "fees_usdt": 0.3485291,
+            "signed_funding_usdt": 0.2638905,
+            "fee_share_of_abs_gross_pct": 17.241,
+            "avg_win_usdt": 0.9684357,
             "avg_loss_usdt": null,
             "avg_win_to_loss_ratio": null,
             "break_even_avg_win_usdt_at_observed_counts": null,
@@ -278,8 +278,8 @@
             "avg_loss_reduction_pct_to_break_even": null,
             "break_even_win_rate_pct": null,
             "profit_factor": null,
-            "expectancy_usdt": 0.63339088,
-            "avg_win_r": 0.148219,
+            "expectancy_usdt": 0.9684357,
+            "avg_win_r": 0.18022,
             "avg_loss_r": null,
             "avg_win_to_loss_ratio_r": null,
             "break_even_avg_win_r_at_observed_counts": null,
@@ -287,31 +287,31 @@
             "avg_win_r_increase_pct_to_break_even": null,
             "avg_loss_r_reduction_pct_to_break_even": null,
             "break_even_win_rate_r_pct": null,
-            "expectancy_r": 0.148219,
-            "avg_initial_risk_win_usdt": 4.27335,
+            "expectancy_r": 0.18022,
+            "avg_initial_risk_win_usdt": 5.20773,
             "avg_initial_risk_loss_usdt": null
           },
           "performance_bootstrap_95ci": {
             "iid": {
               "mean_net_r": [
                 0.14821881661927946,
-                0.14821881661927946
+                0.21222031516856596
               ],
               "mean_net_pnl_usdt": [
                 0.63339088,
-                0.63339088
+                1.30348052
               ],
               "avg_win_loss_ratio": null,
               "avg_win_loss_ratio_r": null
             },
             "circular_block_4": {
               "mean_net_r": [
-                0.14821881661927946,
-                0.14821881661927946
+                0.1802195658939227,
+                0.1802195658939227
               ],
               "mean_net_pnl_usdt": [
-                0.63339088,
-                0.63339088
+                0.9684356999999999,
+                0.9684356999999999
               ],
               "avg_win_loss_ratio": null,
               "avg_win_loss_ratio_r": null
@@ -370,79 +370,79 @@
     "symbol": "BTCUSDT",
     "interval": "60m",
     "start_at": "2026-01-01T00:00:00+00:00",
-    "end_at": "2026-10-09T16:00:00+00:00",
+    "end_at": "2026-10-10T09:00:00+00:00",
     "start_price_usdt": 87594.9,
-    "end_price_usdt": 82685.2,
-    "return_pct": -5.605,
-    "hypothetical_1000_usdt_pnl": -56.05
+    "end_price_usdt": 82792.0,
+    "return_pct": -5.4831,
+    "hypothetical_1000_usdt_pnl": -54.83
   },
   "strategy_pnl": {
     "available": true,
     "basis": "fully_reconciled_positions",
-    "position_count": 66,
-    "positive_count": 45,
+    "position_count": 67,
+    "positive_count": 46,
     "negative_count": 21,
-    "win_rate_pct": 68.18,
-    "net_pnl_usdt": -233.20605857,
-    "gross_price_pnl_usdt": -114.842446,
-    "fees_usdt": 121.55340013,
-    "signed_funding_usdt": 3.18978756,
-    "fee_share_of_abs_gross_pct": 105.8436,
-    "avg_win_usdt": 21.98454488,
+    "win_rate_pct": 68.66,
+    "net_pnl_usdt": -231.90257805,
+    "gross_price_pnl_usdt": -113.693986,
+    "fees_usdt": 121.66227011,
+    "signed_funding_usdt": 3.45367806,
+    "fee_share_of_abs_gross_pct": 107.0085,
+    "avg_win_usdt": 21.53495652,
     "avg_loss_usdt": -58.21478943,
-    "avg_win_to_loss_ratio": 0.3776,
-    "break_even_avg_win_usdt_at_observed_counts": 27.16690174,
-    "break_even_avg_loss_usdt_at_observed_counts": -47.10973903,
-    "avg_win_increase_pct_to_break_even": 23.57,
-    "avg_loss_reduction_pct_to_break_even": 19.08,
-    "break_even_win_rate_pct": 72.59,
-    "profit_factor": 0.8092,
-    "expectancy_usdt": -3.53342513,
-    "avg_win_r": 0.41518,
+    "avg_win_to_loss_ratio": 0.3699,
+    "break_even_avg_win_usdt_at_observed_counts": 26.57631692,
+    "break_even_avg_loss_usdt_at_observed_counts": -47.17180953,
+    "avg_win_increase_pct_to_break_even": 23.41,
+    "avg_loss_reduction_pct_to_break_even": 18.97,
+    "break_even_win_rate_pct": 73.0,
+    "profit_factor": 0.8103,
+    "expectancy_usdt": -3.46123251,
+    "avg_win_r": 0.410768,
     "avg_loss_r": -0.975574,
-    "avg_win_to_loss_ratio_r": 0.4256,
-    "break_even_avg_win_r_at_observed_counts": 0.455268,
-    "break_even_avg_loss_r_at_observed_counts": -0.889671,
-    "avg_win_r_increase_pct_to_break_even": 9.66,
-    "avg_loss_r_reduction_pct_to_break_even": 8.81,
-    "break_even_win_rate_r_pct": 70.15,
-    "expectancy_r": -0.027333,
-    "avg_initial_risk_win_usdt": 46.55464431,
+    "avg_win_to_loss_ratio_r": 0.4211,
+    "break_even_avg_win_r_at_observed_counts": 0.445371,
+    "break_even_avg_loss_r_at_observed_counts": -0.899777,
+    "avg_win_r_increase_pct_to_break_even": 8.42,
+    "avg_loss_r_reduction_pct_to_break_even": 7.77,
+    "break_even_win_rate_r_pct": 70.37,
+    "expectancy_r": -0.023757,
+    "avg_initial_risk_win_usdt": 45.67611096,
     "avg_initial_risk_loss_usdt": 58.95676752,
-    "incomplete_position_count": 5,
+    "incomplete_position_count": 4,
     "by_side": {
       "LONG": {
         "available": true,
         "basis": "fully_reconciled_positions",
-        "position_count": 31,
-        "positive_count": 18,
+        "position_count": 32,
+        "positive_count": 19,
         "negative_count": 13,
-        "win_rate_pct": 58.06,
-        "net_pnl_usdt": -349.85372032,
-        "gross_price_pnl_usdt": -302.255816,
-        "fees_usdt": 46.71175672,
-        "signed_funding_usdt": -0.8861476,
-        "fee_share_of_abs_gross_pct": 15.4544,
-        "avg_win_usdt": 18.91104456,
+        "win_rate_pct": 59.38,
+        "net_pnl_usdt": -348.5502398,
+        "gross_price_pnl_usdt": -301.107356,
+        "fees_usdt": 46.8206267,
+        "signed_funding_usdt": -0.6222571,
+        "fee_share_of_abs_gross_pct": 15.5495,
+        "avg_win_usdt": 17.98433066,
         "avg_loss_usdt": -53.09634787,
-        "avg_win_to_loss_ratio": 0.3562,
-        "break_even_avg_win_usdt_at_observed_counts": 38.34736235,
-        "break_even_avg_loss_usdt_at_observed_counts": -26.18452323,
-        "avg_win_increase_pct_to_break_even": 102.78,
-        "avg_loss_reduction_pct_to_break_even": 50.68,
-        "break_even_win_rate_pct": 73.74,
-        "profit_factor": 0.4932,
-        "expectancy_usdt": -11.28560388,
-        "avg_win_r": 0.366103,
+        "avg_win_to_loss_ratio": 0.3387,
+        "break_even_avg_win_usdt_at_observed_counts": 36.32908012,
+        "break_even_avg_loss_usdt_at_observed_counts": -26.28479096,
+        "avg_win_increase_pct_to_break_even": 102.0,
+        "avg_loss_reduction_pct_to_break_even": 50.5,
+        "break_even_win_rate_pct": 74.7,
+        "profit_factor": 0.495,
+        "expectancy_usdt": -10.89219499,
+        "avg_win_r": 0.358004,
         "avg_loss_r": -1.009688,
-        "avg_win_to_loss_ratio_r": 0.3626,
-        "break_even_avg_win_r_at_observed_counts": 0.729219,
-        "break_even_avg_loss_r_at_observed_counts": -0.506912,
-        "avg_win_r_increase_pct_to_break_even": 99.18,
-        "avg_loss_r_reduction_pct_to_break_even": 49.8,
-        "break_even_win_rate_r_pct": 73.39,
-        "expectancy_r": -0.210842,
-        "avg_initial_risk_win_usdt": 39.07019244,
+        "avg_win_to_loss_ratio_r": 0.3546,
+        "break_even_avg_win_r_at_observed_counts": 0.690839,
+        "break_even_avg_loss_r_at_observed_counts": -0.523236,
+        "avg_win_r_increase_pct_to_break_even": 92.97,
+        "avg_loss_r_reduction_pct_to_break_even": 48.18,
+        "break_even_win_rate_r_pct": 73.82,
+        "expectancy_r": -0.197621,
+        "avg_initial_risk_win_usdt": 37.33713547,
         "avg_initial_risk_loss_usdt": 52.951666
       },
       "SHORT": {
@@ -483,38 +483,38 @@
     "performance_bootstrap_95ci": {
       "iid": {
         "mean_net_r": [
-          -0.19793095965954152,
-          0.13492579392038992
+          -0.19257194695722318,
+          0.1382237351135672
         ],
         "mean_net_pnl_usdt": [
-          -14.543291924242425,
-          6.637991543636363
+          -13.976723483432837,
+          6.555648916119402
         ],
         "avg_win_loss_ratio": [
-          0.2765348803454047,
-          0.5346803746299167
+          0.27093730342894035,
+          0.5271766190042982
         ],
         "avg_win_loss_ratio_r": [
-          0.3504213240181839,
-          0.5240700432583058
+          0.34790572521936786,
+          0.5146663802917558
         ]
       },
       "circular_block_4": {
         "mean_net_r": [
-          -0.1796152358576319,
-          0.12673880873627705
+          -0.17623277082665464,
+          0.12696486571525892
         ],
         "mean_net_pnl_usdt": [
-          -14.124472228030303,
-          6.631559259393939
+          -13.738590809552239,
+          6.375788508507462
         ],
         "avg_win_loss_ratio": [
-          0.2874430595763801,
-          0.534644288109722
+          0.2761985605281787,
+          0.5270910794016063
         ],
         "avg_win_loss_ratio_r": [
-          0.35871602317861184,
-          0.502834115082207
+          0.3524715597476962,
+          0.4963822225773152
         ]
       }
     }
@@ -527,17 +527,17 @@
     "by_horizon_minutes": {
       "60": {
         "LONG": {
-          "count": 34,
-          "positive_pct": 0.29411764705882354,
-          "mean_r": -0.2437437829724534,
-          "median_r": -0.11772821428691863,
+          "count": 35,
+          "positive_pct": 0.3142857142857143,
+          "mean_r": -0.21896093448814075,
+          "median_r": -0.11642949547218655,
           "iid95": [
-            -0.40618212442370766,
-            -0.1196727473833775
+            -0.38391477702383603,
+            -0.08830530936022817
           ],
           "block4_95": [
-            -0.410158604106587,
-            -0.1103427037621773
+            -0.3949814290510043,
+            -0.07351871593804946
           ]
         },
         "SHORT": {
@@ -557,17 +557,17 @@
       },
       "240": {
         "LONG": {
-          "count": 31,
-          "positive_pct": 0.22580645161290322,
-          "mean_r": -0.31496078768193886,
+          "count": 33,
+          "positive_pct": 0.24242424242424243,
+          "mean_r": -0.31306485938453305,
           "median_r": -0.3039443155452421,
           "iid95": [
-            -0.4636571802938053,
-            -0.172006634127511
+            -0.45849404750601147,
+            -0.16314535542398512
           ],
           "block4_95": [
-            -0.46144677805693135,
-            -0.17029036022205368
+            -0.4466722331559143,
+            -0.16631950035941262
           ]
         },
         "SHORT": {
@@ -589,32 +589,32 @@
   },
   "account_open_positions": {
     "available": true,
-    "position_count": 4,
-    "long_count": 4,
+    "position_count": 3,
+    "long_count": 3,
     "short_count": 0,
-    "unrealized_pnl_usdt": -17.12982,
-    "positions_with_stop": 4,
-    "estimated_stop_risk_usdt": 194.74802,
+    "unrealized_pnl_usdt": 22.05226,
+    "positions_with_stop": 3,
+    "estimated_stop_risk_usdt": 227.78799,
     "stop_risk_basis": "mark_to_stop_gross_estimate",
-    "as_of": "2026-10-09T16:30:31.157185+00:00",
+    "as_of": "2026-10-10T09:46:42.524961+00:00",
     "snapshot_available": true,
     "portfolio_stop_risk": {
       "risk_bounded": true,
       "basis": "position_average_entry_and_remaining_entry_limit_to_stop",
-      "position_count": 4,
-      "positions_with_stop": 4,
-      "position_stop_risk_usdt": 211.87783285,
+      "position_count": 3,
+      "positions_with_stop": 3,
+      "position_stop_risk_usdt": 205.73571519,
       "entry_order_count": 7,
       "unmatched_entry_order_count": 0,
       "entry_orders_with_stop": 7,
       "entry_order_stop_risk_usdt": 158.737,
-      "combined_stop_risk_usdt": 370.61483285,
+      "combined_stop_risk_usdt": 364.47271519,
       "cap_usdt": 400.0,
-      "remaining_capacity_usdt": 29.38516715,
-      "cap_utilization_pct": 92.65,
+      "remaining_capacity_usdt": 35.52728481,
+      "cap_utilization_pct": 91.12,
       "cap_exceeded": false,
       "snapshot_available": true,
-      "as_of": "2026-10-09T16:30:24.206155+00:00"
+      "as_of": "2026-10-10T09:46:35.090285+00:00"
     },
     "open_entry_order_details": [
       {
@@ -622,7 +622,7 @@
         "side": "Buy",
         "qty": "0.49",
         "status": "New",
-        "age_minutes": 6174,
+        "age_minutes": 7208,
         "ttl_minutes": null,
         "ttl_status": "no_ttl"
       },
@@ -631,7 +631,7 @@
         "side": "Sell",
         "qty": "32.7",
         "status": "New",
-        "age_minutes": 7364,
+        "age_minutes": 8398,
         "ttl_minutes": null,
         "ttl_status": "no_ttl"
       },
@@ -640,7 +640,7 @@
         "side": "Sell",
         "qty": "38.7",
         "status": "New",
-        "age_minutes": 7364,
+        "age_minutes": 8398,
         "ttl_minutes": null,
         "ttl_status": "no_ttl"
       },
@@ -649,7 +649,7 @@
         "side": "Sell",
         "qty": "52.5",
         "status": "New",
-        "age_minutes": 7364,
+        "age_minutes": 8398,
         "ttl_minutes": null,
         "ttl_status": "no_ttl"
       },
@@ -658,7 +658,7 @@
         "side": "Buy",
         "qty": "6.97",
         "status": "New",
-        "age_minutes": 7715,
+        "age_minutes": 8750,
         "ttl_minutes": null,
         "ttl_status": "no_ttl"
       },
@@ -667,7 +667,7 @@
         "side": "Buy",
         "qty": "7.79",
         "status": "New",
-        "age_minutes": 7715,
+        "age_minutes": 8750,
         "ttl_minutes": null,
         "ttl_status": "no_ttl"
       },
@@ -676,7 +676,7 @@
         "side": "Buy",
         "qty": "14.12",
         "status": "New",
-        "age_minutes": 7715,
+        "age_minutes": 8750,
         "ttl_minutes": null,
         "ttl_status": "no_ttl"
       }
@@ -684,18 +684,18 @@
   },
   "account_pnl_records": {
     "available": true,
-    "record_count": 172,
-    "positive_count": 139,
+    "record_count": 173,
+    "positive_count": 140,
     "negative_count": 33,
-    "realized_pnl_usdt": 117.04903704,
-    "win_rate_pct": 80.81,
-    "avg_win_usdt": 8.69662648,
+    "realized_pnl_usdt": 118.35251756,
+    "win_rate_pct": 80.92,
+    "avg_win_usdt": 8.64381829,
     "avg_loss_usdt": -33.08430433,
-    "avg_win_to_loss_ratio": 0.2629,
-    "profit_factor": 1.1072,
-    "expectancy_usdt": 0.68051766,
+    "avg_win_to_loss_ratio": 0.2613,
+    "profit_factor": 1.1084,
+    "expectancy_usdt": 0.6841186,
     "history_start_at": "2026-01-01T00:00:00+00:00",
-    "last_synced_at": "2026-10-09T16:25:48.608101+00:00",
+    "last_synced_at": "2026-10-10T09:41:47.910151+00:00",
     "forensic_archive_as_of": null,
     "forensic_archive_supplement_count": 0
   }
