@@ -72,19 +72,34 @@ This does not guarantee positive realized PnL after all costs.
 
 ## Demo payoff-exit experiment
 
-The Compose Demo app selects `DEMO_EXIT_PROFILE=payoff_early_trail` for newly
-planned trades. It keeps the 60/25/15 entry allocation and uses 15/20/25%
-reductions at +1/+2/+4R, a 40% runner, and a 0.10R trail distance. Its trail
-activates at +0.20R. This is separately tagged from the original
-`payoff_challenger` profile, which used +0.40R activation. Existing plans and
-open positions continue using their saved policy.
+The Compose Demo app selects
+`DEMO_EXIT_PROFILE=payoff_early_tight_trail_long_015` for newly planned trades.
+It keeps the 60/25/15 entry allocation and uses 15/20/25% reductions at
++1/+2/+4R, a 40% runner, and a 0.05R trail distance. The trail activates at
++0.15R for LONGs and +0.20R for SHORTs. This is separately tagged from the
+prior `payoff_early_trail` profile (0.10R trail distance) and the
+`payoff_early_tight_trail` profile (+0.20R activation for both sides). Existing
+plans and open positions continue using their saved policy.
 
 This is an experiment, not a promoted strategy: historical replay gains were
 concentrated and uncertainty intervals crossed zero. Score only complete,
 reconciled positions tagged with this profile using
-`analyze_forensic_pnl.py BUNDLE --prospective-demo-exit-profile`; review after
-20 completed `payoff_early_trail` positions, including payoff ratio, expectancy,
-costs, and concentration before deciding whether to keep it.
+`analyze_forensic_pnl.py BUNDLE --prospective-demo-exit-profile
+--demo-exit-profile payoff_early_tight_trail_long_015`; review after 20
+completed positions as an interim checkpoint only. That sample is not powered
+to establish a modest edge; the sample-size limits and required metrics are in
+`TESTING.md`. Continue to report side-specific payoff ratio, expectancy, costs,
+concentration, and uncertainty before deciding whether to keep or promote it.
+
+For a cleaner prospective comparison, Compose assigns newly planned LONGs 50/50
+by a stable SHA-256 bucket of intent ID: control uses the same tight-trail policy
+at +0.20R; treatment uses +0.15R. Both retain the same 0.10x LONG risk, 0.05R
+trail distance, entry/target rules, portfolio cap, and 240-minute entry TTL.
+Plans persist distinct tags (`payoff_early_tight_trail_long_ab_020_control` and
+`payoff_early_tight_trail_long_ab_015`); SHORT behavior is unchanged and is not
+part of this comparison. Review each arm separately after 20 complete LONGs as
+an interim check. This assignment improves comparability; it does not remove
+symbol/source clustering or make 20 cases sufficient to prove a modest edge.
 
 An exact-profile replay on the 54 fully reconciled historical positions found
 baseline vs challenger net results of −1.859R vs +0.370R in train (27 cases),
@@ -118,6 +133,35 @@ plans, including the open XRP LONG at 0.25x, keep their frozen sizing and exits.
 Evaluate LONG risk in dollars and risk-weighted return; do not combine different
 risk multipliers when comparing dollar average wins/losses.
 
+## Demo portfolio stop-risk cap experiment
+
+New Demo plans are limited by a $400 total open stop-risk cap. Planning estimates
+current position risk from live average price to exchange stop and includes
+unfilled V2 entry legs; each new plan is sized only to remaining capacity. The
+execution preflight recomputes current risk before submitting. If account state,
+an existing stop, or an outstanding entry cannot be risk-bounded, the new entry
+fails closed. Existing positions and orders are never resized or cancelled by
+this cap. The cap was raised from $340 on 2026-10-09 after a read-only account
+snapshot measured $366.17 of existing protected exposure and the planner was
+skipping new signals at zero capacity. At that snapshot, the new limit allowed
+at most $33.83 additional stop risk; future plans remain bounded by live
+remaining capacity. This is an operational data-collection adjustment, not an
+evidence-based profitability improvement. Evaluate the cap separately from the
+0.10x LONG and payoff-profile cohorts.
+
+## Demo entry freshness experiment
+
+Compose sets `DEMO_ENTRY_ORDER_TTL_MINUTES=240` for newly created plans. After
+four hours, the supervisor cancels only still-open entry legs linked to that
+plan. If any quantity filled, it freezes further entries and manages the live
+position with the plan's saved stop and exits; it never closes or resizes that
+position. Existing plans missing the field default to zero (no expiry), so
+currently resting HYPE/UNI and other saved orders are unaffected. The four-hour
+limit matches the documented signal follow-through observation horizon, but is
+a freshness hypothesis—not evidence of higher expectancy. Measure only fully
+reconciled plans tagged with `entry_order_ttl_minutes=240` using
+`analyze_forensic_pnl.py BUNDLE --prospective-demo-entry-order-ttl-minutes 240`.
+
 ## Lifecycle actions
 
 REDUCE/CLOSE require an explicit current-caption instruction. Images may identify
@@ -148,3 +192,25 @@ UNCERTAIN. Intent status is separate: EXECUTED can mean accepted pending limits.
 
 SQLite schema 8 supports migrations from 4–7. Back up state before repair.
 Resume paused strategies only after ownership, live orders and protection agree.
+
+## Randomized Demo LONG participation test
+
+`DEMO_LONG_PARTICIPATION_SKIP_FRACTION=0.50` independently assigns eligible,
+auto-approved new Strategy V2 LONG plans to `take` or `skip` using a stable
+SHA-256 bucket with a separate salt from the 0.15R/0.20R exit assignment. The
+assignment is saved inside the frozen plan. A skip is persisted with
+`IntentStatus.SKIPPED` and `ApprovalMode.SKIPPED`, is never sent for approval or
+execution, and does not reserve batch stop-risk capacity. Take plans continue
+through the existing risk, exit-arm, and protection policy. Manual or otherwise
+unsafe signals are not randomized. Existing orders, positions, and serialized
+plans are unchanged.
+
+This Demo-only test asks whether allocating risk to the current LONG signal
+stream adds after-cost portfolio P&L. Skips contribute zero exposure/P&L by
+design; that is a policy-allocation comparison, not evidence that skipped
+signals themselves would have lost. Keep participation arms separate from the
+LONG-risk and exit-profile cohorts. Do not compare arms while any take
+assignment is unresolved; use a minimum 20 assignments per arm and 20 fully
+reconciled take positions as an interim review only, not a profitability claim.
+Use `analyze_long_participation.py BUNDLE` after exporting a fresh forensic
+archive; only the take arm has fees/funding and whole-position payoff metrics.
