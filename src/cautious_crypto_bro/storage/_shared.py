@@ -80,7 +80,7 @@ class SharedRepositoryMixin(_Store):
         *,
         table: str,
         id_column: str,
-        limit: int,
+        limit: int | None,
     ) -> tuple[UUID, ...]:
         rows = await self._fetch(
             f"""
@@ -93,7 +93,7 @@ class SharedRepositoryMixin(_Store):
             (
                 ApprovalMode.AUTO.value,
                 IntentStatus.PENDING.value,
-                limit,
+                limit if limit is not None else -1,
             ),
             many=True,
         )

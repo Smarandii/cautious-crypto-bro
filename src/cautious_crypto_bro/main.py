@@ -159,6 +159,11 @@ async def _build_runtime(
         demo_entry_order_ttl_minutes=(settings.demo_entry_order_ttl_minutes),
     )
 
+    async def retry_message_ids(channel_id: int) -> tuple[int, ...]:
+        return await store.get_retryable_source_message_ids(
+            channel_id, lease_seconds=settings.source_processing_lease_seconds
+        )
+
     source = TelegramSource(
         api_id=settings.telegram_api_id,
         api_hash=(settings.telegram_api_hash),
@@ -167,6 +172,7 @@ async def _build_runtime(
         on_message=(service.on_message),
         startup_lookback_hours=(settings.telegram_startup_lookback_hours),
         catchup_interval_seconds=(settings.telegram_catchup_interval_seconds),
+        retry_message_ids=retry_message_ids,
     )
 
     return _Runtime(
