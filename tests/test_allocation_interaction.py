@@ -44,16 +44,42 @@ def test_summary_derives_ratio_and_break_even_win_rate() -> None:
     assert summary["breakeven_win_rate"] == pytest.approx(2 / 3)
 
 
+def test_summary_handles_segments_without_losses() -> None:
+    results = [interaction.replay.Result(start=1, net_r=0.5, mfe_r=1, stopped=False)]
+
+    summary = interaction.summary(results)
+
+    assert summary["avg_win_loss_ratio_r"] == float("inf")
+    assert summary["breakeven_win_rate"] == 0.0
+
+
+def test_summary_handles_segments_without_wins() -> None:
+    results = [interaction.replay.Result(start=1, net_r=-1, mfe_r=0, stopped=True)]
+
+    summary = interaction.summary(results)
+
+    assert summary["avg_win_loss_ratio_r"] == 0.0
+    assert summary["breakeven_win_rate"] == 1.0
+
+
+def test_summary_handles_empty_segment() -> None:
+    summary = interaction.summary([])
+
+    assert summary["avg_win_loss_ratio_r"] is None
+    assert summary["breakeven_win_rate"] is None
+
+
 def test_paired_comparison_uses_the_labeled_candidate_as_comparator(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     cases = [{"start": start, "side": "LONG"} for start in range(10)]
     candidates = {
-        (0.60, 0.25, 0.15, 0.30): 0.0,
-        (0.60, 0.25, 0.15, 0.10): 1.0,
-        (0.70, 0.25, 0.05, 0.10): 2.0,
-        (0.70, 0.25, 0.05, 0.30): 3.0,
+        ((0.60, 0.25, 0.15), 0.50, 0.30): 0.0,
+        ((0.60, 0.25, 0.15), 0.40, 0.10): 1.0,
+        ((0.60, 0.25, 0.15), 0.20, 0.10): 2.0,
+        ((0.70, 0.25, 0.05), 0.20, 0.10): 3.0,
+        ((0.70, 0.25, 0.05), 0.40, 0.30): 4.0,
     }
 
     monkeypatch.setattr(
@@ -67,7 +93,7 @@ def test_paired_comparison_uses_the_labeled_candidate_as_comparator(
 
     def fake_replay(case, candidate, _fee_rate, *, use_events):
         assert use_events is True
-        key = (*candidate.weights, candidate.trail_by)
+        key = (candidate.weights, candidate.trail_at, candidate.trail_by)
         return interaction.replay.Result(
             start=case["start"],
             net_r=candidates[key],
@@ -82,9 +108,9 @@ def test_paired_comparison_uses_the_labeled_candidate_as_comparator(
         line
         for line in capsys.readouterr().out.splitlines()
         if line.startswith(
-            "paired=train/live_demo_exit_plus_reduced_e3_vs_live_demo_exit "
+            "paired=train/payoff_challenger_040_vs_live_demo_early_trail_exact "
         )
     )
     result = json.loads(line.split(" ", 1)[1])
 
-    assert result["delta_net_r"] == 5.0
+    assert result["delta_net_r"] == -5.0

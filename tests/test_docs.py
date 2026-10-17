@@ -127,10 +127,22 @@ def test_dashboard_separates_whole_positions_from_account_pnl_rows() -> None:
     assert "account_open_positions" in script
     assert "unrealized P&amp;L · not realized strategy P&amp;L" in script
     assert "mark-to-stop estimate" in script
+    assert "portfolio_stop_risk" in script
+    assert "combined_stop_risk_usdt" in script
+    assert "open_entry_order_details" in script
     assert "cache synced ${accountSync}" in script
     assert "renderSideCohorts(data.strategy_pnl?.by_side)" in script
     assert "Break-even WR" in script
     assert "not a sizing signal" in script
+    assert "signed_funding_usdt" in script
+    assert "avg_win_to_loss_ratio_r" in script
+    assert "break_even_win_rate_r_pct" in script
+    assert "renderFillFollowthrough(data.fill_followthrough)" in script
+    assert "not realized trade P&amp;L" in script
+
+
+def test_expectancy_formula_uses_signed_average_loss() -> None:
+    assert "(win rate × avg win r) + (loss rate × signed avg loss r)" in _flat_page()
 
 
 def test_dashboard_data_matches_renderer_contract() -> None:
@@ -148,6 +160,16 @@ def test_dashboard_data_matches_renderer_contract() -> None:
     assert strategy_pnl["avg_win_usdt"] is not None
     assert strategy_pnl["avg_loss_usdt"] is not None
     assert strategy_pnl["break_even_win_rate_pct"] is not None
+    fill_followthrough = data["fill_followthrough"]
+    assert fill_followthrough["available"] is True
+    assert fill_followthrough["filled_case_count"] >= 1
+    assert set(fill_followthrough["by_horizon_minutes"]) == {"60", "240"}
+    assert set(fill_followthrough["by_horizon_minutes"]["60"]) == {"LONG", "SHORT"}
+    open_risk = data["account_open_positions"]["portfolio_stop_risk"]
+    assert open_risk["snapshot_available"] is True
+    assert open_risk["risk_bounded"] is True
+    assert open_risk["combined_stop_risk_usdt"] is not None
+    assert isinstance(open_risk["cap_exceeded"], bool)
     experiment = data["risk"]["demo_long_experiment"]
     assert experiment["active"] is True
     assert experiment["multiplier"] == 0.10
@@ -161,6 +183,10 @@ def test_dashboard_data_matches_renderer_contract() -> None:
         "baseline",
         "payoff_challenger",
         "payoff_early_trail",
+        "payoff_early_tight_trail",
+        "payoff_early_tight_trail_long_015",
+        "payoff_early_tight_trail_long_ab_015",
+        "payoff_early_tight_trail_long_ab_020_control",
     }
     assert exit_experiment["review_target_completed_positions"] == 20
     assert "renderLongRiskExperiment(data.risk?.demo_long_experiment)" in (
@@ -169,3 +195,4 @@ def test_dashboard_data_matches_renderer_contract() -> None:
     assert "renderDemoExitExperiment(data.risk?.demo_exit_experiment)" in (
         _dashboard_script()
     )
+    assert "Randomized LONG exits" in _dashboard_script()

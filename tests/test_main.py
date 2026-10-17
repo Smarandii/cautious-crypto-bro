@@ -59,6 +59,7 @@ def test_initial_reconciliation_precedes_any_execution(
     )
     service = SimpleNamespace(
         run_manual_delivery_recovery=step("manual.recover"),
+        run_periodic_account_pnl_sync=step("pnl.sync"),
         recover_auto_execution=step("service.recover"),
         on_message=AsyncMock(),
     )
@@ -83,7 +84,11 @@ def test_initial_reconciliation_precedes_any_execution(
         auto_approval_mode="all",
         source_processing_lease_seconds=300,
         demo_long_risk_multiplier=1,
+        demo_long_exit_control_fraction=0,
+        demo_long_participation_skip_fraction=0,
+        demo_portfolio_stop_risk_cap_usdt=340,
         demo_exit_profile="baseline",
+        demo_entry_order_ttl_minutes=0,
         telegram_api_id=1,
         telegram_api_hash="test-hash",
         telegram_session_name="test",
@@ -131,6 +136,7 @@ def test_initial_reconciliation_precedes_any_execution(
         ) < events.index("source.start")
         assert events.index("service.recover") < events.index("bot.run")
         assert events.index("service.recover") < events.index("supervisor.run")
+        assert "pnl.sync" in events
         # The catch-up poll must run alongside the live listener, or
         # dropped Telegram pushes stay dropped.
         assert "source.catchup" in events

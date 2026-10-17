@@ -497,6 +497,7 @@ class SignalServiceStore(
     ExecutionPolicyRepository,
     IntentRepository,
     PositionActionRepository,
+    PositionStrategyRepository,
     ManualDeliveryRepository,
     PnlRepository,
     RecoveryRepository,

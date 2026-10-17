@@ -95,7 +95,10 @@ snapshot from Docker's live database and the same archive with:
 docker compose exec -T app /app/.venv/bin/python \
   /app/scripts/export_dashboard_data.py \
   /state/cautious_crypto_bro.sqlite3 /tmp/ccb-dashboard/data.json \
-  --forensic-bundle /tmp/ccb-forensic.zip
+  --forensic-bundle /tmp/ccb-forensic.zip \
+  --demo-long-risk-multiplier 0.10 \
+  --demo-exit-profile payoff_early_tight_trail_long_015 \
+  --demo-portfolio-stop-risk-cap-usdt 400
 docker cp cautious-crypto-bro-app-1:/tmp/ccb-dashboard/data.json docs/data.json
 docker cp cautious-crypto-bro-app-1:/tmp/ccb-dashboard/data.js docs/data.js
 ```
@@ -291,6 +294,21 @@ docker compose exec -T app /app/.venv/bin/python \
   /app/scripts/replay_strategy_v2.py /tmp/ccb-forensic.zip \
   --prospective-stop-distance-shadow
 ```
+
+Refreshed stop-geometry check — 2026-10-08 13:45Z
+----------------------------------------------------
+
+On the 13:29Z archive, rerun with `--reconciled-only` to exclude 6 of 61
+incomplete positions. The 55 complete cases split 27/11/17 chronologically.
+The 2x stop-and-grid profile remained train-selected (+3.374R train), but lost
+−0.301R on holdout versus −2.463R for baseline. The best holdout net among
+these profiles was only +0.225R for stop-only 1.5x, with PF 1.07; 1.5x
+stop-and-grid made +0.067R (PF 1.02). Paired 95% intervals crossed zero for
+all geometry variants. A narrower 0.75x stop looked better on holdout by
+paired delta (+1.898R), but still lost −0.565R net. These 17-case results do
+not establish a profitable stop geometry; keep the frozen shadow and do not
+change production settings. The API check at 13:45Z found no new closed-PnL
+record since 09:50Z, and every current Demo position had a stop.
 
 Actual Closed P&L on the 52 complete positions also shows a strong E3-fill risk
 marker: positions filled only at E1 or E1+E2 netted +$668.04 across 32 trades
@@ -1400,7 +1418,895 @@ The 0.25x XRP trade remains separately observable in the payoff-profile cohort.
 Review the new sizing hypothesis after 20 completed 0.10x LONGs; do not interpret
 the retrospective counterfactual as evidence that the new setting is profitable.
 
+## Current profitability evidence — 2026-10-08 13:26Z
+
+A fresh read-only Bybit Demo archive reconciles 55 complete positions (38 wins,
+17 losses): 69.09% win rate, 0.3403 average-win/loss ratio, 0.7606 profit
+factor, −$285.60 net and −$5.19 expectancy per position. The IID 95% expectancy
+interval is −$17.83 to +$6.71 per position; four-position block bootstrap is
+−$17.54 to +$6.60. Overall expectancy remains uncertain, but LONG is the clear
+historical drag: 21 LONGs returned −$388.60 (−$18.50/position, 0.4118 PF,
+−0.2031R), while 34 SHORTs returned +$103.00 (+$3.03/position, 1.1935 PF,
++0.1298R). These are after-cost reconciled outcomes, not partial Closed-PnL rows.
+At the observed overall 38/17 win/loss count, break-even requires average win
+≥$31.39 instead of $23.88 (+31.5%), or average loss no worse than −$53.37
+instead of −$70.17 (23.9% smaller), holding the other value fixed. LONGs are
+more severe: at 12/9, the corresponding targets are ≥$55.05 average win or
+average loss no worse than −$30.23. This confirms that 0.10x LONG sizing can
+limit dollar exposure, but cannot repair the LONG cohort's negative expectancy
+in R by itself.
+Gross price P&L was −$171.66, fees were $117.32, and signed funding was +$3.38;
+fees equal 68.3% of absolute gross price P&L. Removing every fee would still
+leave roughly −$168.28 net (−$3.06 per position), so execution-cost reduction
+can help but cannot repair the underlying loss distribution alone. LONGs lost
+$344.90 gross before $43.17 fees and −$0.53 funding; SHORTs gained $173.24 gross,
+but $74.15 fees and +$3.91 funding left +$103.00 net. The dashboard now shows
+this cost decomposition overall and by direction.
+
+The prospective 0.10x LONG cohort currently has 2 filled positions and 0
+completed; the 20-completion review gate is not met. The early-trail profile has
+3 filled positions and 1 completed, but that single completion is the separate
+prior 0.25%-risk XRP LONG (+$0.94, +0.0864R), not evidence for the new 0.10x
+cohort. Keep settings unchanged while collecting complete outcomes; neither
+historical sensitivity nor a one-trade payoff result establishes a profitable
+rule.
+
+The 20-position gate is a review checkpoint, not a statistical promotion
+threshold. The historical LONG sample (21 positions, mean −0.203R, standard
+deviation 0.734R) implies roughly 103 independent LONG outcomes to detect an
+effect of that observed size with 80% power at a two-sided 5% level under a
+normal/IID approximation. This plug-in estimate is optimistic if trades are
+clustered or market conditions shift; judge the cohort by risk-normalized return
+and uncertainty, not by reaching 20 alone.
+
+Frozen prospective exit shadows were rerun on this archive. The exit-only
+candidate is flat on its one eligible closed LONG (0.000R paired delta). The
+early-trail replay moves that same case from −0.0265R under the replay baseline
+to +0.0627R (+0.0893R paired); removing the top-three positive contributions
+removes the entire gain. This is one simulated case, not a second independent
+trade or proof that the actual live profile is profitable. The replay reporter
+now emits null metrics for a direction with zero cases instead of crashing while
+summarizing an empty side.
+
+The dashboard exporter now accepts explicit `--demo-long-risk-multiplier` and
+`--demo-exit-profile` options. Supply the running Compose values when exporting
+outside the container; otherwise host defaults can incorrectly label live Demo
+experiments inactive. The strategy scorecard also exposes gross price P&L,
+fees, signed funding, and fee share so cost drag is visible beside net payoff.
+
+## Closed-P&L freshness
+
+At the 2026-10-08 13:49Z live check, Telegram sources had completed messages
+through 13:41Z while the SQLite account-P&L watermark remained at 10:18Z. This
+was not an API error: non-actionable posts return before the existing
+message-triggered P&L sync. A direct read-only Bybit query confirmed no missing
+Closed-P&L records, but a close between actionable signals could leave the app
+ledger stale. The service now has a supervised 15-minute sync loop, including
+an immediate first sync and retry after logged failures. It only reads Bybit
+Closed P&L and updates the local SQLite cache; it does not place or change
+orders. The current running app was not restarted, so the fix takes effect only
+after a later deployment/restart. The full suite passes 501 tests at 80.01%
+coverage. That run also caught and fixed a related reporting edge case: the
+allocation comparison now emits defined payoff/breakeven values for all-win or
+all-loss segments, and unavailable values for an empty segment.
+
+## Fixed-horizon signal follow-through — 2026-10-08 14:15Z
+
+To separate directional entry quality from managed trade P&L, a research-only
+diagnostic measures close-to-entry movement after 5m, 15m, 1h, 4h, and 24h in
+initial-stop R. It anchors to the first actual fill (not the final average that
+can include later E2/E3 fills), includes all filled cases with available future
+candles (avoiding selection on eventual full closure), and ignores exits and
+fees. On the 14:15Z archive, 25 LONGs averaged −0.213R at 1h (32.0% positive;
+circular block-4 95% interval [−0.428R,−0.048R]) and 23 averaged −0.236R at 4h
+(26.1% positive; [−0.376R,−0.095R]). SHORTs averaged +0.040R at 1h (n=36;
+interval [−0.101R,+0.166R]) and −0.032R at 4h (n=34; [−0.333R,+0.284R]).
+
+This is evidence against assuming the high realized win rate proves strong
+directional LONG signal quality: losses may come from entry selection as well
+as exit management. Treat the result as exploratory, not confirmatory: five
+correlated horizons were inspected on a reused sample, the side groups are
+small, and the intervals do not correct for multiple comparisons. It does not
+justify disabling LONGs or changing the live experiment. Reproduce with:
+
+```sh
+docker compose exec -T app /app/.venv/bin/python \
+  /app/scripts/analyze_signal_followthrough.py /tmp/ccb-forensic.zip
+```
+
+The isolated prospective LONG cohort (plan time >= `2026-10-08T08:49:47Z`,
+0.10% risk, `payoff_early_trail`) has only two filled cases in this archive.
+Both have negative 1h first-fill-to-close movement (mean -0.356R); one has a
+completed 4h horizon at -0.282R. The 1h block interval is degenerate at n=2 and
+is not meaningful uncertainty quantification. Both positions remained open
+with stops at the snapshot, so these are interim marks—not realized P&L or
+complete-position outcomes. Keep the prior 0.25%-risk XRP trade out of this
+cohort, and wait for completed cases before judging live risk or exits.
+
+## Exit and execution-cost diagnostics — 2026-10-08 14:21Z
+
+Replayed the 14:15Z archive (61 filled V2 cases, 55 complete) through the
+time-stop, post-E3 risk-trim, later-target/reduced-E3, and maker/taker-fee
+diagnostics. No exit candidate is ready to promote. The time-stop threshold
+selected on training (60 minutes, close <= -0.25R) loses 1.165R versus current
+on the 19-case holdout; alternatives with positive holdout deltas had negative
+training deltas and wide intervals. E3 stop-risk trims were neutral to worse
+on holdout (best tested delta -0.009R; intervals include zero).
+
+The post-hoc 70/25/5 entry allocation with 1/2/4R targets improved holdout
+point-estimate net from -2.122R to -0.482R (19 cases; paired delta +1.640R),
+but its block-bootstrap 95% interval is [-0.311R,+3.871R] and removing the
+three largest positive case deltas changes the paired delta to -0.436R. It
+remains negative in both training (-0.619R/30) and holdout. The candidate was
+selected after inspecting this archive; only future unseen data can validate
+it, and this replay is not evidence to change production.
+
+Using observed maker/taker rates instead of the scalar fee assumption improves
+holdout replay by +0.129R on average (19 cases; block 95% interval
+[+0.070R,+0.190R]), but the corrected holdout still returns -1.993R total,
+-0.105R per case, and 0.648 profit factor. This is a cost-model correction,
+not a demonstrated profitable strategy. The broader account result remains
+negative after actual fees, so fee reduction alone is insufficient.
+
+## Source/direction decomposition — 2026-10-08 14:21Z
+
+Completed-position groups suggest losses are not explained by direction alone:
+the largest source/side groups are small (8-21 positions), LONG expectancy is
+negative in the larger observed groups, and SHORT results vary by source. One
+source's 8/8 winning SHORTs account for +$204.79, while another source's 21
+SHORTs are only +$0.05R per position and -$24.33 net. These are descriptive
+and highly vulnerable to source/regime selection; no source/side gate is
+promoted without a predeclared chronological prospective sample.
+
+The existing walk-forward 3-loss source/side health gate would have filtered
+13 of 55 completed cases: retained net was -$95.33 versus -$285.60 baseline
+(paired delta +$190.27), but the IID 95% interval for that delta is
+[-$90.79,+$521.81]. The retained set still lost $2.27 per position overall;
+LONG expectancy remained -0.191R. Most importantly, the only post-freeze
+completed case was the prior 0.25%-risk XRP winner (+$0.94), which the rule
+would have suppressed. This is not a dependable improvement; keep the gate
+paper-only and continue collecting its prospective sample.
+
+## Bootstrap block-length sensitivity — 2026-10-08 14:32Z
+
+To check dependence on the existing four-position block assumption, recomputed
+performance intervals with circular block lengths 8 and 12 (2,000 draws each)
+on the same 55 complete outcomes. Overall mean-net-R intervals remain broad and
+cross zero: [-0.159R,+0.161R] at block 8 and [-0.180R,+0.171R] at block 12.
+LONG intervals also cross zero at both lengths ([-0.556R,+0.156R] and
+[-0.544R,+0.138R]). SHORT's block-8 interval crosses zero, while block 12 is
+slightly positive ([+0.014R,+0.238R]); with just 34 SHORTs and only about five
+non-overlapping 12-position blocks, this sensitivity is not evidence of a
+reliable directional edge. The conclusion is unchanged: current samples do
+not establish positive risk-adjusted expectancy or a deployable rule.
+
+## First completed 0.10x LONG — 2026-10-08 14:42Z
+
+The XRPUSDT LONG planned at 0.10% risk under `payoff_early_trail` closed its
+full 366.6-unit position. Fresh reconciliation tags it to the 0.10% cohort:
+net +$0.8312 (+0.1170R), fees $0.4621, funding $0. The cohort is now 1/20
+completed, with one other filled position open at that snapshot. One winner cannot
+estimate a payoff ratio or establish expectancy; its one-case bootstrap
+interval is degenerate and uninformative. The broader payoff-profile cohort
+is 2/20 complete, combining this case with the prior 0.25%-risk XRP winner;
+keep those risk groups separate.
+
+The refreshed 14:40Z strategy archive reconciles 56 complete positions:
+39 wins, 17 losses, 69.64% win rate, 0.3318 average-win/loss ratio, -$284.77
+net, and -$5.09 mean net per position. LONGs are 22 positions at -$17.63 and
+-0.189R expectancy; SHORTs are 34 at +$3.03 and +0.130R. Gross price P&L is
+-$170.37, fees $117.78, funding +$3.38. The four-position block 95% interval
+for mean net R remains [-0.168R,+0.175R]. The new winner nudges the sample but
+does not change the conclusion that system expectancy is unproven and overall
+net remains negative.
+
+The account-level Closed-PnL cache synced through 14:42Z and now has 157 rows.
+Those rows include partial exits and are displayed separately from the
+56-position whole-trade scorecard. The dashboard exporter can also supplement a
+stale cache from a forensic archive only when the archive's declared coverage
+spans the cache watermark; it leaves SQLite and the running service untouched.
+
+The 14:45Z archive adds a new GALAUSDT LONG plan and E1 fill (25,812 units at
+0.002314), tagged 0.10% risk and `payoff_early_trail`, with a 0.002146 stop.
+The open Demo account now has five positions, all with stops. The live-risk
+cohort is 3 filled / 1 completed / 2 open; the broader payoff-profile cohort
+is 4 filled / 2 completed. No additional realized result is added by this
+entry, so the realized scorecard above is unchanged. Dashboard data was
+regenerated from this archive and the synchronized local cache. The full
+project suite then passed 503 tests at 80.04% coverage; focused dashboard tests,
+Ruff, format check, and `git diff --check` also passed.
+
+Re-running the frozen early-trail shadow after the XRP close gives 2 eligible
+post-freeze LONGs: baseline replay -0.1287R total versus candidate +0.1587R,
+a paired +0.2874R. Both cases improve, but removing the largest positive
+contribution removes the entire gain; the block-4 interval is degenerate at
+n=2. This is a useful prospective lead, not conclusive evidence, and combines
+the prior 0.25%-risk XRP with the new 0.10%-risk XRP. The independent live
+0.10%-risk cohort remains only 1/20 complete. Leave settings unchanged and
+continue separating the cohorts.
+
+## Reconciled chronological replay — 2026-10-08 15:00Z
+
+Re-ran the historical parameter search on the 14:54Z forensic archive, limited
+to 56 size-reconciled positions and split chronologically into 28 training,
+11 validation, and 17 untouched holdout cases. Baseline results were
+-1.690R/PF 0.77 in training, +0.588R/PF 1.28 in validation, and
+-2.829R/PF 0.56 in holdout. Holdout LONGs were -2.780R/PF 0.15/29% wins;
+SHORTs were -0.049R/PF 0.98/70% wins.
+
+The top 15 candidates ranked only on training results all remained negative
+on holdout (-1.459R to -3.557R). The top-ranked candidate had just +0.168R in
+training, then -2.730R in holdout; the candidate with the best holdout result
+was not the training winner and still lost -1.459R. These results do not
+support selecting a profitable exit parameter set and are vulnerable to
+multiple-comparison selection. A diagnostic 0.50R post-E3 stop cap improved
+holdout from -2.829R to -2.116R, but also lost money and validation changed
+from +0.588R to -0.242R. Treat it as a risk-reduction lead only, not a
+deployable strategy. E3 fill cohorts are adverse-path-selected and are not a
+causal estimate of the effect of adding E3.
+
+A separate paired replay of the frozen `payoff_early_trail` exit-only profile
+returned +0.090R on this holdout versus -2.829R for baseline exits
+(PF 1.03, 64.7% wins versus 52.9%). The paired delta was +2.920R, but its
+IID 95% interval [-0.606R,+7.009R] and block-4 interval
+[-0.134R,+6.292R] both span zero. Removing the three largest case deltas
+changes the paired result to -0.186R. Two sequential ADA SHORT cases alone
+contribute +2.555R, indicating strong symbol/time concentration. Adding the
+reduced-E3 candidate to this exit profile lowers holdout net to -0.615R; the
+increment versus exit-only is -0.706R with a wide interval. This supports
+keeping the exit profile as a prospective lead, not claiming a robust
+historical edge. The actual `payoff_early_trail` cohort has only two completed
+positions, so separate from this retrospective simulation it remains
+underpowered.
+
+The same reconciled positions show the exposure mechanism more clearly:
+E1-only trades were 21/22 winners and +$319.04 net, with $41.76 average
+realized initial stop risk versus $69.73 planned; E1+E2 trades were 12/12
+winners and +$365.57 net, with $60.73 average realized risk versus $71.54
+planned. Full E3 trades were only 6/22 winners and -$969.37 net; their
+average realized risk ($69.86) matched planned risk ($69.86). Across all
+completed positions, winners averaged $50.64 realized risk against $71.14
+for losers, while average planned maximum loss was much closer ($69.02 vs
+$72.82). Thus the dollar loss reflects both poor payoff in R (average win
++0.427R vs average loss -0.963R) and larger realized exposure on losers.
+The fill-pattern contrast is still path-conditioned: reaching E3 requires a
+deeper adverse move, so it does not prove that canceling E3 would cause better
+results. It does make entry completion/exposure a first-class diagnostic,
+alongside exit management.
+
+Conclusion: the current evidence does not show that exit tuning alone fixes
+the payoff problem. Holdout LONG losses dominate, but the contemporaneous
+SHORT holdout is also slightly negative; do not infer a profitable SHORT-only
+policy from direction splits. Keep the reduced-risk LONG and exit-profile
+cohorts isolated and collect prospective full-position results before any
+production adjustment. The extracted `confidence` field is explicitly
+extraction confidence, not probability of profit; do not use it as a sizing
+signal without a separate, calibrated predictive study.
+
+## Demo experiment monitor — 2026-10-08 15:51Z
+
+Since the 15:20Z snapshot, ZECUSDT received an E2 fill of 0.23 at 1167 on its
+older 1.0%-risk baseline LONG plan (stop 1087.8). GALAUSDT's 0.10%-risk
+`payoff_early_trail` plan filled E2 (15,989 at 0.002259) and E3 (19,019 at
+0.002203), reaching 60,820 total; the full position later closed at 0.002145
+for -$7.4083 net (-1.0250R), including $0.1202 fees and no funding.
+
+The older BNBUSDT LONG plan (created 2026-09-24, 1.0% risk, baseline) filled
+E1 (1.06 at 744.1), E2 (0.51 at 738.8), and E3 (0.36 at 733.4). Its current
+1.93 position retains stop 703.8. BTCUSDT E1 (0.026 at 81,253.3) filled on an
+older 2026-09-29 baseline plan, with stop 79,628.2; E2/E3 were still open GTC
+orders at the last realtime inspection. Keep both legacy plans distinct from
+the current reduced-risk cohort; no order was canceled or modified.
+
+SOLUSDT's 0.2 partial T2R4 close at 110.81 booked +$1.5274 Closed-PnL, while
+0.4 remains open with stop 123.62. Do not count that partial row as a completed
+position. DOGEUSDT and ENAUSDT also received final-leg fills on their existing
+plans. MINAUSDT opened under the current 0.10%-risk `payoff_early_trail`
+configuration (planned stop 0.07815, planned max loss $7.2200), filled E1 at
+0.07981, and fully closed at 0.08024 for +$0.8978 net (+0.2060R), with
+$0.2311 fees and no funding.
+
+The fresh 15:51Z archive contains 65 filled V2 cases, 616 execution rows, 147
+Closed-PnL rows, and six open positions; all six positions have exchange-side
+stops (BNB 703.8, BTC 79,628.2, DOGE 0.07824, ENA 0.1982, SOL 123.62, ZEC
+1087.8). Across 58 completed whole positions, the scorecard is 40 wins and 18
+losses (69.0%), -$291.28 net, -$5.02 expectancy per position, and 0.341
+average win/loss. Fees are $118.13 and signed funding +$3.38; gross price PnL
+is -$176.53. The IID bootstrap 95% interval for mean net R is [-0.1901,
+0.1607], and the circular-block interval is [-0.1809, 0.1576].
+By side, 24 LONGs net -$394.28 (-$16.43 expectancy, 0.293 average win/loss;
+$43.99 fees, -$0.53 funding), while 34 SHORTs net +$103.00 (+$3.03
+expectancy, 0.367 average win/loss; $74.15 fees, +$3.91 funding). Their IID
+mean-net-R intervals are [-0.4940, 0.0660] for LONG and [-0.0876, 0.3306] for
+SHORT. The four-position payoff-profile subset is LONG-only, with $1.41 fees
+and no funding.
+
+The 0.10%-risk LONG cohort now has 3/20 completed cases: 2 wins, 1 loss,
+-$5.68 net, and -0.2340R expectancy; average win/loss is 0.1576R. Its win-rate
+95% Wilson interval is [20.8%, 93.9%], while the IID bootstrap 95% interval for
+mean net R is [-1.0250, 0.2060]. There are no contemporaneous SHORT controls.
+The `payoff_early_trail` cohort has 4/20 completed cases: 3 wins, 1 loss,
+-$4.74 net, and -0.1539R expectancy; average win/loss is 0.1332R. Its win-rate
+95% Wilson interval is [30.1%, 95.4%] and IID bootstrap mean net R interval is
+[-0.7395, 0.1761]. Both cohorts remain too small to establish profitability.
+Dashboard JSON/JS were regenerated from the 15:51Z archive and SQLite.
+
+## Directional/source optimization review — 2026-10-08 15:57Z
+
+The latest 58-position whole-trade scorecard does not support treating the
+aggregate 69.0% win rate as proof of good signal quality. LONGs are 14/24 wins
+(58.3%), -$394.28 net, -0.207R expectancy, and 0.361 average win/loss in R;
+SHORTs are 26/34 wins (76.5%), +$103.00 net, +0.130R expectancy, and 0.492
+average win/loss in R. The separate account Closed-PnL row win rate is not a
+trade-level win rate because partial exits are multiple rows per position.
+
+An exploratory first-fill follow-through analysis on 65 filled cases finds
+LONG signed movement negative at 60 minutes (-0.241R, IID bootstrap 95% CI
+[-0.466,-0.083], n=26) and 240 minutes (-0.238R, [-0.392,-0.084], n=24).
+SHORT follow-through at those horizons is near zero and uncertain. This
+analysis ignores exits, fees, and later fills, so it is diagnostic evidence
+about directional movement—not standalone profitability or causal proof.
+
+The 0.40R-activation `payoff_challenger` replay—not the live early-trail
+profile—returned -0.968R versus -3.887R for baseline on the latest 18-case
+chronological holdout. Its paired IID interval was [-0.596R,+6.981R], and the
+top three positive case deltas exceeded the total gain. The exact live
+`payoff_early_trail` replay (0.20R activation, 0.10R trail) instead returned
++1.089R train, +1.385R validation, and +0.665R holdout. On holdout it won 17/18,
+but average win was only +0.099R versus -1.020R average loss (0.097R win/loss,
+91.1% break-even win rate, +0.037R expectancy). Its paired holdout delta versus
+baseline was +4.553R, with IID interval [-0.772R,+10.131R] and circular-block
+interval [-0.904R,+9.673R]; removing the three largest positive deltas leaves
++1.028R. This is encouraging retrospective evidence but highly uncertain and
+already inspected, not prospective proof. Adding reduced E3 to the exact live
+profile returned -1.516R on holdout, -2.182R versus the live profile (IID
+interval [-5.626R,+0.189R]); do not promote that interaction.
+
+Source-by-side results are strongly heterogeneous. `Scalping Blog | Адель`
+SHORT cases were 8/8 winners (+$204.79, +0.482R mean) and 3/3 winners in
+holdout (+$93.79); its LONG cases were 1/3 winners (-$78.62). However, this
+subgroup was identified post hoc and is small. `Мысли Эмилии` LONGs shifted
+from 4/4 wins in validation (+$132.67) to 4/7 in holdout (-$219.49), showing
+why in-sample source selection is unsafe. These are shadow leads only; keep
+settings unchanged until a predeclared side/source rule is tested on new
+prospective cases with an adequate sample and costs included.
+
+The frozen paper-only source/side health gate (suppress after the last three
+closed cases sum to <=0R) now has five post-freeze cases. It suppresses three
+positions that actually netted +$2.67 and retains two losing positions totaling
+-$14.68: the filtered subset is -$14.68 versus -$12.01 baseline, a -$2.67
+paired delta (IID 95% interval [-$4.50,-$0.83]). The gate's first five cases
+make its error mode concrete: it suppressed winners and retained both losers.
+At only 5/20 cases this is not a calibrated gate; do not deploy it. The separate
+0.00/0.25/0.50/1.00 LONG risk-curve shadow still has 0/20 eligible cases.
+
+Follow-up diagnostics on the same completed cases show the live early-trail
+profile's holdout was directionally uneven: SHORTs returned +0.875R/9 (9/9
+winners), while LONGs returned -0.210R/9 (8/9 winners, with the one loss at
+-1.020R). Train SHORTs returned +1.258R/18 and validation SHORTs +0.982R/7;
+LONGs returned -0.169R/11 and +0.402R/4 respectively. The tiny, all-winning
+SHORT holdout and the LONG reversal do not establish a durable side filter.
+
+Whole-position fill-pattern associations are also stark: LONG E1-only was
+7/7 wins and +$76.11, E1+E2 was 4/4 and +$96.70, while full E1+E2+E3 was 3/13
+and -$567.10. SHORT full-E3 cases were 3/10 and -$409.68. This must not be
+interpreted as the causal effect of removing E3: deeper adverse price movement
+selects trades into the full-E3 cohort, and completed-case replay of reduced E3
+has not consistently improved holdout.
+
+A fixed LONG-only close-confirmed time-stop grid (12 rules, train-selected)
+also fails consistency testing. The rule selected by its training result,
+60m/close<=0R, changed paired return by +1.656R in train but -1.882R in
+validation and +1.664R in holdout; the respective IID intervals were
+[-2.310,+6.157], [-3.807,-0.276], and [-0.613,+4.498]R. The validation loss
+rejects it as a robust rule despite the positive holdout point estimate. A
+fixed runner-allocation grid on the live early-trail profile also had near-zero
+holdout deltas (+0.002R to +0.008R), all with intervals spanning zero; the
+average win/loss ratio remained about 0.097R. No additional exit-control
+change is justified by these repeated post-hoc searches.
+
+A separate trail-width sweep illustrates the payoff trade-off: widening to
+0.40R activation/0.30R distance raised holdout win/loss to 0.399R but returned
+-1.597R (11/18 wins), versus +0.665R and 0.097R under the live early trail
+(17/18). At 0.75R/0.50R, payoff rose to 0.743R while holdout fell to -3.300R
+(7/18). Improving the ratio alone is not enough; realized expectancy is the
+objective. Keep the current profile unchanged pending prospective evidence.
+
+A direct post-E3 stop-risk trim was also replayed against the exact early-trail
+profile. On holdout, caps of 0.50R, 0.75R, and 0.95R returned -1.095R, -0.236R,
+and +0.503R respectively, each below the untrimmed +0.665R. The 0.95R cap
+reduced average loss from 1.020R to 0.482R but also lowered win rate from 94.4%
+to 88.9%; its paired delta was -0.163R (IID 95% interval [-0.444R,+0.095R]).
+All three caps also lost paired return in validation. This limits loss size but
+does not improve expectancy reliably; do not deploy it.
+
+## Corrected exits and entry-quality diagnostics — 2026-10-08 16:43Z
+
+Correction: the exploratory diagnostics initially labeled “active early trail”
+used the baseline 0.5/1/1.5R target schedule. Production `payoff_early_trail`
+uses 1/2/4R targets with 15/20/25% partial exits and a 40% runner. The results
+below supersede those earlier calculations and use the exact production profile.
+
+On the 16:42Z archive, the exact early-trail profile returned +1.089R train,
++1.385R validation, and +0.665R holdout. Delaying E3 by 240 minutes returned
++0.202R, +1.484R, and -2.423R. The paired holdout change was -3.089R (IID 95%
+interval [-6.652R,+0.156R], circular-block-4 [-6.431R,0.000R]). LONG holdout
+moved from -0.210R (8/9 wins) to -2.345R (6/9); SHORT moved from +0.875R (9/9)
+to -0.079R (8/9). Reject the delay; this already-inspected replay is not
+independent validation.
+
+A fixed 3x3 early-close grid (5/15/30 minutes; close thresholds 0/-0.25/-0.50R)
+also failed: all nine rules reduced return versus the exact profile across
+train, validation, and holdout. The train-selected 30m/close <= -0.25R rule
+returned -0.660R, -0.731R, and -0.948R, with paired changes -1.749R, -2.115R,
+and -1.613R. The 5m/close <= 0R rule was +0.181R on holdout but lost in train
+(-1.358R) and validation (-0.234R); its holdout delta was -0.485R. Do not
+promote early adverse-close exits.
+
+The exporter now includes a four-hour pre-fill candle warm-up, and the
+follow-through analyzer reads those raw candles separately from replay candles
+(which intentionally exclude pre-entry bars). On 58 reconciled positions, the
+15m pre-signal signed move was near zero for both sides. The 60m mean was
++0.092R for LONGs and -0.023R for SHORTs, with both intervals spanning zero.
+At 240m, LONGs averaged +0.262R (n=28; block-4 95% interval [-0.080R,+0.645R]);
+SHORTs averaged -0.218R (n=36; [-0.399R,-0.027R]), meaning SHORT signals tended
+to be countertrend before entry. However, trend-alignment groups did not
+generalize across chronological splits: 60m LONG countertrend cases went from
+-0.541R in train (n=3) to +0.252R in holdout (n=4), while aligned LONGs moved
+from -0.263R (n=8) to -0.845R (n=5). The groups are small and regime-dependent;
+do not deploy a simple trend filter.
+
+Finally, ignoring trader TP caps under the exact profile changed paired return
+by +0.772R in train, +0.389R in validation, and only +0.010R in holdout. All
+holdout confidence intervals included zero, and removing the three largest
+positive deltas left -0.009R. Trader-TP capping alone does not explain the
+low-payoff problem; do not remove it based on this search.
+
+## Profitability optimization checkpoint — 2026-10-08 17:33Z
+
+The fresh archive has 59 complete positions: 40/59 wins (67.8%), -$298.55 net,
+$22.73 average net winner versus -$63.56 average net loser (0.358 dollar
+payoff), -$5.06 expectancy per position, and -0.0265R expectancy. In R units,
+the payoff ratio is 0.435 and the break-even win rate is 69.7%; in dollars the
+break-even win rate is 73.7%. Losing positions carried larger initial risk on
+average than winners. At the observed 40/19 win/loss counts, average winners
+would need to rise to about $30.19 (+32.8%), or average loss fall to about
+$47.84 (-24.7%), to break even. These are arithmetic thresholds, not forecasts.
+The side split remains stark: 25 LONGs net -$401.55 with -0.239R expectancy;
+34 SHORTs net +$103.00 with +0.130R expectancy. The SHORT 95% win-rate interval
+is [60.0%,87.6%], so this is promising direction evidence but not a proven
+filter.
+
+The 0.10%-risk LONG cohort is 4/20 complete (XRP +$0.83, GALA -$7.41, MINA
++$0.90, ENA -$7.27): -$12.95 net, -0.428R expectancy, 0.118 dollar / 0.159R
+average win/loss, 50% wins, $0.895 fees, and -$0.004 funding. Its IID 95%
+mean-net-R interval is [-1.018R,+0.162R]. The payoff-profile cohort is 5/20
+complete because it also includes the earlier XRP at 0.25% risk; keep that case
+separate when judging sizing. The five-profile total is -$12.01 net, -0.325R
+expectancy, 0.121 dollar / 0.134R average win/loss, $1.490 fees, and -$0.004
+funding; its IID mean-R interval is [-0.797R,+0.147R]. Neither cohort shows a
+profitable edge so far.
+
+Two older frozen replay shadows now contain five eligible cases, all LONGs.
+They compare against the legacy 0.5/1/1.5R policy, not the active
+`payoff_early_trail` policy, so they cannot decide whether to change the current
+Demo profile. Their challengers still have negative simulated expectancy
+(-0.618R and -0.350R); gains are concentrated in three cases. A new, explicitly
+prospective `--prospective-demo-trail-shadow` was frozen at 17:32Z to compare
+the active 0.20R/0.10R early trail against a 0.40R/0.10R trigger, holding the
+1/2/4R targets, allocation, and risk geometry fixed. It starts at 0/20 on this
+archive; no pre-freeze cases are counted. Run it with:
+
+```sh
+docker compose exec -T app /app/.venv/bin/python \
+  /app/scripts/replay_strategy_v2.py /tmp/ccb-forensic.zip \
+  --prospective-demo-trail-shadow
+```
+
+At the same snapshot, five current positions had $266.44 stop risk and eight
+older pending entry orders $169.23, or $435.67 combined—$95.67 above the $340
+cap. The position-side estimate uses the exchange's configured stop-loss price
+(conservative for SOL, which also reports an active trailing stop). The cap
+affects newly planned entries only and does not cancel existing orders. No
+orders, positions, or live settings were changed; the pending entries remain
+untouched pending direct operator direction.
+
+Read-only recheck — 2026-10-08 17:45Z
+--------------------------------------
+
+The fresh Bybit Demo archive (17:44:57Z) still has 65 filled Strategy V2 cases,
+59 complete reconciliations, 149 Closed-P&L rows, and 625 executions—the same
+counts as the 17:30Z archive. The app ledger has no new intent after 15:34Z.
+All four completed 0.10%-risk LONGs still carry `payoff_early_trail`; this
+cohort remains 4/20, -$12.95 net, -0.4282R expectancy, 0.118 average dollar
+win/loss and 0.159 in R, with IID mean-R 95% interval [-1.018R,+0.162R]. The
+five-position profile cohort remains 5/20, -$12.01 net and -0.3252R; it
+includes the separate earlier 0.25%-risk XRP case. No new completed case was
+observed. The five open positions still have exchange stop protection. Their
+marks changed, so generated dashboard snapshots were refreshed; reconciled
+closed-position P&L did not change.
+
+The frozen prospective trail challenger (0.40R activation versus the active
+0.20R, with the same 0.10R trail distance and target schedule) remains at 0/20
+eligible cases on this archive. No post-freeze position has completed for this
+comparison; the older retrospective replay is not substituted for it.
+
+The direct paired historical comparison clarifies its baseline: over the
+chronological 50/20/30 split, 0.40R activation versus the live 0.20R profile
+changed net return by -0.379R in train, +0.151R in validation, and -1.459R in
+the latest 18-case holdout. The holdout IID 95% interval is [-5.660R,+2.379R]
+and circular-block-4 is [-4.529R,+1.978R]; excluding its three largest positive
+case deltas leaves -2.803R. Although 0.40R beats the legacy baseline in that
+holdout, it loses to the actual active 0.20R comparator. Do not promote it from
+the retrospective result. The interaction reporter now emits this direct paired
+comparison; reproduce with `compare_allocation_interaction.py BUNDLE`.
+
+The new `--retrospective-current-demo-sizing` report applies the current 0.10x
+rule to only the 20 historical 1.0%-risk LONGs, preserving four already-live
+0.10%-risk LONGs, the separate 0.25%-risk XRP, and all SHORTs. Under a linear
+size/P&L/fee assumption, total net changes from -$298.55 to +$52.03 (+$350.59
+paired), but the IID 95% interval for that paired dollar delta is
+[-$53.36,+$787.68] and circular block-4 is [-$95.17,+$825.64]. Excluding the
+three largest positive deltas leaves +$126.92. Crucially, risk-normalized
+expectancy is unchanged at -0.0265R per position: smaller LONG sizing reduces
+dollar exposure but does not fix the system's payoff/expectancy. This is a
+retrospective, linear counterfactual—not a prospective profitability result.
+Reproduce with:
+
+```sh
+docker compose exec -T app /app/.venv/bin/python \
+  /app/scripts/analyze_forensic_pnl.py /tmp/profitability-20261008T1738Z.zip \
+  --retrospective-current-demo-sizing
+```
+
+The eight legacy, unfilled entry orders remain untouched alongside the five
+open positions; their combined stop-risk estimate still exceeds the $340 cap.
+No settings, services, orders, or positions were changed.
+
 ## Deployment and state
+
+## Demo total-risk-cap experiment — 2026-10-08
+
+A fixed $340 open stop-risk cap is enabled for newly planned Demo entries. On
+the 58-position historical archive, the retrospective 5x-mean-planned-risk
+cap changed total net P&L from −$291.28 to −$19.92. The already-inspected latest
+18-position holdout delta was +$286.20 (paired circular-block-4 95% interval
+[$27.61, $597.38]); removing its three largest positive deltas left +$57.44.
+Across all 58 cases the paired block interval crossed zero (−$17.14 to
+$689.26), and capped net P&L remained negative. Treat this as a sizing
+hypothesis, not evidence that the strategy is profitable.
+
+Refresh on the 59-complete-position 17:44Z archive: the 5x cap is $334.85 and
+changes the linearly modeled total from −$298.55 to −$34.85 (+$263.70 paired).
+The benefit is highly time-concentrated: +$281.28 in the latest 18-position
+holdout, −$17.58 in validation, and zero in train. Removing the three largest
+positive deltas leaves only +$34.94. Modeled net remains negative overall and
+its circular-block-4 mean-P&L interval spans zero; these are retrospective
+linear-scaling results that do not model changed fills, slippage, or market
+impact. The deployed cap is a risk constraint, not a profitability fix.
+
+The implementation sums current exchange-stop risk plus unfilled V2 ladder
+orders, reduces only new plans to remaining capacity, and rechecks the cap
+against live state immediately before execution. Unknown/unprotected exposure
+fails closed. Existing positions and orders are unchanged. Verify prospective
+results separately from the 0.10x LONG and payoff-profile cohorts.
+
+Combined live-allocation replay on the same 59 complete positions scales only
+historical 1.0%-risk LONGs to 0.10x, preserves the four actual 0.10x LONGs, the
+separate 0.25x XRP, and all SHORTs, then applies a fixed $340 cap to overlapping
+position risk. The point estimate moves net P&L from -$298.55 to +$174.41; five
+positions would have been skipped and three partially scaled. Mean expectancy
+is +0.036R and the R win/loss ratio 0.443, but the 95% mean-R intervals cross
+zero (IID [-0.130R,+0.192R], block-4 [-0.125R,+0.186R]). The paired dollar
+delta's block-4 interval also crosses zero; train/validation/holdout net deltas
+are +$284.87/−$119.40/+$307.50, so the apparent benefit is unstable by period.
+The simulation excludes pending-order risk and assumes linear P&L/fee scaling;
+it is an allocation hypothesis, not demonstrated profitability. It applies
+today's settings retrospectively to old trades and is not an independent
+prospective test. Reproduce with:
+
+```sh
+docker compose exec -T app /app/.venv/bin/python \
+  /app/scripts/analyze_forensic_pnl.py /tmp/profitability-20261008T1738Z.zip \
+  --retrospective-live-sizing-cap --portfolio-stop-risk-cap-usdt 340
+```
+
+An exploratory fixed-cap sweep at $200/$250/$340/$500 produced combined net
+point estimates of +$44.26, +$49.31, +$174.41, and +$52.03 respectively, with
+mean-R estimates +0.0055/+0.0307/+0.0364/−0.0265. All four block-4 bootstrap
+intervals for mean R and mean dollar P&L cross zero. Validation net remained
+negative at $200 (−$23.50), $250 (−$61.14), and $340 (−$33.34), while the $340
+holdout point estimate was the largest and has already been inspected. There
+is no stable cap optimum in this reused sample; do not tune the live $340 cap
+to these figures.
+
+Risk-basis sensitivity: applying the $340 cap against full planned maximum
+loss (reserving all ladder risk from entry through closure) is more conservative
+than the filled-position-risk replay above. It partially scales 6 trades and
+skips 6, yielding +$81.89 rather than +$174.41; validation remains negative
+(−$47.73) and holdout contributes +$80.74. The combined mean-R point estimate
+is +0.031R, but its block-4 95% interval is [-0.128R,+0.178R]; the paired
+block-4 mean-dollar-delta interval is [-$2.14,+$16.13]. This reserves planned
+risk longer than actual unfilled orders may remain live, so it is a conservative
+approximation—not an exact event-level replay. It weakens, but does not reverse,
+the conclusion that the apparent edge is unproven. Reproduce with:
+
+```sh
+docker compose exec -T app /app/.venv/bin/python \
+  /app/scripts/analyze_forensic_pnl.py /tmp/profitability-20261008T1738Z.zip \
+  --retrospective-live-sizing-cap --portfolio-stop-risk-cap-usdt 340 \
+  --portfolio-cap-risk-basis planned
+```
+
+Sweeping the planned-risk basis at $200/$250/$340/$500 gives net P&L
++$64.67/+$20.15/+$81.89/+$95.76 and mean-R point estimates
+−0.0083/+0.0055/+0.0307/−0.0090. Every bootstrap interval for mean R and mean
+dollar P&L crosses zero. Validation totals are +$1.90/−$14.41/−$47.73/−$33.34;
+holdout is −$11.21/+$6.82/+$80.74/+$80.21. The apparent optimum changes with
+exposure basis, and the $500 result has negative R expectancy. This confirms
+there is no stable retrospective cap setting to promote; retain the current
+cap only as a risk limit pending prospective evidence.
+
+## Current $400-cap sizing refresh — 2026-10-09 08:44Z archive
+
+Re-running the current 0.10x LONG sizing and $400 concurrent stop-risk cap on
+the 60 complete-position archive scales 20 baseline-sized LONGs, preserves the
+four actual 0.10x LONGs and all SHORTs, and partially scales three positions
+while skipping two under the actual-filled-risk basis. The counterfactual net
+is +$190.87 (versus −$284.91 actual history), with +0.0137R expectancy and a
+0.586 dollar average win/loss ratio at the unchanged 68.33% win rate. These are
+retrospective linear-sizing results, not changed-exit results or prospective
+proof. The 95% mean-net-R intervals cross zero (IID [−0.159R,+0.175R], block-4
+[−0.147R,+0.170R]); validation is −$33.34 while holdout is +$161.68. Pending
+order risk, altered fills, minimum sizes, slippage, and market impact are not
+modeled. Keep the cap as a risk limit; the four-case prospective 0.10x LONG
+cohort remains negative and is the relevant live evidence.
+
+### Entry-order lifecycle coverage — 2026-10-08 18:21Z
+
+The refreshed read-only archive `/tmp/profitability-order-lifecycle-20261008T1816Z.zip`
+contains 65 filled V2 cases, 59 fully reconciled positions, 140 historical entry
+order rows, and 8 currently open entry-order snapshots. Of 195 expected E1/E2/E3
+orders, 53 E2/E3 orders are absent from both order views and have no matching
+execution. They cannot be assigned an exact cancellation time from this archive;
+Bybit history has limited retention for old unfilled cancellations. This is why
+the filled-risk and planned-risk cap simulations remain exposure bounds rather
+than an event-accurate replay. The recent cohort can be tracked prospectively
+while order lifecycle data is still available.
+
+The 0.10x LONG cohort is 4/20 complete (2 wins, 2 losses, −$12.95 net,
+−0.428R expectancy, 0.159R average win/loss ratio); it has no matched SHORT
+controls. The `payoff_early_trail` cohort is 5/20 (3 wins, 2 losses, −$12.01 net,
+−0.325R expectancy, 0.134R average win/loss ratio) and includes the separate
+prior 0.25%-risk XRP case. These samples are too small to select a more
+profitable configuration; leave settings unchanged and collect fully closed,
+prospective cases.
+
+An exploratory delayed-market-entry diagnostic on the same archive tests waiting
+15 or 60 minutes, skipping a case if its original stop is touched while waiting,
+then measuring mark-to-market 60 or 240 minutes after entry. A 60-minute wait
+changes LONG 60-minute movement from -0.252R (n=29) to +0.055R (n=24), but its
+block-4 95% interval is [-0.100R,+0.265R]; at a 240-minute horizon the result is
+still -0.175R (n=24, interval [-0.310R,-0.041R]). The wait excludes 5 of the 29
+LONG cases, so selection/stop avoidance contributes to the apparent near-term
+improvement. A 15-minute wait remains negative at both horizons. This diagnostic
+is not a stop/target/fee/slippage-aware trade replay and does not justify a live
+delay rule; it only sharpens the entry-timing hypothesis for a prospective,
+predeclared test.
+
+## Demo outcome update — 2026-10-08 18:33Z
+
+The 18:28Z archive reconciles the newly closed SOLUSDT SHORT fully: 5.6 units
+closed, +$13.64 net (+0.317R), $0.69 fees, and +$0.16 signed funding. It is a
+baseline-risk SHORT, not part of either prospective LONG/profile cohort. The
+whole-position sample is now 60 complete (41 wins, 19 losses, 68.3% win rate),
+−$284.91 net, −$4.75 expectancy/trade, and a 0.354 average win/loss ratio.
+Break-even at the observed payoff requires a 73.9% win rate. Mean-R 95% intervals
+still span zero (IID [−0.195,+0.151], block-4 [−0.192,+0.147]).
+
+Side results remain sharply different but retrospective: 25 LONGs are 14/25,
+−$401.55 net (−$16.06/trade, 0.319 average win/loss), while 35 SHORTs are 27/35,
++$116.65 net (+$3.33/trade, 0.361 average win/loss). This is a reason to keep
+side-specific evidence separate, not enough to switch off LONGs: the cohort
+selection is historical, the new 0.10x LONG sample is still 4/20 at −$12.95,
+and it has no contemporaneous SHORT controls. `payoff_early_trail` remains 5/20
+at −$12.01. Dashboard data was regenerated from the 18:28Z archive and live
+SQLite snapshot; account Closed-PnL rows remain separately labeled from whole
+positions.
+
+The side split is unstable by time window: SHORT train/validation/holdout
+expectancy is +0.152R/+0.013R/+0.216R (net +$94.18/−$46.61/+$69.07); LONG is
+−0.339R/+0.495R/−0.423R (net −$316.52/+$132.67/−$217.71). The validation LONG
+result is only four all-winning trades. This undercuts a blanket SHORT-only
+change: the apparent edge is positive in train/holdout but almost flat and
+negative in validation. Keep current settings until a prospective side cohort
+can be evaluated without selecting the rule on these same folds.
+
+## Payoff concentration check — 2026-10-08 18:52Z
+
+A refreshed archive still reconciles the same 60 whole positions; Bybit's
+Closed-PnL response has 150 rows, while the local account cache now has 163
+records after a late-history sync. The dashboard was regenerated from the
+current SQLite cache and this archive; the account-row series remains separately
+labeled from complete-position performance. Cost decomposition sharpens the
+optimization priority: gross price P&L is already −$169.54 before $118.91 of
+fees, with +$3.54 funding, so eliminating all trading fees would still leave
+the sample around −$166. LONG gross price P&L is −$356.95 before $44.07 fees;
+SHORT gross is +$187.41, reduced by $74.84 fees (with +$4.08 funding). Thus
+LONG entry/exit quality is the primary historical loss source, while reducing
+SHORT execution costs could preserve more of its positive gross edge. Excluding
+the largest one, three,
+or five *winning* positions changes whole-sample net from −$284.91 to −$345.14,
+−$456.72, or −$547.62. Excluding the largest three losing positions improves
+net to −$36.39 (still negative); excluding five makes it +$119.71. This is
+descriptive concentration, not an actionable filter: the loss identities are
+selected after observing outcomes, and the full-sample mean-R intervals still
+cross zero. It reinforces that containing a small tail of large losses matters,
+but does not identify a prospective rule that can do so without also truncating
+winners. Do not change stops, direction filters, or live risk based on this
+post-hoc deletion test. Keep collecting the separately tagged 0.10x LONG cohort
+(4/20) and payoff-profile cohort (5/20); neither sample has reached its review
+target, and the LONG cohort has no contemporaneous SHORT control yet.
+
+Path check on those five completed `payoff_early_trail` positions: a replay of
+the active 60/25/15 entry split, 0.33/0.66R ladder, 0.20R trail activation,
+0.10R distance, and 1/2/4R targets produced −1.730R versus −1.626R realized
+(five all-LONG cases; per-case simulated/actual R: XRP +0.063/+0.086, ENA
+−1.011/−1.011, XRP +0.110/+0.117, GALA −1.017/−1.025, MINA +0.125/+0.206).
+The three winners all reached at least 0.20R favorable excursion; neither
+loser reached the 0.20R trail trigger, and both lost about 1R. This small,
+post-outcome path comparison is consistent with the trail banking modest gains
+after favorable movement, but cannot prevent entries that fail before the
+trigger; it does not validate signal quality or justify an entry filter. Keep
+the current profile cohort separate and wait for its predeclared 20-position
+review.
+
+Paired exit-only counterfactual on those same five fills holds entry allocation,
+depths, 1/2/4R targets, target percentages, and observed fees fixed. Changing
+only the trail from 0.50R activation / 0.30R distance to the active 0.20R /
+0.10R setting changes simulated results from −4.179R to −1.730R (+2.449R;
+three of five improve). The early-trail candidate is still negative, and two
+cases contribute +2.360R (96%) of the paired gain; after removing those two,
+the remaining delta is only +0.089R. This favors retaining the current early
+trail over reverting to the slower trail while the Demo cohort is collected,
+but the n=5 all-LONG, outcome-concentrated comparison is not evidence of a
+profitable strategy or a basis to increase risk.
+
+## Loss cut before trail activation — 2026-10-08 19:07Z
+
+Added a research-only `--untriggered-time-stop-diagnostics-only` replay mode:
+after 60/240/720 minutes, close at the 1m close only when price is at or below
+−0.25/−0.50/−0.75R and favorable excursion has not reached the active 0.20R
+trail trigger. On the 60 complete paths (30 train / 12 validation / 18 already-
+inspected holdout), none of the nine fixed variants improved all splits. Most
+reduced returns in train and validation as well as holdout. The sole positive
+holdout delta was +0.210R for 240m/−0.75R; train and validation were unchanged,
+and holdout remained negative at −0.221R. Reject this loss-cut family for now;
+the small holdout gain is not independent evidence and does not justify a live
+stop change. Reproduce with:
+
+```sh
+docker compose exec -T app /app/.venv/bin/python \
+  /app/scripts/replay_strategy_v2.py \
+  /tmp/profitability-refresh-20261008T1848Z.zip \
+  --reconciled-only --untriggered-time-stop-diagnostics-only
+```
+
+## Trail activation threshold sensitivity — 2026-10-08 19:10Z
+
+The active-profile GALA LONG peaked at +0.167R, just below the +0.20R trigger,
+so a lower +0.15R activation was tested with the same 0.10R trail distance,
+entry allocation/depths, 1/2/4R targets, and fee schedule. On the five
+`payoff_early_trail` cases, the replay moves from −1.730R at 0.20R to −0.696R
+at 0.15R, mostly by changing GALA from −1.017R to +0.050R; this is a
+post-selected five-case result. On all 60 complete cases, paired net delta is
+only +0.049R (mean +0.0008R; IID 95% [−3.089R,+3.949R], block-4
+[−3.757R,+4.659R]). Validation is materially worse (−0.580R, IID
+[−1.301R,−0.066R]); holdout improves +0.750R but becomes −0.344R after
+removing its three largest positive deltas. Reject 0.15R as a production change;
+retain 0.20R while collecting the predeclared live cohort. This is another
+example where a compelling near-miss trade does not generalize.
+
+## E3 exposure interaction refresh — 2026-10-08 19:12Z
+
+On the same 60 complete positions, the 24 that filled E3 are 6 wins / 18 losses,
+−$984.05 net and −0.634R mean; the 36 that did not fill E3 are 35 wins / 1
+loss, +$699.14 net and +0.388R mean. The five completed `payoff_early_trail`
+cases show the same association: E3-filled trades are 1/3 and −$13.85, versus
+2/2 and +$1.84 for E1-only trades. This sharpens E3 fill as a high-value risk
+marker, but does not prove that suppressing E3 would cause the no-E3 outcomes:
+E3 fills only after an adverse move and changes average entry, size, and fees.
+Prior no-E3/reduced-E3 replays did not show stable holdout gains, so retain the
+current allocation and track this pattern prospectively rather than disabling
+E3 from the retrospective association.
+
+## Signal-time movement across execution outcomes — 2026-10-08 19:19Z
+
+To test whether filled-only follow-through was hiding execution-selection bias,
+added the read-only `scripts/analyze_intent_followthrough.py`, which compares
+all `NEW` intents (including failed/skipped executions and intents without a
+plan) against archived 1m candles. The live DB had 103 intents, all with plans:
+80 EXECUTED and 23 FAILED. At 60m, 85 had candle coverage (74 executed, 11
+failed); 18 were unavailable because their symbols were absent from the archive.
+At 240m, one more LONG candle path was unavailable. Movement is signed percent
+from the close of the first fully closed 1m candle at/after plan creation to the
+first close at/after each horizon. It is hypothetical price movement, not
+stop-R or executable PnL; fees, slippage, and strategy exits are excluded.
+
+At 60m, all LONGs averaged −0.755% (n=39 across 24 symbols; symbol-cluster
+bootstrap 95% interval [−1.345%,−0.301%]); executed LONGs were −0.759% (n=32),
+and failed LONGs −0.733% (n=7). All SHORTs averaged +0.338% (n=46 across 22
+symbols; interval [−0.027%,+0.690%]), so the short-side point estimate is
+uncertain. At 240m, all LONGs averaged −1.547% (n=38 across 23 symbols;
+interval [−2.514%,−0.719%]), while all SHORTs averaged +0.019% (n=46; interval
+[−0.623%,+0.587%]). The adverse LONG movement is not confined to executed
+positions in this archive, but the analysis is still observational: symbol
+resampling does not account for shared market-time regimes, correlated signals,
+or source-specific selection, and the horizons overlap. It weakens the claim
+that the aggregate trade win rate proves uniformly strong signal quality; it
+does not show that skipping LONGs improves strategy PnL. Keep current Demo
+settings unchanged and collect the separately tagged prospective cohorts.
+Reproduce against the current live DB and a refreshed archive with:
+
+```sh
+docker compose exec -T app /app/.venv/bin/python \
+  /app/scripts/analyze_intent_followthrough.py \
+  /state/cautious_crypto_bro.sqlite3 /tmp/profitability-refresh.zip
+```
+
+The same archive's 60 complete realized positions offer only weak source/side
+leads. `Scalping Blog | Адель` SHORTs were 9/9 winners (+$218.43; mean win
+$24.27), but the chronological split is only 4/4 train, 3/3 validation, and
+2/2 holdout. A 9/9 Wilson 95% win-rate lower bound is about 70%, below the
+72.4% break-even win rate implied by the overall $24.27 average win versus
+$63.56 average loss; with no observed loser, its payoff ratio is unestimated.
+Conversely, `Ivan Medvedev` LONGs were 2/5 and −$149.28, but all five occurred
+in train, with no later validation/holdout cases. These are source-selection
+leads, not validated filters; keep the existing paper-only source/side health
+shadow and do not suppress any source/side based on this retrospective split.
+
+A paired active-exit replay confirms that caution: holding the 0.20R/0.10R
+trail and 1/2/4R targets fixed, changing 60/25/15 to 70/25/5 gives
+−0.459R/+0.843R/−2.581R across train/validation/holdout versus
++1.354R/+1.589R/−0.431R for current sizing. 75/25/0 gives
+−0.455R/+0.779R/−3.163R. On the five live-profile fills, the simulated totals
+are −2.874R and −2.858R, both worse than −1.730R. These runs reinforce that
+the E3-filled cohort's losses do not imply that reducing/removing E3 improves
+outcomes; do not change the ladder on this evidence.
+
+## Supervisor-polled trail activation sensitivity — 2026-10-08 19:36Z
+
+Code inspection found that V2 does not arm the trailing stop with an exchange
+activation price at entry. `PositionSupervisor` polls every 2 seconds; after it
+observes the configured +0.20R threshold, `_freeze_entries` cancels scale-ins,
+refreshes account state, and only then installs a trailing stop. The Bybit call
+currently sends `trailingStop` without `activePrice`. A fast excursion and
+retracement during polling/cancellation/account refresh could therefore leave
+the exchange with only the original stop. This is a plausible execution gap,
+not evidence that any of the five observed profile trades actually missed
+activation. Bybit documents an `activePrice` parameter that can arm a trailing
+stop at a specified trigger price ([official V5 Set Trading Stop API](https://bybit-exchange.github.io/docs/v5/position/trading-stop)).
+
+Added a research-only `--trail-activation-poll-diagnostics-only` comparison.
+On the 60 reconciled historical paths, requiring the 1m candle close to confirm
+the trigger changed net replay by −1.392R in train, +0.129R in validation, and
+−1.450R in holdout versus intrabar high/low activation. Train and holdout paired
+intervals cross zero; the 1m-close challenger is only a conservative bound,
+not a model of the live 2-second poll, and one-minute OHLC cannot resolve the
+actual trigger sequence. Reproduce with:
+
+```sh
+docker compose exec -T app /app/.venv/bin/python \
+  /app/scripts/replay_strategy_v2.py \
+  /tmp/profitability-refresh-20261008T1848Z.zip \
+  --reconciled-only --trail-activation-poll-diagnostics-only
+```
+
+This identifies a concrete reliability improvement to investigate—exchange-
+native trigger arming with explicit active price—but it does not establish that
+changing protection will make the strategy profitable. Do not modify or replace
+live stops from this replay alone; validate the Bybit Demo behavior and restart
+recovery path before proposing deployment.
 
 ```sh
 docker compose up -d --build app
@@ -1412,3 +2318,846 @@ Back up SQLite before state repair; stop the app to prevent concurrent mutations
 Restore a paused strategy only after checking ownership, orders and protection.
 Never replay uncertain submissions blindly. Do not run `docker compose down -v`
 unless intentionally erasing SQLite, Telegram-session and Redis volumes.
+
+## Pre-signal momentum versus realized outcomes — 2026-10-08 19:49Z
+
+The 19:42Z forensic archive contains 65 filled V2 cases, 60 complete
+whole-position reconciliations, and 4 live positions. A new research diagnostic
+joins each complete case to signed pre-signal momentum using only fully closed
+1m candles, then compares actual after-cost net R across chronological 50/20/30
+splits. The candidate is deliberately simple and fixed at zero: skip signals
+whose preceding 60m/240m direction-aligned momentum is positive. No thresholds
+were optimized. Reproduce with:
+
+```sh
+docker compose exec -T app /app/.venv/bin/python \
+  /app/scripts/analyze_signal_followthrough.py /tmp/profitability-current.zip
+```
+
+For the 60m feature, the all-direction baseline mean was −0.028R (n=30) in
+training, +0.174R (n=12) in validation, and −0.139R (n=18) in holdout. Skipping
+positive aligned momentum retained 16, 7, and 8 cases, with means +0.073R,
++0.037R, and +0.455R respectively. The apparent holdout gain is not supported
+by validation and was found after inspecting the sample; it is not prospective
+evidence. LONG holdout was −0.423R (n=10) baseline versus +0.252R (n=4) filtered,
+but the filtered LONG train mean was −0.541R (n=3), so the direction-specific
+result is also inconsistent. At 240m, the overall holdout point estimate moved
+from −0.139R to −0.041R, but uncertainty spans zero and LONG holdout remained
+negative. Do not deploy this filter; any
+further evaluation should use a fresh, separately tagged forward Demo cohort
+before considering promotion.
+
+The same archive's fixed-horizon marks show LONG outcomes near flat at 5m
+(−0.020R), then negative at 60m (−0.252R; block-4 95% [−0.444,−0.091]) and
+240m (−0.290R; [−0.425,−0.145]). This supports investigating entry timing as
+well as exits, but does not identify a profitable entry rule. Delayed-entry
+counterfactuals remained negative at 4h. Broad time-stop sweeps and stops
+restricted to pre-trail positions showed no stable improvement across train,
+validation and holdout; retain the active exit profile while collecting
+prospective outcomes.
+
+## Prospective 60m momentum-filter shadow — frozen 2026-10-09
+
+The historical filter's 60m holdout gain (+0.455R across eight retained cases)
+was not supported in training or validation, and the 240m result was
+inconclusive. Freeze a no-live-change shadow check at
+`2026-10-09T08:50:14Z`: for each fully reconciled position whose plan is created
+after this timestamp, classify the signal using the preceding 60 minutes of
+fully closed 1m candles. Keep signals with nonpositive side-aligned momentum;
+mark positive-momentum signals as skipped. The zero threshold and horizon are
+fixed; do not retune them on this cohort.
+
+Run the existing signal diagnostic with
+`--prospective-momentum-filter-after 2026-10-09T08:50:14Z`. It reports all,
+retained, and skipped outcomes in net R, with fees/funding included and results
+separated by persisted exit profile and side. Current-archive verification
+at 12:14Z returns one completed post-cutoff pair: a LONG under
+`payoff_early_tight_trail_long_015` at +0.124R, classified retained, with no
+skipped case. Its one-case 95% interval is degenerate and conveys no useful
+uncertainty estimate. This is an observational counterfactual: all signals
+continue to trade, so it estimates selection only and does not model
+redeployment of skipped risk or market impact. Review after 20 completed
+post-cutoff positions; do not promote unless retained expectancy is positive
+with both IID and block-4 95% intervals above zero in the relevant profile/side
+groups. It is not a live filter or profitability claim.
+
+## Demo target-distance sweep — 2026-10-08 19:50Z
+
+Compared the active `payoff_early_trail` replay (0.60/0.25/0.15 entry risk,
+0.20R activation / 0.10R trail, 1/2/4R targets) with fixed target-only
+variants 1.25/2.5/5R, 1.5/3/6R, and 2/4/8R. All target fractions, entry levels,
+trail, observed fills, lifecycle events, and maker/taker fees were held fixed.
+On 60 complete paths, the 1.25/2.5/5R variant changed net replay by −0.052R in
+training (paired block-4 95% interval [−0.254,+0.075]), +0.009R in validation
+(n=12), and +0.009R in holdout (n=18). In holdout average winner moved only
+from 0.1026R to 0.1032R; average loss remained −1.014R and win rate 88.9%.
+Only one holdout case changed, so the tiny apparent gain is not evidence of a
+better payoff profile. Wider target variants reproduced the same results,
+indicating the active trail usually exits before these targets matter. No
+target-distance change is warranted from this replay.
+
+Reproduce with:
+
+```sh
+docker compose exec -T app /app/.venv/bin/python \
+  /app/scripts/replay_strategy_v2.py /tmp/profitability-current.zip \
+  --reconciled-only --demo-target-sweep-diagnostics-only
+```
+
+## Demo tight-trail distance experiment — 2026-10-08
+
+Compared 0.05R against the active 0.10R trail distance with 0.20R activation,
+entry allocation, targets, fills, and fees fixed. On 60 reconciled paths, the
+0.05R candidate lost 0.493R versus baseline in training (block-4 interval
+[−1.575,+0.327]), gained 0.033R in validation, and gained 0.333R on the
+previously inspected holdout (18 cases; block-4 interval [−0.020,+0.607]).
+Holdout LONG delta was +0.256R across 10 cases, but the candidate LONG result
+remained −0.939R. This is mixed, post-hoc evidence, not proof of profitability.
+Use a separately tagged Demo cohort to test it prospectively; keep existing
+plans and open positions on their serialized policies. Review only complete
+positions, separately by profile and LONG risk multiplier.
+
+## Directional decomposition under tight-trail exits — 2026-10-09 06:00Z
+
+Replayed the same 60 reconciled historical fills with the exact tight-trail
+exit geometry (0.20R activation / 0.05R distance; 1/2/4R targets and
+15/20/25% reductions), retaining observed lifecycle/funding events and
+maker/taker fees. This is a retrospective R-normalized exit counterfactual;
+it is not realized performance for the prospective profile and does not model
+the live 0.10x LONG risk multiplier.
+
+SHORTs were positive in each chronological fold: +1.097R/19 in train,
++0.976R/8 in validation, and +0.885R/8 in holdout. Combined, 34/35 were
+winners and net replay was +2.958R (+0.085R per SHORT); one loss was −1.065R,
+while the mean winner was only +0.118R (0.111 win/loss ratio, roughly 90%
+break-even win rate). The 34/35 Wilson 95% interval is 85.5–99.5%, which
+includes win rates below break-even; one observed loss is not enough to
+estimate the tail-loss frequency reliably.
+
+LONGs netted −0.705R/25 overall: −0.305R/11 in train, +0.539R/4 in validation,
+and −0.939R/10 in holdout. The full 60-case tight-trail replay was +2.254R,
+but the reused holdout was nearly flat (−0.054R). This makes SHORT-only a
+plausible prospective hypothesis, not a proven filter: direction results
+remain post-hoc, the holdout was previously inspected, and the short-side
+win/loss ratio still demands an unusually high win rate. Do not disable LONGs
+or promote a directional filter from this sample; compare a separately tagged
+forward short-only shadow against the existing 0.10x LONG cohort before any
+policy change.
+
+## Source and direction interaction under tight-trail exits — 2026-10-09 06:00Z
+
+As a fixed decomposition (no source or threshold was selected from outcomes),
+grouped the same tight-trail replay by persisted source channel and direction.
+`Мысли Эмилии` accounted for 34 cases: 33 wins / 1 loss and +3.208R total.
+Its chronological folds were +0.594R/14 (13 wins), +0.970R/7 (7 wins), and
++1.644R/13 (13 wins). The split detail is LONG 2/2 wins in train, 4/4 in
+validation, and 7/7 in holdout; SHORT was 11/12, 3/3, and 6/6 respectively.
+The main other positive subgroup was `Scalping Blog | Адель` SHORT at 9/9 and
++1.098R, but that is only 4/3/2 trades across the folds. `Ivan Medvedev` LONG
+was 3/5 and −1.067R, all in training with no validation or holdout cases;
+`Scalping Blog | Адель` LONG was 2/4 and −1.846R, with both losses in holdout.
+
+This suggests outcomes are heterogeneous by source and side, and that a
+global LONG ban would discard the positive `Мысли Эмилии` LONG replay. It is
+not a source-filter recommendation: the exit policy and source breakdown reuse
+inspected historical outcomes, most subgroup counts are small, and the
+`Мысли Эмилии` result still depends on one loss against many ~0.1R wins. Keep
+all sources/directions in the current low-risk Demo cohort and report new
+fully reconciled cases by source, side, and serialized exit profile before
+considering any selection rule.
+
+`analyze_forensic_pnl.py BUNDLE --prospective-demo-exit-profile
+--demo-exit-profile payoff_early_tight_trail` now emits the same cohort's
+per-side and source/side metrics, fees/funding, and bootstrap intervals as
+complete tagged positions arrive. This is reporting only; it does not gate or
+change execution.
+
+## Broad-search challenger versus active tight-trail exits — 2026-10-09 06:00Z
+
+Reran the broad candidate search on the latest archive (60 reconciled cases,
+chronological 30/12/18 split), ranking only on training paired delta after
+removing the three largest positive contributions. The top-ranked candidate
+used 75/20/5 entry risk, 0.25/0.50R entry depths, 0.75R trail activation,
+0.40R trail distance, and 1/2/4R targets with 15/20/25% reductions. It was
+then compared on the same cases against the active `payoff_early_tight_trail`
+exit geometry (60/25/15, 0.33/0.66R, 0.20R activation / 0.05R trail, same
+targets); fills, lifecycle/funding events, and maker/taker fees were held fixed.
+
+The train-selected candidate was worse by 1.264R in training and 5.717R on
+holdout; its holdout paired 95% IID interval was [−11.180R,−0.288R] and
+circular-block-4 interval [−9.845R,−1.783R]. Validation favored it by only
+0.568R, with both intervals crossing zero. On holdout, tight-trail replay was
+−0.054R (89% wins, 1.868R max drawdown), while the candidate was −5.771R
+(33% wins, 7.380R drawdown). The candidate's larger mean winner (0.507R vs
+0.123R) and smaller mean loser (−0.734R vs −1.014R) did not compensate for
+the win-rate collapse. This is a direct example that improving average
+win/loss alone can worsen realized expectancy. The reused historical holdout,
+small sample, and replay assumptions prevent promotion claims; the analysis
+does not incorporate the prospective 0.10x LONG-sizing effect. Keep Demo
+settings unchanged and continue collecting the separately tagged tight-trail
+cohort.
+
+## Prospective cohort reporting integrity — 2026-10-09
+
+The combined `analyze_forensic_pnl.py` invocation now reports both the reduced-
+risk LONG and selected exit-profile cohorts; previously the first report
+returned early and hid the second. The LONG-risk cohort is additionally limited
+to its frozen `payoff_early_trail` profile, and its baseline-sized SHORT controls
+must use that same profile. This keeps later `payoff_early_tight_trail` trades
+separate rather than double-counting them in the earlier sizing experiment.
+
+The latest archive still has 4 completed LONG-risk cases and 0 completed
+tight-trail cases. Since that snapshot, the database has no new intents, plans,
+or lifecycle actions, and Bybit has returned no new Closed-PnL rows. At the
+latest account check, all 4 open positions and 7 resting entry legs had stop
+protection; combined estimated stop risk was $366.17 under the $400 cap. No
+strategy filter is promoted from the exploratory historical results.
+
+The reduced-risk LONG cohort remains at 4/20 complete: 2 wins and 2 losses,
+50% win rate, 0.118 average dollar win/loss ratio, −0.428R expectancy, and
+−$12.95 net P&L. Gross price P&L was −$12.05, fees were $0.895, and signed
+funding was −$0.004. The IID 95% mean-net-R interval is [−1.018R,+0.162R];
+with only four observations, this is too uncertain for a strategy decision.
+There are still no contemporaneous baseline-sized SHORT controls. The
+prospective report now emits per-cohort fees/funding and both LONG/control
+confidence intervals, including explicit unavailable results for an empty
+control group.
+
+## All-intent source/side diagnostic — 2026-10-09
+
+Extended `analyze_intent_followthrough.py` to report 60m and 240m hypothetical
+movement by source, side, and execution status. The current database has 103
+`NEW` intents with plans; the archive supplies usable horizon candles for 85,
+with 18 unavailable. At 240m, LONG movement was −1.578% overall (n=39), similar
+for executed signals (−1.595%, n=32) and failed signals (−1.503%, n=7). SHORT
+movement was +0.019% overall (n=46; symbol-cluster 95% interval
+[−0.623%,+0.587%]).
+
+Source/side results are heterogeneous. `Мысли Эмилии` LONG was −2.765% at 240m
+(n=14 across 9 symbols; symbol-cluster interval [−4.176%,−1.339%]), while its
+SHORT mean was +0.008% (n=28 across 15 symbols; [−0.608%,+0.640%]). `MENSA
+TRADING` LONG was +0.430% (n=8 across 4 symbols; interval crosses zero). These
+are post-signal close-to-close marks—not executable P&L—and source groups were
+not prespecified. Symbol resampling does not account for shared market-time
+regimes, overlapping horizons, stops, exits, fees, or slippage. This weakens the
+claim that aggregate win rate establishes signal quality, but does not justify
+a source/side filter. Keep the Demo policy unchanged and validate any candidate
+on a fresh forward cohort.
+
+A chronological 50/20/30 split with 240m overlap purging preserves the
+`Мысли Эмилии` LONG reversal in the inspected holdout: train n=2/1 symbol at
+−6.525%, validation n=2/2 symbols at −7.102%, and holdout n=10/8 symbols at
+−1.145% (symbol-cluster interval [−2.181%,−0.098%]). Its SHORTs changed from
+positive train/validation means (+0.313%/n=15 and +0.418%/n=6, both intervals
+crossing zero) to −0.999% in holdout (n=7/4 symbols). This points to substantial
+regime dependence; the tiny early folds and four-hour mark horizon are not a
+basis for suppressing the source or side.
+
+The preexisting paper-only gate that suppresses a source/side after three
+nonpositive completed signals was also checked on its five eligible cases. It
+would have suppressed three trades that netted +$2.67; the filtered subset net
+was −$14.68 versus −$12.01 baseline, with paired IID 95% dollar delta
+[−$4.50,−$0.83]. The gate is both low-sample and harmful in this small review;
+it remains paper-only and should not be promoted.
+
+## Stop and E3 counterfactual follow-up — 2026-10-09
+
+Added an excursion breakdown to the trail-distance replay so losing cases can
+be separated into those that reached trail activation and those that failed
+before it. Across the 60 reconciled paths, every losing case stayed below the
+0.20R activation threshold. This points away from trail width as a rescue for
+these losses; it does not establish that entries are generally sound.
+
+Stop-distance and E3 alternatives were then checked on the same chronological
+30/12/18 train/validation/holdout split. The train-selected 2x stop-and-grid
+counterfactual reduced holdout loss from −6.101R to −1.616R, but remained
+negative and its paired 95% bootstrap interval for the delta crossed zero
+[−2.101R,+10.879R]. It also assumes nominal-risk resizing and omits
+liquidation constraints. E3 stop caps remained negative on holdout (−3.331R
+for 0.50R; −4.515R for 0.75R). Waiting for a later E2 reclaim improved the
+holdout by +0.313R, but its paired interval also crossed zero
+[−0.765R,+1.299R].
+
+Exploratory close-confirmed time stops likewise did not produce a positive
+holdout result; the train-selected 60m/−0.25R rule returned −4.954R. These
+small, reused historical folds are not independent confirmation, and no
+candidate is promoted. Keep live settings unchanged and wait for the frozen
+prospective tight-trail cohort rather than selecting a strategy from these
+replays.
+
+## E3 allocation ablation — 2026-10-09
+
+Tested the more direct “remove the third add” hypothesis with the same
+tight-trail exit geometry. The 15% E3 risk was redistributed proportionally
+across E1/E2, preserving total planned risk and the E1:E2 allocation ratio.
+On the 18-case holdout, the baseline was −0.054R versus −3.364R with E3
+disabled; the paired delta was −3.310R (95% circular-block interval
+[−6.931R,+0.272R]). The interval still crosses zero, and small-sample
+resampling is unstable, but this result rejects treating the conditional
+three-leg loss concentration as evidence that removing E3 improves expectancy.
+Keep E3 unchanged pending prospective evidence.
+
+## Current-profile target/trail diagnostics — 2026-10-09
+
+Corrected the “active Demo” target/trail replay baseline to mirror the running
+`payoff_early_tight_trail` geometry (0.20R activation, 0.05R trail distance);
+the old diagnostic had reused the earlier 0.10R trail profile. On the same
+18-case holdout, farther target levels changed only one case and improved net
+by just +0.003R, leaving the candidate at −0.051R. Target distance alone is
+therefore not a material lever in these paths.
+
+With the 0.05R profile as baseline, widening the trail to 0.10R changed holdout
+net from −0.054R to −0.387R (paired delta −0.333R; IID 95% interval
+[−0.558R,−0.051R], circular-block interval [−0.608R,+0.018R]). At 0.15R,
+holdout net was −0.351R and the intervals crossed zero. The LONG slice (n=10)
+favored 0.05R over both wider distances, while the SHORT slice is only eight
+all-winning cases and is inconclusive. This supports keeping the existing
+tight setting for now, but the small, previously inspected holdout is not
+prospective validation; no performance claim or further promotion follows.
+
+## Trail activation sweep — 2026-10-09
+
+Added a predeclared 0.10/0.15/0.20/0.25/0.30R activation sweep while holding
+the production 0.05R trail distance, entries, target levels, and allocations
+fixed. Earlier activation (0.10/0.15R) improved the 18-case holdout by
+respectively +0.276R/+0.722R, but the paired IID intervals crossed zero and
+the gains were concentrated in only one/two cases; both settings were worse
+than baseline in validation. Later activation (0.25/0.30R) improved validation
+but lost −1.612R/−2.229R versus baseline on holdout. The LONG and SHORT
+subsets also disagreed across time splits. No trigger generalizes across
+train, validation, and holdout, so the best holdout result is not a promoted
+global setting. It motivated a separately tagged Demo-only hypothesis:
+0.15R activation on LONGs and the existing 0.20R on SHORTs, at unchanged 0.05R
+trail distance and reduced 0.10x LONG risk. New plans only use this profile;
+serialized plans/open positions stay frozen. Review it prospectively after 20
+completed tagged positions; this experiment does not establish profitability.
+
+## Prospective-profile sample-size context — 2026-10-09
+
+The latest 60 fully reconciled outcomes have a sample standard deviation of
+0.688R per position. Under a normal, independent-outcome approximation, a
+20-position sample would have a 95% mean-R interval with a half-width around
+0.30R. Detecting a true +0.20R mean with 80% power at a two-sided 5% level
+would require about 93 independent outcomes; detecting +0.10R would require
+about 371. These are planning estimates, not forecasts or a stopping rule.
+Serial correlation, symbol/source clustering, profile-specific variance, and
+side-specific effects can require substantially more data. Treat the 20-case
+gate as an interim review only; do not promote a profile from win rate or a
+positive point estimate alone. Continue to report after-cost R expectancy,
+payoff ratio, fees/funding, side splits, and IID plus block-bootstrap intervals
+on fully reconciled prospective cases.
+
+## Randomized LONG trail-activation comparison
+
+Newly planned LONGs are assigned 50/50 from the persisted intent UUID using a
+stable SHA-256 bucket. Control activates the tight trail at +0.20R; treatment
+activates at +0.15R. Both arms retain the same +0.05R trail distance, target and
+entry rules, 0.10x base LONG risk, portfolio cap, and 240-minute entry TTL.
+Distinct profile tags allow independent measurement. SHORTs are unchanged and
+excluded. Existing plans and positions are unaffected.
+
+Analyze each arm using `--prospective-demo-exit-profile` and its exact profile
+tag: `payoff_early_tight_trail_long_ab_020_control` or
+`payoff_early_tight_trail_long_ab_015`. Compare after-cost expectancy, payoff,
+fees/funding, and IID plus block-bootstrap intervals. Twenty complete LONGs per
+arm is an interim review, not proof; detecting a +0.20R mean with 80% power was
+estimated to require about 93 independent outcomes. Do not promote based on win
+rate or a point estimate alone.
+
+## Current execution-fee mix — 2026-10-09 09:19Z archive
+
+Across 67 filled V2 cases, 67 market E1 fills paid $40.31 on $67,933
+notional; seven already-limit E1 fills paid $1.39 on $6,926. E2/E3 maker fills
+paid $12.29 combined. A same-notional conversion of every market E1 to the
+observed 0.0200% maker rate would save about $26.73 before missed fills,
+slippage, or adverse selection; this is only a fee ceiling, not an executable
+counterfactual. Market stop-loss and trailing exits paid $33.75 and $23.06,
+respectively; these are substantial but protective costs, so do not weaken stops
+solely to save fees. On the separate 60-position complete scorecard,
+gross price P&L was −$169.54 with +$3.54 net funding: even zero fees would leave
+about −$166.00. Fees matter, but entry-fee savings alone cannot fix the observed
+loss distribution; improving entry selection or the payoff distribution remains
+necessary. Do not infer that limit entries preserve fills from this aggregate.
+
+## First completed `payoff_early_tight_trail_long_015` case — 2026-10-09 09:53Z
+
+The fresh Demo archive reconciles SANDUSDT LONG as the first fully completed
+position under this profile (2 filled cases, 1 completed). It netted +$0.5342
+(+0.1238R) after $0.0948 fees, with +$0.6290 gross price P&L and zero funding.
+There is no losing case yet, so the average win/loss and payoff ratio are
+undefined; the 100% observed win rate has a Wilson 95% interval of
+[20.65%, 100%]. The n=1 bootstrap interval is degenerate and is not useful
+uncertainty evidence. This single small winner does not establish profitability
+or show that average winners now compensate for full-stop losses. Keep the
+profile tagged and continue collecting complete positions. The earlier 0.10x
+LONG-risk `payoff_early_trail` cohort remains separate at 4 completed cases,
+−0.428R expectancy, and no SHORT controls.
+
+At the same account snapshot, the three new XRPUSDT entry legs were resting
+with the planned 1.3177 stop; all 11 open entry orders and all 6 open positions
+had stop protection. Combined estimated stop risk was $387.78 of the $400 cap
+(96.94% utilization), leaving about $12.22 capacity. No existing orders or
+positions were modified. Dashboard data was refreshed from this archive.
+
+After adding that one close, the all-profile reference is 61 fully reconciled
+positions (7 remain incomplete): 42/61 wins (68.85%), −$284.37 net, and a
+0.346 dollar average-win/average-loss ratio (+$21.98/−$63.56). At the observed
+counts, break-even needs a 74.30% win rate, a 30.8% larger average winner, or a
+23.6% smaller average loser, holding the other factors fixed. Risk-normalized
+payoff is 0.425 (0.412R/−0.969R) with −0.0184R expectancy; IID and block-4 95%
+mean-R intervals are [−0.192,+0.150]R and [−0.186,+0.144]R. Gross price P&L is
+−$168.91, fees $119.00, and funding +$3.54. The newest chronological 19-case
+slice is weaker at −0.125R expectancy and −$148.10 net. LONGs remain negative
+in the historical split while SHORTs are positive overall, but neither the
+aggregate nor the recent slice establishes a stable direction edge; retain
+separate prospective cohorts and do not infer signal quality from win rate.
+
+## Demo entry-order TTL experiment
+
+Compose configures a 240-minute entry-order TTL for newly serialized plans.
+The Strategy V2 supervisor cancels only exact owned entry links once the
+persisted plan age reaches the TTL; unfilled plans close, while partial fills
+keep their live position protected and freeze remaining entry legs. Legacy
+plans without the field default to TTL 0 and are unaffected. Validate cohort
+results with a fresh forensic bundle and
+`analyze_forensic_pnl.py BUNDLE --prospective-demo-entry-order-ttl-minutes 240`.
+Report only fully reconciled results; a 20-case review is an interim checkpoint,
+not proof of a modest edge. The setting is intended to reduce stale-signal fills
+and reserved stop-risk, not to promise improved average win/loss or expectancy.
+
+## Demo profitability check — 2026-10-09 10:41Z
+
+The refreshed read-only archive contains 68 filled V2 cases, 153 exchange
+Closed-PnL rows, 61 fully reconciled positions, 6 open positions, and 10 owned
+open entry orders. All 6 positions and all 10 entry orders have stop protection;
+estimated combined stop risk is $387.78 of the configured $400 cap, leaving
+$12.22. HYPE and UNI entry ladders remain open and unchanged. No fully reconciled
+position is yet tagged with the 240-minute entry-order TTL.
+
+Keep the two 0.10x LONG experiments separate. The original
+`payoff_early_trail` sizing cohort is 4/20 complete (2 wins, 2 losses), net
+−$12.95, with +$0.86 average winner versus −$7.34 average loser, a 0.118 dollar
+payoff ratio (0.159R), and −0.428R expectancy. Fees were $0.895 and signed
+funding −$0.004; there are no contemporaneous SHORT controls. The newer
+`payoff_early_tight_trail_long_015` profile is 2 filled/1 complete: its sole
+SANDUSDT LONG made +$0.534 (+0.124R) after $0.095 fees and zero funding. With
+one winner and no loss, its payoff ratio is undefined and its Wilson 95% win-rate
+interval is [20.65%, 100%]. Neither cohort establishes an edge. The dashboard's
+LONG-risk cohort now explicitly matches the original `payoff_early_trail`
+profile instead of blending later exit profiles into the sizing comparison.
+
+Across all profiles, the 61-position reference remains 42 wins/19 losses,
+−$284.37 net, +$21.98 average win versus −$63.56 average loss (0.346 dollar
+payoff ratio), and −0.0184R expectancy. Break-even at the observed payoff
+requires a 74.30% win rate; observed is 68.85%. IID and block-4 95% mean-R
+intervals are [−0.192,+0.150]R and [−0.186,+0.144]R. LONGs are −0.225R over
+26 complete cases while SHORTs are +0.135R over 35; these retrospective side
+splits are leads, not a validated direction filter.
+
+An all-intent check now has 108 NEW intents with 1-minute candle coverage for
+most signals. At 240 minutes, signed close-to-close LONG movement is −1.539%
+(n=40; symbol-cluster 95% interval [−2.435%,−0.803%]); executed LONGs are
+−1.595% (n=32). SHORT movement is +0.019% (n=46; interval
+[−0.623%,+0.587%]). This weakens the claim that aggregate win rate alone proves
+signal quality. The movement measure is observational and is not executable
+P&L; it does not justify disabling LONGs. Historical replay also finds every
+loser failed to reach the tested +0.20R trail-activation threshold, so changing
+trail distance alone is unlikely to rescue those losses. Focus further tests on
+entry-selection hypotheses with chronological, purged holdouts; do not promote
+a source/side filter or alter live settings from this evidence.
+
+## Early-loss cut holdout check — 2026-10-09 10:56Z
+
+Replayed 61 complete positions from the 10:41Z archive using close-confirmed
+time/adverse-R cuts only when prior favorable excursion had not reached the
+tested +0.20R trail trigger. The 60-minute/−0.25R rule reduced holdout net by
+2.037R (holdout n=19); the 60-minute/−0.50R rule reduced it by 2.087R. The
+240-minute/−0.50R rule also remained negative on holdout (−0.118R; paired
+95% interval [−2.071R,+1.705R]). A 240-minute/−0.75R rule showed +0.210R
+holdout delta, but changed no training or validation cases and depended on one
+holdout loss (interval [0,+0.629R]); this is an isolated retrospective rescue,
+not generalizing evidence. No early-loss-cut candidate is promoted. This
+reinforces that entry selection, rather than another tuned exit threshold, is
+the next research focus.
+
+## Stop-geometry holdout refresh — 2026-10-09 10:56Z
+
+The same 61-case archive was replayed with stop distance and entry-grid
+alternatives while preserving nominal planned risk. The training-selected 2x
+stop-and-grid candidate lost −2.028R on holdout (19 cases), versus −6.430R for
+baseline; its paired 95% interval was [−2.195R,+10.741R]. A 0.75x stop-only
+variant lost −3.201R (paired delta +3.228R, interval [−0.910R,+8.454R]); a
+1.5x stop-only variant lost −2.933R (delta +3.496R, interval
+[−0.675R,+8.738R]). All candidates remained negative on holdout. The simulated
+fill mix and outcomes assume nominal-risk resizing and do not model changed
+fills, slippage, or liquidation; these deltas do not validate a production stop
+change. No stop geometry is promoted.
+
+## Training-ranked source/side lead — 2026-10-09 11:03Z
+
+On the same 61 complete cases, source×side cohorts with at least three
+training trades were ranked by training expectancy in the chronological
+30/12/19 split. `Scalping Blog | Адель` SHORT ranked first: training was 4/4
+winners (+1.516R), validation 3/3 (+1.227R), and holdout 2/2 (+1.433R). Across
+all nine trades it returned +4.176R and +$218.43; mean winner was +0.464R, but
+with no observed loser its average win/loss ratio and break-even rate are
+undefined. This is the strongest observed source/side candidate so far.
+
+This remains a retrospective, post-hoc lead: source/side combinations and
+multiple strategy hypotheses have already been inspected, and the holdout is
+not independent. Its 240-minute all-intent movement is only +0.129% over 12
+signals with a symbol-cluster interval [−0.916%,+1.416%], so the trade outcome
+pattern is not independently explained by strong four-hour directional drift.
+Do not whitelist this source or increase its risk from 9 winners. Keep the
+current system collecting data and track the pair as a separate forward
+candidate; review only fully reconciled after-cost R outcomes, fees, and a
+cluster-aware interval after 20 completed forward cases. The 20-case check is
+interim, not evidence of a modest edge.
+
+A conditional exchangeability check illustrates the small-sample issue. In
+validation there were 6 wins among 8 SHORT positions, so a fixed three-trade
+group would be 3/3 winners with probability 20/56 (35.7%) under random label
+assignment. In holdout there were also 6 wins among 8 SHORTs, so a fixed
+two-trade group would be 2/2 with probability 15/28 (53.6%). Their product is
+about 19%, before accounting for temporal dependence or the multiple groups
+and hypotheses inspected. This is not a formal p-value; it shows why 3/3 and
+2/2 cannot by themselves establish an edge.
+
+## Randomized LONG exit comparison deployed — 2026-10-09 11:28Z
+
+Because the preceding non-randomized `payoff_early_tight_trail_long_015`
+profile remained too small and its second completed LONG lost, new LONG plans
+are now deterministically randomized 50/50 by SHA-256 of intent UUID. The
+control tag uses +0.20R activation and the treatment tag +0.15R. Both arms keep
+the same 0.05R trail distance, entry/target rules, 0.10x base LONG risk,
+portfolio stop-risk cap, and 240-minute entry TTL. Assignment is serialized in
+the plan; existing plans and positions are unchanged. No randomized-arm plans
+had been created by the 11:34Z dashboard snapshot, so the experiment has no
+results yet.
+
+The FARTCOINUSDT LONG then fully closed: 3,132 units at average exit 0.16209
+from average entry 0.16446104. It reconciles under the earlier non-randomized
+`payoff_early_tight_trail_long_015` pilot. That pilot is now 2 complete LONGs,
+one win and one loss, −$7.3501 total and −0.4899R expectancy. Average net win
+was $0.5342 versus a $7.8843 average loss (0.0678 dollar payoff; 0.1122R
+payoff); fees were $0.5530 and funding was zero. The 95% IID mean-R interval
+was [−1.104R,+0.124R]; with only two cases, intervals and point estimates are
+highly unstable. The 50% observed win rate is not evidence that the new exit
+profile works.
+
+The whole-system scorecard grew to 62 complete positions: 42 wins and 20
+losses, −$292.26 net, +$21.98 average win versus −$60.77 average loss, a 0.362
+dollar payoff ratio and −0.0359R expectancy. The 67.74% observed win rate is
+below its 73.44% fee-inclusive break-even rate. IID and block-4 95% mean-R
+intervals are [−0.210R,+0.131R] and [−0.201R,+0.135R]. LONGs remain negative
+overall (27 positions, −0.258R expectancy); the retrospective SHORT result is
+still positive (+0.135R/position) but does not validate a side filter.
+
+After the close, five positions and ten entry orders remained, all with
+exchange stops; estimated combined stop risk was $380.63/$400 (95.16%). HYPE
+and UNI entry ladders were preserved. Dashboard JSON/JS was regenerated at
+11:34Z from the Docker database and fresh forensic archive. The newly deployed
+randomized arms and 240-minute TTL cohort must be scored separately; keep the
+20-case per-arm checkpoint interim and do not select a winner from the already
+inspected historical replay.
+
+## Prospective experiment and stale-entry snapshot — 2026-10-09 12:15Z
+
+A fresh read-only Bybit Demo archive contains 69 filled V2 cases, 62 fully
+reconciled positions, 7 incomplete cases, 6 open positions, 12 tracked open
+entry orders, and no unmatched entries. All 6 positions and all 12 orders have
+exchange stop protection. Estimated combined stop risk is $387.09/$400
+(96.77%), leaving $12.91 capacity. HYPE and UNI ladders are unchanged.
+
+The randomized 0.20R control has 1 filled and 0 completed positions; the
+randomized 0.15R treatment has 1 pending plan, 0 executed, filled, or completed
+positions. There is not yet an arm comparison. Keep the earlier, non-randomized
+0.15R pilot separate: 2 completed LONGs, 1 win/1 loss, −$7.3501 net,
+−0.4899R expectancy, and 0.112R average win/loss. Fees were $0.5530 and funding
+was $0. The IID 95% interval for mean R is [−1.104,+0.124]; this two-case pilot
+does not establish that the profile helps. The original 0.10x sizing cohort
+remains 4/20 complete at −0.428R expectancy, with no contemporaneous SHORT
+controls. These prospective results are too small to select a winning policy.
+
+The live account snapshot shows two SAND entries at 38 minutes with their
+saved 240-minute TTL. Three XRP entries are 147 minutes old; ZEC is 5,912
+minutes old; UNI 7,102 minutes; HYPE 7,453 minutes. These legacy plans have no
+saved TTL, so they are not labeled expired and are not affected by the current
+TTL setting. All remain stop-protected. The dashboard now displays each
+tracked entry's age and saved-TTL status; its generated JSON/JS was refreshed
+from this archive. No live orders, positions, or settings were changed.
+
+## Signal-quality and paper-gate refresh — 2026-10-09 12:18Z
+
+Recomputed raw intent markouts for 110 new signals against the 12:14Z archive.
+At 240 minutes, signed close-to-close LONG movement is −1.774% across 41
+signals (symbol-cluster 95% interval [−2.838%,−0.928%]); executed LONGs are
+−1.885% across 33 ([−3.152%,−0.820%]). Executed SHORT movement is −0.031% over
+42 signals ([−0.675%,+0.612%]). This is not realized P&L, excludes costs and
+exit management, and its symbol bootstrap does not account for shared market
+regimes. It does contradict the blanket claim that a high realized win rate
+proves every direction/source has sound raw signal quality; the evidence is
+specifically unfavorable for this LONG markout sample.
+
+The frozen paper-only source/side health rule has 7 eligible complete cases
+after its cutoff (20-case interim review target). It would suppress 4 cases
+with −$5.22 combined realized P&L, but the 3 kept cases still have −$14.15 net
+and −0.637R expectancy, worse than the 7-case baseline’s −$19.36 and −0.372R.
+The paired IID 95% P&L-delta interval is [−$5.09,+$22.72]. This is too small
+and uncertain to support enabling the gate; keep it paper-only. Current
+randomized exit arms remain at control 1 filled/0 complete and treatment 0
+filled/0 complete (one treatment plan pending), so no exit-profile winner can
+be selected. No production policy change is supported by this refresh.
+
+## Whole-system payoff and side uncertainty — 2026-10-09 12:22Z
+
+Recomputed all completed-position metrics directly from the 12:14Z archive:
+62 cases, 42 wins/20 losses (67.74% win rate), −$292.26 net, $21.98 average
+winner versus −$60.77 average loser (0.362 dollar payoff), and −$4.71 per
+position. Dollar break-even requires 73.44% wins. In initial-risk units, the
+mean winner was +0.412R and mean loser −0.976R (0.422R payoff; 70.33%
+break-even), for −0.0359R expectancy. Average initial risk was also smaller on
+winners ($48.25) than losers ($61.54), so the dollar payoff gap reflects both
+sub-unit winners and a less favorable risk allocation. The 95% IID and block-4
+mean-R intervals are [−0.210,+0.131]R and [−0.201,+0.135]R; the win-rate
+interval [55.37%,78.05%] includes the dollar break-even rate. Holding the
+observed counts fixed, dollar break-even requires the average win to rise to
+$28.94 (+31.66%) or the average loss to shrink to −$46.16 (24.04%). In R,
+the corresponding thresholds are +0.465R average win (+12.87%) or no worse
+than −0.864R average loss (11.40% smaller). The gap between dollar and R
+thresholds is consistent with losers having carried more initial risk on
+average; uniform risk scaling alone cannot fix negative R expectancy.
+
+The side split is a useful lead but not a validated filter. LONGs are 15/27
+winners, −$408.90 net, and −0.258R expectancy; their block-4 mean-R interval is
+[−0.557,+0.060]R. SHORTs are 27/35 winners, +$116.65 net, and +0.135R
+expectancy; their block-4 interval is [−0.049,+0.315]R. Both intervals cross
+zero. Alongside the negative LONG markouts above, this supports prioritizing a
+prospective entry-selection/participation experiment over another global exit
+sweep, but it does not justify a live long ban or short-only policy. Keep all
+historical side and source comparisons labeled retrospective until a
+predeclared forward cohort shows positive after-cost expectancy with adequate
+uncertainty bounds.
+
+## BTC-relative signal markout check — 2026-10-09 12:30Z
+
+Added a paired benchmark diagnostic to `analyze_intent_followthrough.py`. It
+subtracts the same-window, direction-aligned BTCUSDT 4-hour return from each
+signal's direction-aligned asset return and bootstraps by UTC signal day. In
+the current 12:14Z archive, LONGs underperformed BTC by 1.681 percentage points
+across 41 signals/17 days (day-cluster 95% interval [−2.629,−0.890]); executed
+LONGs underperformed by 1.862 points across 33 signals/16 days
+([−2.977,−1.013]). SHORTs were near zero relative to BTC: −0.057 points across
+46 signals/17 days ([−0.497,+0.518]); executed SHORTs were −0.087 across 42
+signals/17 days ([−0.541,+0.528]). This suggests the LONG markout is not
+explained merely by BTC's average same-window move. It remains a descriptive
+markout, not executable P&L: it does not adjust for each altcoin's beta,
+signal-specific volatility, exits, fees, or all within-day regime dependence.
+The effect is worth forward-testing, not a justification for a global LONG
+ban; preserve the active entry-quality shadow and randomized exit trial.
+
+## XRP pilot close and fresh Demo snapshot — 2026-10-09 14:36Z
+
+A fresh read-only Bybit Demo archive reconciles the XRPUSDT LONG as fully
+closed: all 74.2 units exited at an average 1.3867 against 1.3762 average entry,
+for +$0.7021 net. The position was absent from the refreshed open-position
+snapshot. Its serialized policy is the earlier, non-randomized
+`payoff_early_tight_trail_long_015` profile, so it belongs only to that pilot.
+The pilot is now 3/20 completed (2 wins, 1 loss), −$6.648 net, −0.273R
+expectancy, and 0.129R average win/loss payoff. Average net win is $0.618
+versus a $7.884 loss; fees are $0.630 and signed funding is zero. The IID 95%
+mean-R interval is [−1.104,+0.162]R; with three cases this remains highly
+uncertain. This close does not count toward the exact `payoff_early_tight_trail`
+cohort (1 filled, 0 complete) or the older `payoff_early_trail` 0.10x sizing
+cohort (4/20 complete, −0.428R).
+
+Across all 64 fully reconciled positions, the account is still slightly
+negative at −0.0153R expectancy (44/64 wins, 68.75%, versus 69.84% R
+break-even), with a 0.432R win/loss ratio. IID and circular-block-4 95% mean-R
+intervals are [−0.187,+0.148]R and [−0.173,+0.143]R. The latest closed-position
+change improves the point estimate only marginally; it does not resolve the
+uncertainty or establish an edge.
+
+At the 14:30Z account snapshot, five open positions and eight entry orders all
+had stop protection. Estimated combined stop risk was $378.93/$400 (94.73%),
+leaving $21.07; pending HYPE/UNI ladders remain unchanged. The app restarted at
+13:10Z and has no newer intents than 11:47Z, so the configured randomized LONG
+participation test has no post-restart assignments yet. Dashboard JSON/JS was
+regenerated from Docker's SQLite state and this archive. No settings, services,
+orders, or open positions were changed.
+
+## Frozen 60-minute momentum shadow refresh — 2026-10-09 14:39Z
+
+Re-ran the pre-signal, close-confirmed 60-minute direction-aligned momentum
+shadow on the 14:36Z forensic archive. In the already-inspected chronological
+holdout, the unfiltered 20-position mean was −0.201R (circular-block-4 95%
+interval [−0.402,−0.019]); retaining only nonpositive pre-signal momentum kept
+9 positions with +0.115R mean and interval [−0.135,+0.360]. The LONG slice
+moved from −0.283R across 14 to +0.027R across 7 retained cases, but its
+interval was [−0.214,+0.268]. This is a retrospective subgroup with a previously
+inspected holdout, not a causal or deployable gain.
+
+The frozen prospective shadow now has only 2 complete pairs under
+`payoff_early_tight_trail_long_015`; both were retained, averaging +0.143R, and
+there are no skipped cases. The filter has not yet separated good from bad
+outcomes in forward data. Keep it shadow-only and collect more assigned cases;
+do not change entry policy based on the two winners or the historical
+holdout.
+
+## Paired payoff impact of the frozen momentum filter — 2026-10-09 14:43Z
+
+Calculated the historical holdout's paired portfolio delta for the frozen
+60-minute rule: a retained trade keeps its realized net R, while a skipped
+trade contributes zero. Across all 20 holdout positions, the counterfactual
+delta is +5.049R total (+0.252R per signal); its IID 95% interval is
+[−0.037,+0.541]R and circular-block-4 interval is [+0.040,+0.463]R. For LONGs,
+the delta is +4.151R across 14 signals (+0.296R per signal), but both IID
+[−0.023,+0.618]R and block-4 [−0.022,+0.629]R intervals include zero.
+
+This paired calculation is a useful prioritization signal, not proof of an
+edge: the holdout was already inspected, the threshold was selected after
+examining historical outcomes, and the counterfactual assumes skipped fills
+would not affect other trades, portfolio capacity, or execution. Keep the rule
+shadow-only. A prospective comparison needs enough independently assigned
+LONGs on both sides of the pre-signal momentum threshold and complete take-arm
+positions before reconsidering it.
+
+## Momentum-stratified randomized allocation reporting — 2026-10-09 14:49Z
+
+Extended `analyze_long_participation.py` to split randomized LONG take/skip
+assignments by the frozen 60-minute, direction-aligned momentum rule. Each
+stratum reports assignment-arm counts, completed/failed/unresolved take cases,
+mean take-arm net USDT and R per assignment, and day-cluster intervals when
+there is enough day coverage. The calculation uses only fully closed
+pre-signal candles; missing history is reported as unclassified. Outcomes pool
+over the independently randomized exit profiles and remain descriptive at low
+counts.
+
+The forensic exporter now fetches candle history for every tagged assignment's
+symbol and signal time, including skip-only symbols. Before this fix, those
+symbols could be absent because candle coverage was derived only from filled
+positions, preventing a valid momentum-stratum comparison. Regression tests
+cover both the classifier and exporter scope. The latest real archive still has
+zero randomized assignments and the analyzer reports
+`awaiting_tagged_assignments`; no current performance result changed. The
+relevant test group passed 55 tests, and Ruff format/lint passed for all touched
+Python files. No runtime settings, services, orders, or positions changed.
+
+## First prospective LONG participation assignment — 2026-10-09 15:00Z
+
+The live database now contains one assignment after the 13:10Z app restart:
+the 14:44Z XRPUSDT LONG intent was tagged
+`payoff_early_tight_trail_long_ab_015` with `long_participation_arm=skip`, and
+was not executed. It is the first observed skip-arm case, not an outcome; the
+latest forensic bundle predates the signal, so no post-signal market movement
+is yet available for scoring. The exact `payoff_early_tight_trail` cohort and
+the earlier 0.10x `payoff_early_trail` cohort remain separate.
+
+At 14:55Z, the account sync contained no Closed-PnL rows newer than the already
+recorded 14:25Z XRP close. Bybit still showed five open positions, each with an
+exchange stop and matching active stop order; eight entry orders remained
+pending, including the preserved HYPE/UNI ladders. No new fill or completed
+candidate position was observed, so forensic data and dashboard exports were
+not refreshed.
+
+Full tests pass (577), Ruff format and lint pass, and Pyright reports zero
+errors. That type check exposed and fixed a missing
+`PositionStrategyRepository` composition in `SignalServiceStore`, which now
+declares the active-strategy read used by portfolio stop-risk budgeting. No
+production settings, services, orders, or positions were changed.
+
+## Source/side paper-gate sample refresh — 2026-10-09 15:02Z
+
+Re-ran the full forensic analyzer and its frozen source/side-health shadow on
+the existing 14:36Z archive; no newer Closed-PnL result was present in the live
+database. The 20-case source/side review target now has 9 eligible completed
+cases. The three-prior-loss gate would suppress 5 cases with −$4.517 realized
+P&L, for a +$4.517 descriptive paired dollar delta; its IID 95% interval is
+[−$5.837,+$22.014], so the result remains uncertain. The 4 kept cases total
++$50.613 but still have −0.207R mean expectancy, versus −0.151R across the full
+9-case baseline. Dollar totals and R tell different stories here because the
+observed cases used different risk sizes. This small retrospective shadow does
+not justify enabling the gate.
+
+The all-time reconciled sample remains 64 positions: 44 wins, 20 losses,
+−$226.80 net, −0.0153R expectancy, and 0.432R win/loss payoff. The latest 20
+chronological cases are materially weaker than the earlier 44 (−0.201R versus
++0.069R expectancy), so current research should prioritize diagnosing the
+recent regime/source/direction deterioration rather than increasing risk or
+optimizing against the aggregate win rate. This is a descriptive split, not a
+validated regime detector.
+
+## Recent weakness decomposed by source and side — 2026-10-09 15:04Z
+
+Split the same 20 latest reconciled positions by source and direction, then
+compared the largest source's prior completed history using the same groups.
+The recent LONG weakness is broad enough that it should not be reduced to a
+single permanently bad feed: for `Мысли Эмилии`, earlier LONGs were 5/6 wins at
++0.248R mean, while the latest 8 are 5/8 wins but only 0.157R win/loss payoff
+and −0.306R mean. That source's SHORTs also shifted from 12/16 wins and +0.099R
+across 16 earlier cases to 3/5 wins and −0.106R across the latest 5.
+
+Across all sources in the latest 20, LONGs are 8/14 wins, −0.283R mean, and
+0.290R payoff; SHORTs are 4/6 wins and nearly flat at −0.009R mean. Other
+source/side slices are very small (for example, the apparent +0.733R result in
+two MENSA LONGs). These post-hoc windows are descriptive, not independent
+validation; they point to recent regime decay shared across directions more
+than they justify blacklisting a feed. Keep source filters paper-only and
+continue the frozen forward assignment; the 14:44Z skipped LONG is still the
+only new participation assignment and has no completed markout.
+
+## Signal-versus-exit diagnosis refresh — 2026-10-09 15:06Z
+
+Ran both markout analyzers against the 14:36Z forensic archive. At 240 minutes
+after the first actual fill, direction-adjusted LONG movement averaged −0.315R
+across 30 cases (23.3% positive; IID 95% [−0.468,−0.163]R; block-4
+[−0.469,−0.160]R). SHORTs averaged −0.032R across 34 cases, with both
+intervals spanning zero. These are price markouts using the initial stop
+distance, not realized trade P&L; they omit exits, costs, subsequent fills, and
+cases lacking a full forward window.
+
+At the intent level, 44 LONG signals with a complete 240-minute window had
+−1.736% mean directional movement (22.7% positive; day-cluster 95%
+[−2.687%,−0.957%]); the 36 executed LONG subset was −1.830%
+([−2.964%,−0.806%]). Benchmark-adjusted executed LONG movement was −1.825%
+relative to BTC ([−2.646%,−1.008%]). The 46 SHORT signals were near flat
+(+0.019%, interval [−0.623%,+0.587%]). These markouts are descriptive and do
+not control for all shared market regimes, but they contradict the premise
+that a high realized win rate by itself proves LONG signal quality is sound:
+LONG timing/selection appears to contribute alongside the low win payoff.
+
+The prospective 0.10x LONG-risk cohort remains only 4 complete positions, so it
+cannot validate a fix; the lone 14:44Z skipped assignment has no scored forward
+window in this archive. Keep all settings and source gates unchanged while the
+randomized LONG participation and exit arms collect prospective cases.
+
+## Side-only risk-off counterfactual — 2026-10-09 15:08Z
+
+Summarized fully reconciled outcomes by side and the same chronological split.
+Across all 64 cases, LONGs were 17/29 winners but returned −0.197R per position
+with 0.374R payoff and −$343.44 net; IID 95% mean-R interval
+[−0.466,+0.068]. SHORTs were 27/35 winners, +0.135R mean, 0.487R payoff, and
++$116.65 net; interval [−0.076,+0.330]. Both uncertainty intervals include
+zero.
+
+LONG expectancy was −0.117R across the earlier 44-position segment (15 LONGs)
+and −0.283R in the latest 20 (14 LONGs). SHORT expectancy moved from +0.165R
+(29 cases) to −0.009R (6 cases). This makes a prospective LONG-suppression
+benchmark worth tracking, but the retrospective “keep only SHORT” result is
+not a live-policy conclusion: it reuses inspected data and ignores how freed
+portfolio capacity could change future SHORT sizing, overlap, and fills. Keep
+the active 50/50 randomized LONG participation assignment unchanged until its
+take/skip outcomes can be compared prospectively.
+
+## Pre-signal BTC-regime diagnostic — 2026-10-09 15:11Z
+
+Split the signal-level 240-minute LONG markouts on a fixed, pre-signal BTC
+60-minute return sign (down versus flat/up); no threshold was fitted. In the
+13 BTC-down cases, mean asset return was −2.586% and BTC-relative return was
+−2.489% (day-cluster 95% interval [−3.902%,−0.634%]). In the 30 flat/up cases,
+asset return was −1.426% and BTC-relative return was −1.360%
+([−2.726%,−0.392%]). Executed-only subsets were also negative in both groups
+(n=11 and n=25). These are same-archive, overlapping, non-randomized markouts,
+not realized P&L or independent confirmation. They suggest that simply
+avoiding LONGs when BTC's prior hour is negative would not address the observed
+LONG weakness; any richer regime rule needs a new frozen prospective test.

@@ -870,9 +870,21 @@ class ExitPolicy(BaseModel):
 class StrategyV2Policy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    exit_profile: Literal["baseline", "payoff_challenger", "payoff_early_trail"] = (
-        "baseline"
-    )
+    exit_profile: Literal[
+        "baseline",
+        "payoff_challenger",
+        "payoff_early_trail",
+        "payoff_early_tight_trail",
+        "payoff_early_tight_trail_long_015",
+        "payoff_early_tight_trail_long_ab_015",
+        "payoff_early_tight_trail_long_ab_020_control",
+    ] = "baseline"
+
+    # Stable assignment tag for the Demo LONG participation experiment.
+    long_participation_arm: Literal["take", "skip"] | None = None
+
+    # Zero preserves the legacy GTC behavior for plans without an explicit TTL.
+    entry_order_ttl_minutes: int = Field(default=0, ge=0)
 
     fallback_stop_distance_pct: Decimal = Field(default=Decimal("2"), gt=0, lt=100)
 

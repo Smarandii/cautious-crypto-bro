@@ -6,6 +6,8 @@ from uuid import UUID
 import pytest
 
 from cautious_crypto_bro.domain import (
+    AccountPosition,
+    AccountStateSummary,
     ApprovalMode,
     Entry,
     EntryPreflightError,
@@ -133,6 +135,92 @@ def test_historical_v1_approval_is_rejected_before_exchange(
     assert outcome.plan is plan
     assert store.failure == outcome.message
     assert "read-only" in outcome.message
+
+
+def test_portfolio_cap_is_rechecked_against_live_stops_before_execution() -> None:
+    now = datetime.now(UTC)
+    intent = TradingIntent(
+        source=SourceMessage(
+            channel_id=1,
+            channel_title="Test",
+            message_id=90,
+            published_at=now,
+            received_at=now,
+            text="BTC long",
+        ),
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        entry=Entry(type=EntryType.LIMIT, price=100),
+        stop_loss=90,
+        take_profit=120,
+        summary="New candidate",
+        confidence=1,
+        relation=OpenRelation.NEW,
+    )
+    plan = ExecutionPlan.model_validate(
+        {
+            "intent_id": str(intent.intent_id),
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "orders": [
+                {
+                    "order_type": "LIMIT",
+                    "quantity": "1",
+                    "price": "100",
+                    "reference_price": "100",
+                }
+            ],
+            "stop_loss": "90",
+            "take_profit": "120",
+            "policy": {
+                "trading_capital_usdt": "10000",
+                "risk_per_trade_pct": "1",
+            },
+            "planned_max_loss_usdt": "95",
+        }
+    )
+    state = AccountStateSummary(
+        as_of=now,
+        positions=(
+            AccountPosition(
+                symbol="ETHUSDT",
+                side=Side.LONG,
+                size=Decimal("1"),
+                avg_price=Decimal("100"),
+                mark_price=Decimal("100"),
+                unrealised_pnl=Decimal("0"),
+                status="Open",
+                take_profit=None,
+                stop_loss=Decimal("10"),
+            ),
+        ),
+        open_orders=(),
+    )
+
+    class Store:
+        async def get_active_position_strategies(self):
+            return ()
+
+    class Executor:
+        async def account_state(self):
+            return state
+
+    coordinator = ExecutionCoordinator(
+        store=Store(),
+        executor=Executor(),
+        planner=ExecutionPlanner(),
+        max_age_seconds=300,
+        portfolio_stop_risk_cap_usdt=Decimal("100"),
+    )
+
+    with pytest.raises(EntryPreflightError, match="Portfolio stop-risk cap exceeded"):
+        asyncio.run(
+            coordinator._assert_open_preflight(
+                intent,
+                plan,
+                ApprovalMode.MANUAL,
+            )
+        )
 
 
 @pytest.mark.parametrize("approval_mode", [ApprovalMode.MANUAL, ApprovalMode.AUTO])

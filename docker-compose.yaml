@@ -31,7 +31,11 @@ services:
       DATABASE_PATH: /state/cautious_crypto_bro.sqlite3
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       DEMO_LONG_RISK_MULTIPLIER: "0.10"
-      DEMO_EXIT_PROFILE: payoff_early_trail
+      DEMO_LONG_EXIT_CONTROL_FRACTION: "0.50"
+      DEMO_LONG_PARTICIPATION_SKIP_FRACTION: "0.50"
+      DEMO_PORTFOLIO_STOP_RISK_CAP_USDT: "400"
+      DEMO_EXIT_PROFILE: payoff_early_tight_trail_long_015
+      DEMO_ENTRY_ORDER_TTL_MINUTES: "240"
     volumes:
       - app_state:/state
       - ./src:/app/src:ro

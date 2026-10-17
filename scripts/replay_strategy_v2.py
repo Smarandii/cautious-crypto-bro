@@ -8,7 +8,7 @@ import math
 import random
 import statistics
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -44,6 +44,7 @@ class Result:
 class TimeStop:
     after_minutes: int
     max_close_r: float
+    only_before_trail_activation: bool = False
 
     def __post_init__(self) -> None:
         if self.after_minutes < 1:
@@ -71,6 +72,7 @@ EXIT_ONLY_FROZEN_AFTER = "2026-10-07T16:28:40+00:00"
 STOP_GRID_FROZEN_AFTER = "2026-10-07T18:13:30+00:00"
 EARLY_TRAIL_FROZEN_AFTER = "2026-10-07T18:45:48+00:00"
 DEPTH_EXIT_FROZEN_AFTER = "2026-10-07T19:10:00+00:00"
+DEMO_TRAIL_SHADOW_FROZEN_AFTER = "2026-10-08T17:32:00+00:00"
 PROSPECTIVE_SHADOW_REVIEW_CASES = 20
 
 
@@ -95,10 +97,23 @@ def fills(items):
     price = (
         sum(float(item["execQty"]) * float(item["execPrice"]) for item in items) / qty
     )
+    first_fill_time = min(int(item["execTime"]) for item in items)
+    first_fill_items = [
+        item for item in items if int(item["execTime"]) == first_fill_time
+    ]
+    first_fill_qty = sum(float(item["execQty"]) for item in first_fill_items)
+    first_fill_price = (
+        sum(
+            float(item["execQty"]) * float(item["execPrice"])
+            for item in first_fill_items
+        )
+        / first_fill_qty
+    )
 
     return (
-        min(int(item["execTime"]) for item in items),
+        first_fill_time,
         price,
+        first_fill_price,
     )
 
 
@@ -196,13 +211,14 @@ def load_cases(
                 ):
                     continue
 
-                start, entry = fills(actual)
+                start, entry, first_fill_entry = fills(actual)
 
                 raw.append(
                     (
                         item,
                         start,
                         entry,
+                        first_fill_entry,
                     )
                 )
 
@@ -213,6 +229,7 @@ def load_cases(
         for index, (
             item,
             start,
+            _,
             _,
         ) in enumerate(raw):
             symbol = item["intent"]["symbol"].upper()
@@ -250,6 +267,7 @@ def load_cases(
             item,
             start,
             entry,
+            first_fill_entry,
         ) in enumerate(raw):
             intent = item["intent"]
 
@@ -426,6 +444,7 @@ def load_cases(
                 {
                     "start": start,
                     "intent_id": item.get("intent_id", ""),
+                    "plan_created_at": item.get("created_at"),
                     "observed_fill_pattern": "+".join(
                         leg for leg in ("E1", "E2", "E3") if leg in filled_entry_legs
                     )
@@ -433,6 +452,11 @@ def load_cases(
                     "symbol": symbol,
                     "side": (intent["side"]),
                     "entry": entry,
+                    "first_fill_entry": first_fill_entry,
+                    "risk_per_trade_pct": item.get("metadata", {}).get(
+                        "risk_per_trade_pct"
+                    ),
+                    "exit_profile": item.get("metadata", {}).get("exit_profile"),
                     "primary_entry_maker": any(
                         execution.get("isMaker") is True
                         for order_id in item.get("entry_order_ids", [])
@@ -493,6 +517,7 @@ def replay(
     e3_reclaim_e2: bool = False,
     time_stop: TimeStop | None = None,
     risk_geometry: RiskGeometry | None = None,
+    trail_activation_on_close: bool = False,
     maker_fee_rate: float | None = None,
     taker_fee_rate: float | None = None,
 ) -> Result:
@@ -893,6 +918,9 @@ def replay(
             favorable,
         )
 
+        activation_price = candle["close"] if trail_activation_on_close else favorable
+        activation_r = r_value(replay_case, avg, activation_price)
+
         mfe = max(
             mfe,
             current_r,
@@ -901,9 +929,11 @@ def replay(
         # Once a trade reaches either
         # TP1 or trailing activation,
         # pending scale-ins are frozen.
-        freeze_at_r = min(resolve_target_rs(avg)[0], candidate.trail_at)
+        first_target_r = resolve_target_rs(avg)[0]
 
-        if not frozen and current_r >= freeze_at_r:
+        if not frozen and (
+            current_r >= first_target_r or activation_r >= candidate.trail_at
+        ):
             freeze()
 
         if frozen:
@@ -935,15 +965,17 @@ def replay(
             time_stop is not None
             and candle_end - case["start"] >= time_stop.after_minutes * 60_000
             and r_value(replay_case, avg, candle["close"]) <= time_stop.max_close_r
+            and (not time_stop.only_before_trail_activation or mfe < candidate.trail_at)
         ):
             close(qty, candle["close"])
             return make_result()
 
-        if current_r >= candidate.trail_at:
+        if activation_r >= candidate.trail_at:
             if not trailing:
                 freeze()
 
                 base_distance = candidate.trail_by * abs(avg - effective_stop)
+                trail_anchor = activation_price
 
                 # Solve the initial trail floor
                 # so an immediate trailing exit
@@ -958,11 +990,11 @@ def replay(
                         base_distance,
                         max(
                             0.0,
-                            favorable - required_floor,
+                            trail_anchor - required_floor,
                         ),
                     )
 
-                    trail_price = favorable - trail_distance
+                    trail_price = trail_anchor - trail_distance
 
                 else:
                     required_floor = (qty * avg + realized - 0.05) / (
@@ -973,13 +1005,13 @@ def replay(
                         base_distance,
                         max(
                             0.0,
-                            required_floor - favorable,
+                            required_floor - trail_anchor,
                         ),
                     )
 
-                    trail_price = favorable + trail_distance
+                    trail_price = trail_anchor + trail_distance
 
-                trail_peak = favorable
+                trail_peak = trail_anchor
                 trailing = True
 
             elif case["side"] == "LONG" and favorable > trail_peak:
@@ -1118,7 +1150,7 @@ def max_drawdown(
     return worst
 
 
-def summarize_results(results) -> dict[str, float | int]:
+def summarize_results(results) -> dict[str, float | int | None]:
     wins = [result.net_r for result in results if result.net_r > 0]
     losses = [result.net_r for result in results if result.net_r < 0]
     gross_profit = sum(wins)
@@ -1127,13 +1159,44 @@ def summarize_results(results) -> dict[str, float | int]:
     return {
         "count": len(results),
         "net_r": sum(result.net_r for result in results),
-        "expectancy_r": statistics.mean(result.net_r for result in results),
-        "win_rate": len(wins) / len(results) if results else 0.0,
-        "avg_win_r": statistics.mean(wins) if wins else 0.0,
-        "avg_loss_r": statistics.mean(losses) if losses else 0.0,
-        "profit_factor": gross_profit / gross_loss if gross_loss else float("inf"),
+        "expectancy_r": statistics.mean(result.net_r for result in results)
+        if results
+        else None,
+        "win_rate": len(wins) / len(results) if results else None,
+        "avg_win_r": statistics.mean(wins) if wins else None,
+        "avg_loss_r": statistics.mean(losses) if losses else None,
+        "profit_factor": (
+            gross_profit / gross_loss if gross_loss else float("inf") if wins else None
+        ),
         "max_drawdown_r": max_drawdown(results),
     }
+
+
+def summarize_exit_excursion(
+    results: list[Result],
+    *,
+    trail_activation_r: float,
+) -> dict[str, float | int]:
+    """Separate losing paths that never activated the trail from exit giveback."""
+    if trail_activation_r <= 0:
+        raise ValueError("Trail activation must be positive")
+    losing_results = [result for result in results if result.net_r <= 0]
+    reached_activation = sum(
+        result.mfe_r >= trail_activation_r for result in losing_results
+    )
+    return {
+        "mean_mfe_r": statistics.mean(result.mfe_r for result in results)
+        if results
+        else 0.0,
+        "losing_cases": len(losing_results),
+        "losing_cases_below_trail_activation": len(losing_results) - reached_activation,
+        "losing_cases_reaching_trail_activation": reached_activation,
+    }
+
+
+def format_optional_r(value: float | None) -> str:
+    """Format an unavailable R statistic without aborting a diagnostic."""
+    return "n/a" if value is None else f"{value:.3f}R"
 
 
 def summarize_by_side(cases, results):
@@ -1303,6 +1366,16 @@ def early_trail_candidate() -> Candidate:
     )
 
 
+def live_demo_tight_trail_candidate() -> Candidate:
+    """Mirror the original 0.20R/0.05R Demo tight-trail profile."""
+    return replace(live_demo_early_trail_candidate(), trail_by=0.05)
+
+
+def live_demo_long_015_candidate() -> Candidate:
+    """Mirror the 0.15R LONG activation challenger at the tight trail width."""
+    return replace(live_demo_tight_trail_candidate(), trail_at=0.15)
+
+
 def depth_exit_candidate() -> Candidate:
     """Freeze the training-selected shallower-grid and later-target profile."""
     return Candidate(
@@ -1394,6 +1467,17 @@ def report_prospective_depth_exit_shadow(cases, fee_rate: float) -> None:
     )
 
 
+def report_prospective_demo_trail_shadow(cases, fee_rate: float) -> None:
+    """Compare a later trail trigger with the exact active Demo exit profile."""
+    report_prospective_candidate_shadow(
+        cases,
+        fee_rate,
+        baseline=live_demo_early_trail_candidate(),
+        challenger=live_demo_payoff_exit_candidate(),
+        frozen_after=DEMO_TRAIL_SHADOW_FROZEN_AFTER,
+    )
+
+
 def report_prospective_stop_distance_shadow(cases, fee_rate: float) -> None:
     """Track the training-selected doubled stop and entry grid prospectively."""
     report_prospective_candidate_shadow(
@@ -1411,6 +1495,7 @@ def report_prospective_candidate_shadow(
     *,
     challenger: Candidate,
     frozen_after: str,
+    baseline: Candidate | None = None,
     risk_geometry: RiskGeometry | None = None,
 ) -> None:
     """Compare a frozen offline candidate to current policy on future cases."""
@@ -1433,7 +1518,7 @@ def report_prospective_candidate_shadow(
     if not cases:
         return
 
-    baseline = current_policy()
+    baseline = baseline or current_policy()
     for side in ("ALL", "LONG", "SHORT"):
         selected = [case for case in cases if side == "ALL" or case["side"] == side]
         baseline_results = [
@@ -1683,6 +1768,489 @@ def report_time_stop_diagnostics(
     )
 
 
+def report_untriggered_time_stop_diagnostics(
+    partitions,
+    candidate: Candidate,
+    fee_rate: float,
+    maker_fee_rate: float,
+    taker_fee_rate: float,
+) -> None:
+    """Test close-confirmed loss cuts only before the favorable trail activates."""
+    baseline_by_split = {
+        split: [
+            replay(
+                case,
+                candidate,
+                fee_rate,
+                use_events=False,
+                maker_fee_rate=maker_fee_rate,
+                taker_fee_rate=taker_fee_rate,
+            )
+            for case in split_cases
+        ]
+        for split, split_cases in partitions.items()
+    }
+    print(
+        "untriggered_time_stop_note=research only; exits remaining size at the "
+        "1m close only after age and adverse-close thresholds, and only if prior "
+        "favorable excursion is still below the 0.20R trail trigger; OHLC path "
+        "ordering and retrospective selection remain limitations"
+    )
+    for after_minutes in (60, 240, 720):
+        for max_close_r in (-0.25, -0.50, -0.75):
+            profile = TimeStop(
+                after_minutes,
+                max_close_r,
+                only_before_trail_activation=True,
+            )
+            for split, split_cases in partitions.items():
+                results = [
+                    replay(
+                        case,
+                        candidate,
+                        fee_rate,
+                        use_events=False,
+                        time_stop=profile,
+                        maker_fee_rate=maker_fee_rate,
+                        taker_fee_rate=taker_fee_rate,
+                    )
+                    for case in split_cases
+                ]
+                paired = paired_difference_summary(
+                    baseline_by_split[split],
+                    results,
+                    bootstrap_iterations=2_000,
+                )
+                summary = summarize_results(results)
+                interval = paired["iid_bootstrap_95ci_delta_net_r"]
+                print(
+                    f"untriggered_time_stop={after_minutes}m/"
+                    f"close<={max_close_r:+.2f}R/{split} "
+                    f"net:{summary['net_r']:+.3f}R/"
+                    f"delta:{paired['delta_net_r']:+.3f}R/"
+                    f"CI{interval}/n{summary['count']}"
+                )
+
+
+def report_trail_activation_poll_diagnostics(
+    partitions,
+    candidate: Candidate,
+    fee_rate: float,
+    maker_fee_rate: float,
+    taker_fee_rate: float,
+) -> None:
+    """Bound sensitivity to supervisor-polled trail activation with 1m bars."""
+    print(
+        "trail_activation_poll_note=research-only sensitivity; baseline activates "
+        "on intrabar high/low, challenger requires the 1m close to confirm the "
+        "threshold and anchors the initial trail at that close; the live 2s "
+        "supervisor may activate intraminute, so this is conservative, not an "
+        "exact runtime replay; observed fills/fees retained"
+    )
+    for split, cases in partitions.items():
+        intrabar = [
+            replay(
+                case,
+                candidate,
+                fee_rate,
+                use_events=True,
+                maker_fee_rate=maker_fee_rate,
+                taker_fee_rate=taker_fee_rate,
+            )
+            for case in cases
+        ]
+        close_confirmed = [
+            replay(
+                case,
+                candidate,
+                fee_rate,
+                use_events=True,
+                maker_fee_rate=maker_fee_rate,
+                taker_fee_rate=taker_fee_rate,
+                trail_activation_on_close=True,
+            )
+            for case in cases
+        ]
+        baseline_summary = summarize_results(intrabar)
+        close_summary = summarize_results(close_confirmed)
+        paired = paired_difference_summary(
+            intrabar,
+            close_confirmed,
+            bootstrap_iterations=2_000,
+        )
+        print(
+            f"trail_activation_poll={split} n={len(cases)} "
+            f"intrabar_net={baseline_summary['net_r']:+.3f}R "
+            f"close_confirmed_net={close_summary['net_r']:+.3f}R "
+            f"close_minus_intrabar={paired['delta_net_r']:+.3f}R "
+            f"iid95={paired['iid_bootstrap_95ci_delta_net_r']} "
+            f"block4_95={paired['circular_block_4_bootstrap_95ci_delta_net_r']}"
+        )
+
+
+def demo_target_sweep_candidates() -> tuple[tuple[str, Candidate], ...]:
+    """Sweep targets against the original 0.20R/0.05R tight-trail profile."""
+    baseline = live_demo_tight_trail_candidate()
+    return (
+        ("active_1_2_4R", baseline),
+        ("targets_1.25_2.5_5R", replace(baseline, take_profit_rs=(1.25, 2.5, 5.0))),
+        ("targets_1.5_3_6R", replace(baseline, take_profit_rs=(1.5, 3.0, 6.0))),
+        ("targets_2_4_8R", replace(baseline, take_profit_rs=(2.0, 4.0, 8.0))),
+    )
+
+
+def demo_runner_allocation_candidates() -> tuple[tuple[str, Candidate], ...]:
+    """Sweep scale-outs against the original 0.20R/0.05R tight-trail profile."""
+    baseline = live_demo_tight_trail_candidate()
+    allocations = (
+        ("runner_30pct", (20.0, 25.0, 25.0)),
+        ("active_runner_40pct", (15.0, 20.0, 25.0)),
+        ("runner_50pct", (10.0, 15.0, 25.0)),
+        ("runner_60pct", (10.0, 10.0, 20.0)),
+        ("runner_70pct", (5.0, 10.0, 15.0)),
+    )
+    return tuple(
+        (
+            name,
+            replace(baseline, take_profit_pcts=take_profit_pcts),
+        )
+        for name, take_profit_pcts in allocations
+    )
+
+
+def demo_trail_activation_candidates() -> tuple[tuple[str, Candidate], ...]:
+    """Sweep activation from the original 0.20R/0.05R tight-trail profile."""
+    baseline = live_demo_tight_trail_candidate()
+    return tuple(
+        (f"activation_{activation:.2f}R", replace(baseline, trail_at=activation))
+        for activation in (0.10, 0.15, 0.20, 0.25, 0.30)
+    )
+
+
+def report_demo_trail_activation_diagnostics(
+    partitions,
+    fee_rate: float,
+    maker_fee_rate: float,
+    taker_fee_rate: float,
+) -> None:
+    """Compare activation alternatives against the original 0.20R profile."""
+    profiles = demo_trail_activation_candidates()
+    baseline = profiles[2][1]
+    print(
+        "demo_trail_activation_note=research only; changes activation threshold "
+        "only; preserves 0.05R trail distance, target levels/fractions, entry "
+        "risk and fills/fees; no live policy change"
+    )
+    for split, cases in partitions.items():
+        for side in ("ALL", "LONG", "SHORT"):
+            selected = [case for case in cases if side == "ALL" or case["side"] == side]
+            baseline_results = [
+                replay(
+                    case,
+                    baseline,
+                    fee_rate,
+                    use_events=True,
+                    maker_fee_rate=maker_fee_rate,
+                    taker_fee_rate=taker_fee_rate,
+                )
+                for case in selected
+            ]
+            baseline_excursion = summarize_exit_excursion(
+                baseline_results,
+                trail_activation_r=baseline.trail_at,
+            )
+            for profile_name, candidate in profiles:
+                if candidate.trail_at == baseline.trail_at:
+                    continue
+                candidate_results = [
+                    replay(
+                        case,
+                        candidate,
+                        fee_rate,
+                        use_events=True,
+                        maker_fee_rate=maker_fee_rate,
+                        taker_fee_rate=taker_fee_rate,
+                    )
+                    for case in selected
+                ]
+                paired = paired_difference_summary(
+                    baseline_results,
+                    candidate_results,
+                    bootstrap_iterations=2_000,
+                )
+                candidate_excursion = summarize_exit_excursion(
+                    candidate_results,
+                    trail_activation_r=candidate.trail_at,
+                )
+                print(
+                    f"demo_trail_activation={profile_name}/{split}/{side} "
+                    f"baseline={json.dumps(summarize_results(baseline_results), sort_keys=True)} "
+                    f"baseline_excursion={json.dumps(baseline_excursion, sort_keys=True)} "
+                    f"candidate={json.dumps(summarize_results(candidate_results), sort_keys=True)} "
+                    f"candidate_excursion={json.dumps(candidate_excursion, sort_keys=True)} "
+                    f"paired_delta={json.dumps(paired, sort_keys=True)}"
+                )
+
+
+def report_demo_runner_allocation_diagnostics(
+    partitions,
+    fee_rate: float,
+    maker_fee_rate: float,
+    taker_fee_rate: float,
+) -> None:
+    """Compare runner sizes against the original tight-trail profile."""
+    profiles = demo_runner_allocation_candidates()
+    baseline = profiles[1][1]
+    print(
+        "demo_runner_allocation_note=research only; changes TP scale-out "
+        "fractions only; runner is the unallocated remainder; preserves original "
+        "0.20R/0.05R trail, target distances, entry sizing, and observed fees; "
+        "small historical sample, no production change"
+    )
+    for split, cases in partitions.items():
+        for side in ("ALL", "LONG", "SHORT"):
+            selected = [case for case in cases if side == "ALL" or case["side"] == side]
+            baseline_results = [
+                replay(
+                    case,
+                    baseline,
+                    fee_rate,
+                    use_events=True,
+                    maker_fee_rate=maker_fee_rate,
+                    taker_fee_rate=taker_fee_rate,
+                )
+                for case in selected
+            ]
+            for profile_name, candidate in profiles:
+                if profile_name == "active_runner_40pct":
+                    continue
+                candidate_results = [
+                    replay(
+                        case,
+                        candidate,
+                        fee_rate,
+                        use_events=True,
+                        maker_fee_rate=maker_fee_rate,
+                        taker_fee_rate=taker_fee_rate,
+                    )
+                    for case in selected
+                ]
+                paired = paired_difference_summary(
+                    baseline_results,
+                    candidate_results,
+                    bootstrap_iterations=2_000,
+                )
+                print(
+                    f"demo_runner_allocation={profile_name}/{split}/{side} "
+                    f"baseline={json.dumps(summarize_results(baseline_results), sort_keys=True)} "
+                    f"candidate={json.dumps(summarize_results(candidate_results), sort_keys=True)} "
+                    f"paired_delta={json.dumps(paired, sort_keys=True)}"
+                )
+
+
+def report_demo_target_sweep_diagnostics(
+    partitions,
+    fee_rate: float,
+    maker_fee_rate: float,
+    taker_fee_rate: float,
+) -> None:
+    """Compare farther targets with the original tight-trail profile."""
+    print(
+        "demo_target_sweep_note=research only; changes target distances only; "
+        "preserves 0.60/0.25/0.15 entry risk, 0.33/0.66 entries, 0.20/0.05 "
+        "trail, target fractions, and observed fills/fees; targets are a small "
+        "predeclared set, but historical validation/holdout have been inspected; "
+        "no production policy change"
+    )
+    profiles = demo_target_sweep_candidates()
+    baseline = profiles[0][1]
+    for split, cases in partitions.items():
+        for side in ("ALL", "LONG", "SHORT"):
+            selected = [case for case in cases if side == "ALL" or case["side"] == side]
+            baseline_results = [
+                replay(
+                    case,
+                    baseline,
+                    fee_rate,
+                    use_events=True,
+                    maker_fee_rate=maker_fee_rate,
+                    taker_fee_rate=taker_fee_rate,
+                )
+                for case in selected
+            ]
+            for profile_name, candidate in profiles[1:]:
+                candidate_results = [
+                    replay(
+                        case,
+                        candidate,
+                        fee_rate,
+                        use_events=True,
+                        maker_fee_rate=maker_fee_rate,
+                        taker_fee_rate=taker_fee_rate,
+                    )
+                    for case in selected
+                ]
+                baseline_summary = summarize_results(baseline_results)
+                candidate_summary = summarize_results(candidate_results)
+                paired = paired_difference_summary(
+                    baseline_results,
+                    candidate_results,
+                    bootstrap_iterations=2_000,
+                )
+                print(
+                    f"demo_target_sweep={profile_name}/{split}/{side} "
+                    f"baseline={json.dumps(baseline_summary, sort_keys=True)} "
+                    f"candidate={json.dumps(candidate_summary, sort_keys=True)} "
+                    f"paired_delta={json.dumps(paired, sort_keys=True)}"
+                )
+
+
+def demo_trail_distance_candidates() -> tuple[tuple[str, Candidate], ...]:
+    """Sweep trail distance against the original 0.20R activation profile."""
+    baseline = live_demo_tight_trail_candidate()
+    return (
+        ("active_0.05R", baseline),
+        ("trail_0.10R", replace(baseline, trail_by=0.10)),
+        ("trail_0.15R", replace(baseline, trail_by=0.15)),
+    )
+
+
+def no_e3_candidate(candidate: Candidate) -> Candidate:
+    """Reallocate E3 risk across E1/E2 while preserving their relative weights."""
+    e1_e2_weight = sum(candidate.weights[:2])
+    if e1_e2_weight <= 0:
+        raise ValueError("E1 and E2 must have positive combined risk weight")
+    return replace(
+        candidate,
+        weights=(
+            candidate.weights[0] / e1_e2_weight,
+            candidate.weights[1] / e1_e2_weight,
+            0.0,
+        ),
+    )
+
+
+def report_e3_allocation_diagnostics(
+    partitions,
+    fee_rate: float,
+    maker_fee_rate: float,
+    taker_fee_rate: float,
+) -> None:
+    """Compare E3 allocation with the original tight-trail geometry."""
+    baseline = live_demo_tight_trail_candidate()
+    candidate = no_e3_candidate(baseline)
+    print(
+        "e3_allocation_note=research only; preserves exit geometry, planned total "
+        "risk, and E1:E2 risk ratio; sets E3 allocation to zero; replay does not "
+        "model order rejection or liquidity effects"
+    )
+    print(
+        f"e3_allocation_weights=baseline:{baseline.weights}/no_e3:{candidate.weights}"
+    )
+    for split, cases in partitions.items():
+        for side in ("ALL", "LONG", "SHORT"):
+            selected = [case for case in cases if side == "ALL" or case["side"] == side]
+            baseline_results = [
+                replay(
+                    case,
+                    baseline,
+                    fee_rate,
+                    use_events=True,
+                    maker_fee_rate=maker_fee_rate,
+                    taker_fee_rate=taker_fee_rate,
+                )
+                for case in selected
+            ]
+            candidate_results = [
+                replay(
+                    case,
+                    candidate,
+                    fee_rate,
+                    use_events=True,
+                    maker_fee_rate=maker_fee_rate,
+                    taker_fee_rate=taker_fee_rate,
+                )
+                for case in selected
+            ]
+            paired = paired_difference_summary(
+                baseline_results,
+                candidate_results,
+                bootstrap_iterations=2_000,
+            )
+            print(
+                f"e3_allocation={split}/{side} "
+                f"baseline={json.dumps(summarize_results(baseline_results), sort_keys=True)} "
+                f"no_e3={json.dumps(summarize_results(candidate_results), sort_keys=True)} "
+                f"paired_delta={json.dumps(paired, sort_keys=True)}"
+            )
+
+
+def report_demo_trail_distance_diagnostics(
+    partitions,
+    fee_rate: float,
+    maker_fee_rate: float,
+    taker_fee_rate: float,
+) -> None:
+    """Compare trail widths with the original tight-trail profile."""
+    print(
+        "demo_trail_distance_note=research only; changes trailing distance only; "
+        "preserves 0.60/0.25/0.15 entry risk, 0.33/0.66 entries, 0.20R "
+        "activation, 1/2/4R targets, target fractions, and observed fills/fees; "
+        "historical validation/holdout have been inspected; no production change"
+    )
+    profiles = demo_trail_distance_candidates()
+    baseline = profiles[0][1]
+    for split, cases in partitions.items():
+        for side in ("ALL", "LONG", "SHORT"):
+            selected = [case for case in cases if side == "ALL" or case["side"] == side]
+            baseline_results = [
+                replay(
+                    case,
+                    baseline,
+                    fee_rate,
+                    use_events=True,
+                    maker_fee_rate=maker_fee_rate,
+                    taker_fee_rate=taker_fee_rate,
+                )
+                for case in selected
+            ]
+            for profile_name, candidate in profiles[1:]:
+                candidate_results = [
+                    replay(
+                        case,
+                        candidate,
+                        fee_rate,
+                        use_events=True,
+                        maker_fee_rate=maker_fee_rate,
+                        taker_fee_rate=taker_fee_rate,
+                    )
+                    for case in selected
+                ]
+                baseline_summary = summarize_results(baseline_results)
+                candidate_summary = summarize_results(candidate_results)
+                baseline_excursion = summarize_exit_excursion(
+                    baseline_results,
+                    trail_activation_r=baseline.trail_at,
+                )
+                candidate_excursion = summarize_exit_excursion(
+                    candidate_results,
+                    trail_activation_r=candidate.trail_at,
+                )
+                paired = paired_difference_summary(
+                    baseline_results,
+                    candidate_results,
+                    bootstrap_iterations=2_000,
+                )
+                print(
+                    f"demo_trail_distance={profile_name}/{split}/{side} "
+                    f"baseline={json.dumps(baseline_summary, sort_keys=True)} "
+                    f"baseline_excursion={json.dumps(baseline_excursion, sort_keys=True)} "
+                    f"candidate={json.dumps(candidate_summary, sort_keys=True)} "
+                    f"candidate_excursion={json.dumps(candidate_excursion, sort_keys=True)} "
+                    f"paired_delta={json.dumps(paired, sort_keys=True)}"
+                )
+
+
 def report_stop_distance_diagnostics(
     partitions,
     candidate: Candidate,
@@ -1777,7 +2345,7 @@ def report_stop_distance_diagnostics(
                 f"PF{summary['profit_factor']:.2f}/"
                 f"WR{summary['win_rate']:.0%}/"
                 f"avg_win:{summary['avg_win_r']:.3f}R/"
-                f"avg_loss:{summary['avg_loss_r']:.3f}R/"
+                f"avg_loss:{format_optional_r(summary['avg_loss_r'])}/"
                 f"paired_delta:{paired['delta_net_r']:+.3f}R/"
                 f"CI{interval_text}/n{summary['count']}"
             )
@@ -1951,6 +2519,69 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--untriggered-time-stop-diagnostics-only",
+        action="store_true",
+        help=(
+            "Research only: evaluate close-confirmed loss cuts before trail "
+            "activation under the live Demo early-trail profile."
+        ),
+    )
+
+    parser.add_argument(
+        "--trail-activation-poll-diagnostics-only",
+        action="store_true",
+        help=(
+            "Research only: compare intrabar trail activation with conservative "
+            "1m-close-confirmed activation under the live Demo profile."
+        ),
+    )
+
+    parser.add_argument(
+        "--demo-target-sweep-diagnostics-only",
+        action="store_true",
+        help=(
+            "Research only: compare farther take-profit levels against the "
+            "original 0.20R/0.05R profile without changing other settings."
+        ),
+    )
+
+    parser.add_argument(
+        "--demo-runner-allocation-diagnostics-only",
+        action="store_true",
+        help=(
+            "Research only: compare take-profit scale-out fractions with the "
+            "remainder held as runner under the original tight-trail profile."
+        ),
+    )
+
+    parser.add_argument(
+        "--demo-trail-activation-diagnostics-only",
+        action="store_true",
+        help=(
+            "Research only: compare trail activation thresholds at the active "
+            "0.05R trail distance."
+        ),
+    )
+
+    parser.add_argument(
+        "--demo-trail-distance-diagnostics-only",
+        action="store_true",
+        help=(
+            "Research only: compare trailing distances under the original "
+            "0.20R/0.05R profile without changing other settings."
+        ),
+    )
+
+    parser.add_argument(
+        "--e3-allocation-diagnostics-only",
+        action="store_true",
+        help=(
+            "Research only: reallocate E3 risk across E1/E2 while preserving "
+            "the original tight-trail exit geometry."
+        ),
+    )
+
+    parser.add_argument(
         "--stop-distance-diagnostics-only",
         action="store_true",
         help=(
@@ -2014,6 +2645,15 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--prospective-demo-trail-shadow",
+        action="store_true",
+        help=(
+            "Compare 0.40R versus 0.20R trail activation with the active Demo "
+            "targets, sizing, and 0.10R trail distance on cases after its freeze."
+        ),
+    )
+
+    parser.add_argument(
         "--fee-schedule-diagnostics-only",
         action="store_true",
         help=(
@@ -2041,6 +2681,7 @@ def main() -> None:
                 args.prospective_stop_distance_shadow,
                 args.prospective_early_trail_shadow,
                 args.prospective_depth_exit_shadow,
+                args.prospective_demo_trail_shadow,
                 args.rank_by_concentration_adjusted_train,
                 args.compare_late_targets_reduced_e3,
                 args.e3_cap_diagnostics_only,
@@ -2048,6 +2689,13 @@ def main() -> None:
                 args.e3_delay_diagnostics_only,
                 args.e3_reclaim_diagnostics_only,
                 args.time_stop_diagnostics_only,
+                args.untriggered_time_stop_diagnostics_only,
+                args.trail_activation_poll_diagnostics_only,
+                args.demo_target_sweep_diagnostics_only,
+                args.demo_runner_allocation_diagnostics_only,
+                args.demo_trail_activation_diagnostics_only,
+                args.demo_trail_distance_diagnostics_only,
+                args.e3_allocation_diagnostics_only,
                 args.stop_distance_diagnostics_only,
                 args.fee_schedule_diagnostics_only,
             )
@@ -2119,6 +2767,17 @@ def main() -> None:
         )
         return
 
+    if args.prospective_demo_trail_shadow:
+        report_prospective_demo_trail_shadow(
+            prospective_shadow_cases(
+                cases,
+                completed_position_starts(args.bundle),
+                frozen_after=DEMO_TRAIL_SHADOW_FROZEN_AFTER,
+            ),
+            fee_rate,
+        )
+        return
+
     if not 0 < args.validation_fraction < 1:
         parser.error("--validation-fraction must be between 0 and 1")
 
@@ -2174,6 +2833,13 @@ def main() -> None:
         args.e3_delay_diagnostics_only,
         args.e3_reclaim_diagnostics_only,
         args.time_stop_diagnostics_only,
+        args.untriggered_time_stop_diagnostics_only,
+        args.trail_activation_poll_diagnostics_only,
+        args.demo_target_sweep_diagnostics_only,
+        args.demo_runner_allocation_diagnostics_only,
+        args.demo_trail_activation_diagnostics_only,
+        args.demo_trail_distance_diagnostics_only,
+        args.e3_allocation_diagnostics_only,
         args.stop_distance_diagnostics_only,
         args.fee_schedule_diagnostics_only,
     )
@@ -2186,6 +2852,71 @@ def main() -> None:
             baseline_candidate,
             fee_rate,
             use_events=(not args.autonomous),
+        )
+        return
+
+    if args.untriggered_time_stop_diagnostics_only:
+        report_untriggered_time_stop_diagnostics(
+            partitions,
+            live_demo_tight_trail_candidate(),
+            fee_rate,
+            maker_fee_rate,
+            taker_fee_rate,
+        )
+        return
+
+    if args.trail_activation_poll_diagnostics_only:
+        report_trail_activation_poll_diagnostics(
+            partitions,
+            live_demo_tight_trail_candidate(),
+            fee_rate,
+            maker_fee_rate,
+            taker_fee_rate,
+        )
+        return
+
+    if args.demo_target_sweep_diagnostics_only:
+        report_demo_target_sweep_diagnostics(
+            partitions,
+            fee_rate,
+            maker_fee_rate,
+            taker_fee_rate,
+        )
+        return
+
+    if args.demo_runner_allocation_diagnostics_only:
+        report_demo_runner_allocation_diagnostics(
+            partitions,
+            fee_rate,
+            maker_fee_rate,
+            taker_fee_rate,
+        )
+        return
+
+    if args.demo_trail_activation_diagnostics_only:
+        report_demo_trail_activation_diagnostics(
+            partitions,
+            fee_rate,
+            maker_fee_rate,
+            taker_fee_rate,
+        )
+        return
+
+    if args.demo_trail_distance_diagnostics_only:
+        report_demo_trail_distance_diagnostics(
+            partitions,
+            fee_rate,
+            maker_fee_rate,
+            taker_fee_rate,
+        )
+        return
+
+    if args.e3_allocation_diagnostics_only:
+        report_e3_allocation_diagnostics(
+            partitions,
+            fee_rate,
+            maker_fee_rate,
+            taker_fee_rate,
         )
         return
 
@@ -2277,7 +3008,7 @@ def main() -> None:
                     f"PF{summary['profit_factor']:.2f}/"
                     f"WR{summary['win_rate']:.0%}/"
                     f"avg_win:{summary['avg_win_r']:.3f}R/"
-                    f"avg_loss:{summary['avg_loss_r']:.3f}R/"
+                    f"avg_loss:{format_optional_r(summary['avg_loss_r'])}/"
                     f"delta:{paired['delta_net_r']:+.3f}R/"
                     f"block_CI:{interval_text}/"
                     f"delta_ex_top3:{paired['delta_net_r_excluding_top_3_positive_cases']:+.3f}R/"
