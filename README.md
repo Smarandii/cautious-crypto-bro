@@ -22,6 +22,22 @@ docker compose logs -f app
 Fill `.env` with credentials and account/channel IDs from [.env.example](.env.example).
 The dialog helper authorizes the Telegram session.
 
+Default Compose runs code packaged in the image and mounts only `/state` into the
+app. Editing the checkout does not change the running app; rebuild/recreate to
+apply changes. `CCB_IMAGE` selects an image tag or registry digest, defaulting to
+`cautious-crypto-bro:local`. For a versioned local build, use a clean checkout:
+
+```powershell
+$env:CCB_IMAGE = "cautious-crypto-bro:$(git rev-parse --short HEAD)"
+docker compose build app
+docker compose up -d --no-build app
+```
+
+Keep that `CCB_IMAGE` value for subsequent Compose commands (or put it in `.env`).
+For a published image, pull the chosen tag/digest before `up --no-build`. Preserve
+a stopped-writer state backup before upgrades; see [STRATEGY.md](STRATEGY.md) for
+schema compatibility and rollback.
+
 Run one app per shared SQLite state directory. Startup takes an OS-held lock at
 `DATABASE_PATH.owner.lock` before database initialization, migration or quarantine,
 and holds it through shutdown. A second cooperating instance exits before touching
@@ -84,6 +100,21 @@ blocked, and merged branches are auto-deleted. Protection applies to `master`
 only, so feature branches stay freely pushable and deletable.
 
 ## Development
+
+For source-mounted Docker development, explicitly select the development file:
+
+```sh
+docker compose stop app
+docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d --build app
+```
+
+This uses `cautious-crypto-bro:dev` and read-only mounts for `src` and `scripts`.
+It replaces the app in the same Compose project and reuses its state/account;
+do not run an independent competing project against the same Bybit account.
+Return to the default file and chosen `CCB_IMAGE` to deploy packaged code again.
+The test profile retains its existing explicit test mounts.
+
+For native development:
 
 ```sh
 uv sync --python 3.12 --group dev
