@@ -6,7 +6,7 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import TYPE_CHECKING
 
 from ..domain import Side, TakeProfitSource
-from ._helpers import _find_position, _round_down, _round_price
+from ._helpers import _find_position, _matches_exit, _round_down, _round_price
 from .fill_detector import FillDetector
 from .trailing_stop_manager import TrailingStopManager
 
@@ -63,6 +63,7 @@ class ExitInstaller:
         AccountStateSummary,
         Decimal,
         Decimal | None,
+        dict[str, tuple[Decimal, Decimal]],
     ]:
         context, protected_stop, trailing_distance = await self._resolve_protection(
             state,
@@ -70,6 +71,12 @@ class ExitInstaller:
             position,
             enable_trailing,
         )
+        expected_exits = (
+            state.expected_exits
+            if state.installing_exits and state.expected_exits is not None
+            else self._planned_exits(state, plan, position, context)
+        )
+        state = state.model_copy(update={"expected_exits": expected_exits})
         await self._save_installing_snapshot(
             state,
             position,
@@ -91,12 +98,11 @@ class ExitInstaller:
             trailing_distance,
             enable_trailing,
         )
-        expected_exits = await self._install_take_profit_exits(
+        await self._install_take_profit_exits(
             state,
-            plan,
             position,
             account,
-            context,
+            expected_exits,
         )
         verified = await self._verify_installation(
             state,
@@ -105,7 +111,7 @@ class ExitInstaller:
             trailing_distance,
             expected_exits,
         )
-        return (verified, protected_stop, trailing_distance)
+        return (verified, protected_stop, trailing_distance, expected_exits)
 
     async def _resolve_protection(
         self,
@@ -232,12 +238,11 @@ class ExitInstaller:
             verified,
         )
 
-    async def _install_take_profit_exits(
+    def _planned_exits(
         self,
         state: PositionStrategy,
         plan: ExecutionPlan,
         position: AccountPosition,
-        account: AccountStateSummary,
         context: InstrumentContext,
     ) -> dict[str, tuple[Decimal, Decimal]]:
         done = (
@@ -296,6 +301,16 @@ class ExitInstaller:
             link_id, quantity, price = leg
             expected_exits[link_id] = (quantity, price)
 
+        return expected_exits
+
+    async def _install_take_profit_exits(
+        self,
+        state: PositionStrategy,
+        position: AccountPosition,
+        account: AccountStateSummary,
+        expected_exits: dict[str, tuple[Decimal, Decimal]],
+    ) -> None:
+        for link_id, (quantity, price) in expected_exits.items():
             await self._reconcile_or_place_exit(
                 state,
                 position,
@@ -304,8 +319,6 @@ class ExitInstaller:
                 quantity,
                 price,
             )
-
-        return expected_exits
 
     def _planned_exit(
         self,
@@ -382,7 +395,7 @@ class ExitInstaller:
         existing = await self._find_existing_exit(state, link_id, account)
 
         if existing:
-            if len(existing) != 1 or not self._matching_exit(
+            if len(existing) != 1 or not _matches_exit(
                 existing[0], position.side, quantity, price
             ):
                 raise RuntimeError(
@@ -488,30 +501,13 @@ class ExitInstaller:
         )
         for link_id, (quantity, price) in expected_exits.items():
             matches = await self._find_existing_exit(state, link_id, verified)
-            if len(matches) != 1 or not self._matching_exit(
+            if len(matches) != 1 or not _matches_exit(
                 matches[0], position.side, quantity, price
             ):
                 raise RuntimeError(
                     f"Bybit did not confirm expected Strategy V2 exit {link_id}"
                 )
         return verified
-
-    @staticmethod
-    def _matching_exit(
-        order: AccountOrder,
-        position_side: Side,
-        quantity: Decimal,
-        price: Decimal,
-    ) -> bool:
-        expected_side = Side.SHORT if position_side is Side.LONG else Side.LONG
-        return (
-            order.side is expected_side
-            and order.reduce_only
-            and order.order_type == "Limit"
-            and order.quantity == quantity
-            and order.status in {"New", "PartiallyFilled", "Filled"}
-            and order.price == price
-        )
 
     def partial_stops(
         self,

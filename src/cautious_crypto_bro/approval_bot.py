@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 from uuid import UUID
@@ -120,6 +121,34 @@ class ApprovalBot:
 
     async def close(self) -> None:
         await self._bot.session.close()
+
+    async def run_strategy_alert_delivery(self) -> None:
+        while True:
+            try:
+                await self.deliver_strategy_alerts()
+            except Exception:
+                logger.exception("Failed to read pending strategy alerts")
+            await asyncio.sleep(30)
+
+    async def deliver_strategy_alerts(self) -> None:
+        for state in await self._store.get_pending_strategy_alerts():
+            assert state.pause_reason is not None
+            try:
+                await self._send_html(
+                    "⚠️ <b>STRATEGY AUTOMATION PAUSED</b>\n"
+                    f"<b>{html.escape(state.symbol)}</b>\n"
+                    f"<code>{state.strategy_id}</code>\n"
+                    f"{html.escape(state.pause_reason)}\n\n"
+                    "Orders and protection were left untouched. "
+                    "Review the position and its exits on Bybit before resuming automation."
+                )
+                await self._store.mark_strategy_alert_delivered(
+                    state.strategy_id, state.pause_reason
+                )
+            except Exception:
+                logger.exception(
+                    "Strategy pause alert delivery failed for %s", state.strategy_id
+                )
 
     async def _authorized(self, callback: CallbackQuery) -> bool:
         if callback.from_user.id == self._approver_user_id:

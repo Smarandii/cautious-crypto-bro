@@ -524,9 +524,18 @@ class PositionSupervisorStore(
     """Everything PositionSupervisor needs from durable storage."""
 
 
+class StrategyAlertRepository(Protocol):
+    async def get_pending_strategy_alerts(self) -> tuple[PositionStrategy, ...]: ...
+
+    async def mark_strategy_alert_delivered(
+        self, strategy_id: UUID, reason: str
+    ) -> None: ...
+
+
 class ApprovalBotStore(
     IntentRepository,
     PositionActionRepository,
+    StrategyAlertRepository,
     Protocol,
 ):
     """Everything ApprovalBot needs from durable storage."""

@@ -437,6 +437,15 @@ async def run_side(e, side, directory):
         crossing = rounded(
             context.market_price * (1 - sign * D("0.005")), context.tick_size
         )
+        # Test-only geometry makes this reduce-only exit fill on demand. Update
+        # its disposable snapshot explicitly; production treats amendments as drift.
+        fill_state = await strategy(store)
+        require(fill_state.expected_exits is not None, "Missing fixed-exit snapshot")
+        expected_exits = dict(fill_state.expected_exits)
+        expected_exits[tp1.order_link_id] = (tp1.quantity, crossing)
+        await store.save_position_strategy(
+            fill_state.model_copy(update={"expected_exits": expected_exits})
+        )
         await asyncio.to_thread(
             e._client.private_post,
             "/v5/order/amend",
@@ -469,7 +478,7 @@ async def run_side(e, side, directory):
             "real_tp_fill_and_freeze",
             side=side.value,
             result="passed",
-            trigger="test amended TP1 to marketable price",
+            trigger="test-only target/snapshot adjusted to marketable price",
         )
 
         action = await persist_action(store, side, PositionActionType.REDUCE, 2, 25)

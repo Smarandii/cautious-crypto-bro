@@ -190,7 +190,24 @@ UNCERTAIN. Intent status is separate: EXECUTED can mean accepted pending limits.
 - Manual approval delivery retries durably. A crash after sending but before
   acknowledgement may duplicate a card; execution claims prevent duplicate trades.
 
-SQLite schema 8 supports migrations from 4–7. Back up state before repair.
+Fixed-exit quantities and prices are saved before each revision is submitted.
+Canceled, missing/unconfirmed, amended, or unexpected owned exits pause automation
+with a durable reason. Confirmed partial/full fills retain their normal handling;
+intentionally omitted below-minimum exit legs are not treated as missing orders.
+An already-installed legacy revision without a trusted snapshot requires manual
+review; current exchange orders are not silently adopted as the intended policy.
+Existing verified protection handoffs finish before that legacy review pause.
+
+Pause alerts are retried from SQLite every 30 seconds, independently of exchange
+reconciliation. Delivery is at least once: a crash after Telegram accepts an alert
+but before SQLite records it can produce a duplicate.
+
+SQLite schema 9 supports migrations from 4–8 and preserves existing strategy rows.
+Before upgrading, stop the old app and back up its complete state; do not run old
+and new writers concurrently. Earlier images reject schema 9. Rollback requires
+stopping the new app, reconciling any exchange changes since backup, and restoring
+a matching pre-upgrade database before starting the old image. Do not merely lower
+the schema version or overwrite current exchange protection.
 Resume paused strategies only after ownership, live orders and protection agree.
 
 ## Randomized Demo LONG participation test

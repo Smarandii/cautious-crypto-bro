@@ -3,8 +3,29 @@ from __future__ import annotations
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING
 
+from ..domain import Side
+
 if TYPE_CHECKING:
-    from ..domain import AccountPosition, AccountStateSummary, PositionStrategy
+    from ..domain import (
+        AccountOrder,
+        AccountPosition,
+        AccountStateSummary,
+        PositionStrategy,
+    )
+
+
+def _matches_exit(
+    order: AccountOrder, position_side: Side, quantity: Decimal, price: Decimal
+) -> bool:
+    expected_side = Side.SHORT if position_side is Side.LONG else Side.LONG
+    return (
+        order.side is expected_side
+        and order.reduce_only
+        and order.order_type == "Limit"
+        and order.quantity == quantity
+        and order.status in {"New", "PartiallyFilled", "Filled"}
+        and order.price == price
+    )
 
 
 def _find_position(

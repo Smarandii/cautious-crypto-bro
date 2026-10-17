@@ -5,6 +5,7 @@ from .migrations import (
     MIGRATION_5_TO_6_SQL,
     MIGRATION_6_TO_7_SQL,
     MIGRATION_7_TO_8_SQL,
+    MIGRATION_8_TO_9_SQL,
 )
 from .schema import LATEST_SCHEMA_SQL, LATEST_SCHEMA_VERSION
 from .store import SQLiteStore
@@ -19,5 +20,6 @@ __all__ = [
     "MIGRATION_5_TO_6_SQL",
     "MIGRATION_6_TO_7_SQL",
     "MIGRATION_7_TO_8_SQL",
+    "MIGRATION_8_TO_9_SQL",
     "SQLiteStore",
 ]
