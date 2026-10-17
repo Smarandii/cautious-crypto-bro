@@ -25,6 +25,12 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Recover durable failed/stale source posts independently of the Telegram history
+  cursor, including full image albums after restart. Keep active claims intact.
+- Recover all pending AUTO records rather than silently stopping after 100 opens
+  and 100 actions. Retried lifecycle instructions retain publication-age limits.
+- Cover these workflows with real SQLite and application components; remove
+  runtime protocol-identity checks that did not validate behavior.
 - Quarantine interrupted intents, position actions and strategy rows atomically
   before the first reconciliation pass, rather than discovering them mid-poll.
 - Require verified parent-order links before cancelling attached partial stops,

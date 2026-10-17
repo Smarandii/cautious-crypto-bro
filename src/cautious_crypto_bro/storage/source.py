@@ -16,6 +16,32 @@ from ._connection import _Store
 
 
 class SourceRepositoryImpl(_Store):
+    async def get_retryable_source_message_ids(
+        self,
+        channel_id: int,
+        *,
+        lease_seconds: int,
+        limit: int = 100,
+    ) -> tuple[int, ...]:
+        if lease_seconds <= 0 or limit <= 0:
+            raise ValueError("Retry lease and limit must be positive")
+
+        rows = await self._fetch(
+            """
+            SELECT message_id FROM source_messages
+            WHERE channel_id = ? AND (
+                status = 'FAILED'
+                OR (status = 'PROCESSING'
+                    AND updated_at <= datetime('now', ?))
+            )
+            ORDER BY updated_at ASC, message_id ASC
+            LIMIT ?
+            """,
+            (channel_id, f"-{lease_seconds} seconds", limit),
+            many=True,
+        )
+        return tuple(row[0] for row in rows)
+
     async def claim_source(
         self,
         source: SourceMessage,

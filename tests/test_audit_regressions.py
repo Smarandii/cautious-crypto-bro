@@ -29,6 +29,7 @@ from cautious_crypto_bro.storage import IntentStore
 
 
 @pytest.mark.parametrize("mode", [ApprovalMode.AUTO, ApprovalMode.MANUAL])
+@pytest.mark.integration
 def test_resized_market_entry_persists_actual_fill_before_scale_ins(tmp_path, mode):
     async def run():
         exchange = Exchange()
@@ -68,6 +69,7 @@ def test_resized_market_entry_persists_actual_fill_before_scale_ins(tmp_path, mo
     asyncio.run(run())
 
 
+@pytest.mark.integration
 def test_restart_protects_resized_primary_before_plan_was_persisted(tmp_path):
     async def run():
         path = tmp_path / "state.db"
@@ -107,6 +109,7 @@ def test_restart_protects_resized_primary_before_plan_was_persisted(tmp_path):
 @pytest.mark.parametrize(
     "stage", ["before_submit", "leverage_timeout", "accepted_timeout", "after_fill"]
 )
+@pytest.mark.integration
 def test_entry_failure_only_closes_strategy_before_submission(tmp_path, stage):
     async def run():
         path = tmp_path / "state.db"
@@ -173,6 +176,7 @@ def test_entry_failure_only_closes_strategy_before_submission(tmp_path, stage):
 
 
 @pytest.mark.parametrize("paused", [False, True])
+@pytest.mark.integration
 def test_manual_second_entry_cannot_disable_existing_strategy(tmp_path, paused):
     async def run():
         path = tmp_path / "state.db"

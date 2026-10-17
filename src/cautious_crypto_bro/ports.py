@@ -476,13 +476,13 @@ class RecoveryRepository(Protocol):
     async def get_pending_auto_intent_ids(
         self,
         *,
-        limit: int = 100,
+        limit: int | None = None,
     ) -> tuple[UUID, ...]: ...
 
     async def get_pending_auto_action_ids(
         self,
         *,
-        limit: int = 100,
+        limit: int | None = None,
     ) -> tuple[UUID, ...]: ...
 
 

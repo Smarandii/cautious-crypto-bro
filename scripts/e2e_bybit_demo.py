@@ -282,7 +282,11 @@ async def run_side(e, side, directory):
     )
     lock = asyncio.Lock()
     coordinator = ExecutionCoordinator(
-        store=store, executor=e, max_age_seconds=1800, execution_lock=lock
+        store=store,
+        executor=e,
+        planner=ExecutionPlanner(),
+        max_age_seconds=1800,
+        execution_lock=lock,
     )
     supervisor = PositionSupervisor(store=store, executor=e, mutation_lock=lock)
     prefix = f"ccb-v2-{intent.intent_id.hex[:20]}-"
@@ -394,7 +398,7 @@ async def run_side(e, side, directory):
         tight = rounded(stop + sign * abs(live.avg_price - stop) / 5, context.tick_size)
         for mode, target in (("tightened", tight), ("removed", D(0))):
             await asyncio.to_thread(
-                e._private_post,
+                e._client.private_post,
                 "/v5/position/trading-stop",
                 {
                     "category": "linear",
@@ -434,7 +438,7 @@ async def run_side(e, side, directory):
             context.market_price * (1 - sign * D("0.005")), context.tick_size
         )
         await asyncio.to_thread(
-            e._private_post,
+            e._client.private_post,
             "/v5/order/amend",
             {
                 "category": "linear",

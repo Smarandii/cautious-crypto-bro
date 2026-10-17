@@ -30,10 +30,6 @@ from cautious_crypto_bro.execution import (
     ExecutionPlanner,
     InstrumentContext,
 )
-from cautious_crypto_bro.ports import (
-    AccountGateway,
-    PositionSupervisorStore,
-)
 
 
 def _now() -> datetime:
@@ -458,19 +454,3 @@ class FakePositionSupervisorStore:
         limit: int = 50,
     ) -> tuple[TradingIntent, ...]:
         return ()
-
-
-# Structural protocol conformance is checked by passing the fakes to functions
-# typed with the protocols below. These are intentionally tiny: they prove the
-# fakes can stand in for the real infrastructure without importing concrete
-# implementations.
-
-
-def _require_account_gateway(gateway: AccountGateway) -> AccountGateway:
-    return gateway
-
-
-def _require_position_supervisor_store(
-    store: PositionSupervisorStore,
-) -> PositionSupervisorStore:
-    return store

@@ -87,7 +87,7 @@ class RecoveryRepositoryImpl(SharedRepositoryMixin, _Store):
     async def get_pending_auto_intent_ids(
         self,
         *,
-        limit: int = 100,
+        limit: int | None = None,
     ) -> tuple[UUID, ...]:
         return await self._get_pending_auto_ids(
             table="intents",
@@ -98,7 +98,7 @@ class RecoveryRepositoryImpl(SharedRepositoryMixin, _Store):
     async def get_pending_auto_action_ids(
         self,
         *,
-        limit: int = 100,
+        limit: int | None = None,
     ) -> tuple[UUID, ...]:
         return await self._get_pending_auto_ids(
             table="position_actions",

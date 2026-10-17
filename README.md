@@ -28,6 +28,11 @@ Only history scans advance the recovery cursor; newer live messages cannot hide
 older missed posts. Startup uses a fixed lookback boundary, finishes albums across
 batch boundaries, and retries failed history/image downloads on the next poll.
 Source claims deduplicate live and history delivery before extraction/execution.
+Each poll also retries up to 100 durable failed or expired-processing posts per
+channel, reloading their images even when the history cursor or startup window
+has moved past them. Active processing claims remain untouched. Position actions
+expire from the earlier of extraction time and original publication time; retrying
+an old close/reduce instruction does not make it fresh.
 
 `AUTO_APPROVAL_MODE` defaults to `disabled`; `open_only` enables eligible OPEN
 signals, and `all` also enables eligible REDUCE/CLOSE/CANCEL_ENTRIES actions. Both manual and

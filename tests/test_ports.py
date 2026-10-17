@@ -3,8 +3,6 @@ import asyncio
 from fakes import (
     FakeAccountGateway,
     FakePositionSupervisorStore,
-    _require_account_gateway,
-    _require_position_supervisor_store,
     make_account_position,
     make_account_state,
     make_execution_plan,
@@ -13,18 +11,6 @@ from fakes import (
 
 from cautious_crypto_bro.domain import StrategyStatus
 from cautious_crypto_bro.position_supervisor import PositionSupervisor
-
-
-def test_fake_account_gateway_conforms_to_protocol() -> None:
-    gateway = FakeAccountGateway()
-    assert _require_account_gateway(gateway) is gateway
-
-
-def test_fake_position_supervisor_store_conforms_to_protocol() -> None:
-    plan = make_execution_plan()
-    state = make_position_strategy(plan)
-    store = FakePositionSupervisorStore(state, plan)
-    assert _require_position_supervisor_store(store) is store
 
 
 def test_position_supervisor_runs_with_fakes() -> None:

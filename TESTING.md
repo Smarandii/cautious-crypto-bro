@@ -31,6 +31,34 @@ uv run pytest -q --cov-report=html
 Default pytest uses offline/mocked boundaries and real temporary SQLite.
 Live Demo testing is opt-in; passing tests does not prove complete reliability.
 
+## Test boundaries
+
+Prefer workflow integration tests for delivery, persistence, execution, and
+restart behavior. Use real application components and temporary SQLite; fake
+only Telegram, model, and exchange transports. Keep focused unit tests for
+sizing, tick rounding, risk limits, and evidence parsing. Avoid assertions about
+private call order when a durable outcome or exchange state proves the behavior.
+
+Run the explicitly marked workflow/regression subset with:
+
+```sh
+uv run pytest -q -m integration --no-cov
+```
+
+The full quality gate still runs every test and enforces coverage. The marked
+subset covers failed album recovery outside the startup window, active/stale
+claims, duplicate delivery, stale lifecycle instructions, large AUTO backlogs,
+actual-fill rebasing, interrupted submission, and conflicting strategy ownership.
+Existing unmarked tests also include integration coverage; marker adoption is
+incremental, not a claim that everything else is a unit test.
+
+Keep live E2E small and explicit: the existing `scripts/run_bybit_demo_e2e.py`
+runner exercises Demo execution and fresh-process recovery in disposable state.
+It can pause the normal app and places Demo orders; it is not part of ordinary
+pytest. `tests/test_demo_e2e.py` tests its safeguards offline, not live execution.
+Telegram delivery and model semantic accuracy remain separate validation gaps;
+an offline workflow pass must not be labeled a full external-system E2E pass.
+
 ## Configured helpers
 
 These Bash examples use Compose configuration, Redis and persistent app state.

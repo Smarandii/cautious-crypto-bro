@@ -321,6 +321,7 @@ class TelegramSource:
         on_message: MessageHandler,
         startup_lookback_hours: int = 0,
         catchup_interval_seconds: int = 60,
+        retry_message_ids: Callable[[int], Awaitable[tuple[int, ...]]] | None = None,
     ) -> None:
         if startup_lookback_hours < 0:
             raise ValueError("startup_lookback_hours must not be negative")
@@ -339,6 +340,7 @@ class TelegramSource:
 
         self._startup_lookback_hours = startup_lookback_hours
         self._catchup_interval_seconds = catchup_interval_seconds
+        self._retry_message_ids = retry_message_ids
         self._entities: list[Any] = []
         # Only chronological history reconciliation may advance this cursor.
         # A newer live delivery says nothing about earlier missed messages.
@@ -451,6 +453,7 @@ class TelegramSource:
         await self._seed_watermarks(self._entities)
         for entity in self._entities:
             chat_id = _telegram_chat_id(entity)
+            await self._retry_failed_messages(entity, chat_id)
             watermark = self._watermarks.get(chat_id)
 
             if watermark is None:
@@ -505,6 +508,39 @@ class TelegramSource:
                     # Never advance over a failed post, including startup
                     # downloads. Other channels can still make progress.
                     break
+
+    async def _retry_failed_messages(self, entity: Any, chat_id: int) -> None:
+        if self._retry_message_ids is None:
+            return
+        try:
+            message_ids = await self._retry_message_ids(chat_id)
+            if not message_ids:
+                return
+            messages = cast(
+                Sequence[Message | None],
+                await self._client.get_messages(entity, ids=list(message_ids)),
+            )
+        except Exception:
+            logger.exception("Failed to fetch retryable Telegram posts for %s", chat_id)
+            return
+
+        available = [
+            message
+            for message in messages
+            if message is not None and getattr(message, "date", None) is not None
+        ]
+        missing = set(message_ids) - {message.id for message in available}
+        if missing:
+            logger.warning(
+                "Retryable Telegram posts unavailable in %s: %s", chat_id, missing
+            )
+        for group in _group_telegram_messages(available):
+            try:
+                await self._handle_messages(group, chat=entity)
+            except Exception:
+                logger.exception(
+                    "Failed to retry Telegram post %s/%s", chat_id, group[0].id
+                )
 
     async def _handle_messages(
         self,
