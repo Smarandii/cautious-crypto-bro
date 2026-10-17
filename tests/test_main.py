@@ -10,6 +10,7 @@ import pytest
 def test_initial_reconciliation_precedes_any_execution(
     monkeypatch: pytest.MonkeyPatch,
     failed_reconciliation: int | None,
+    tmp_path,
 ) -> None:
     app = import_module("cautious_crypto_bro.main")
     events: list[str] = []
@@ -42,7 +43,14 @@ def test_initial_reconciliation_precedes_any_execution(
         close=step("runtime.close"),
     )
     extractor = SimpleNamespace(close=step("extractor.close"))
-    executor = SimpleNamespace(close=lambda: events.append("executor.close"))
+
+    def close_executor():
+        with pytest.raises(RuntimeError, match="already owned"):
+            with app.state_ownership(settings.database_path):
+                pytest.fail("Ownership was released before exchange client cleanup")
+        events.append("executor.close")
+
+    executor = SimpleNamespace(close=close_executor)
     supervisor = SimpleNamespace(
         reconcile_once=step("supervisor.reconcile"),
         run=step("supervisor.run"),
@@ -72,7 +80,7 @@ def test_initial_reconciliation_precedes_any_execution(
     )
     settings = SimpleNamespace(
         log_level="INFO",
-        database_path=":memory:",
+        database_path=tmp_path / "state.db",
         redis_url="redis://localhost",
         redis_max_connections=1,
         redis_pool_timeout_seconds=1,
@@ -150,3 +158,6 @@ def test_initial_reconciliation_precedes_any_execution(
         "runtime.close",
         "executor.close",
     ]
+    # Startup failures and normal shutdown both release ownership after cleanup.
+    with app.state_ownership(settings.database_path):
+        pass

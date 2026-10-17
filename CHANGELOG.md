@@ -25,6 +25,8 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Hold shared-state ownership from before SQLite initialization through runtime
+  cleanup; reject duplicate app startup without quarantining another owner's work.
 - Persist submitted fixed-exit geometry and pause on owned-exit drift, including
   canceled partially filled orders. Keep genuine fills and omitted small exits
   distinct; retry operator pause alerts durably after Telegram failures/restart.

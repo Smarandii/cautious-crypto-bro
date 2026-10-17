@@ -22,6 +22,14 @@ docker compose logs -f app
 Fill `.env` with credentials and account/channel IDs from [.env.example](.env.example).
 The dialog helper authorizes the Telegram session.
 
+Run one app per shared SQLite state directory. Startup takes an OS-held lock at
+`DATABASE_PATH.owner.lock` before database initialization, migration or quarantine,
+and holds it through shutdown. A second cooperating instance exits before touching
+state or building exchange clients. The OS releases the lock after exit/crash;
+leave the small lock file in place. Stop older versions before upgrading because
+they do not acquire this lock. Separate databases/hosts and standalone operator
+scripts are outside this guard: never run competing writers for the same account.
+
 The source reconciles each channel against history every
 `TELEGRAM_CATCHUP_INTERVAL_SECONDS` to recover posts absent from live processing.
 Only history scans advance the recovery cursor; newer live messages cannot hide
