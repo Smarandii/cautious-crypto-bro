@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -191,6 +192,9 @@ class PositionSupervisor:
             # All strategies share durable storage; no further trading
             # is safe when its state cannot be read or committed.
             raise
+        except sqlite3.Error as exc:
+            # Writes can expose SQLite errors directly; they affect every symbol.
+            raise StoreError(f"SQLite reconciliation operation failed: {exc}") from exc
         except Exception as exc:
             logger.exception(
                 "Strategy %s %s reconciliation failed",
