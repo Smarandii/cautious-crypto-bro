@@ -16,6 +16,7 @@ from .position_supervisor import PositionSupervisor
 from .runtime_store import RedisRuntimeStore
 from .service import SignalService
 from .signal_context import SignalContextProvider
+from .state_ownership import state_ownership
 from .storage import IntentStore
 from .telegram_source import TelegramSource
 
@@ -33,6 +34,11 @@ async def async_main() -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
+    with state_ownership(settings.database_path):
+        await _run_owned_application(settings)
+
+
+async def _run_owned_application(settings: Settings) -> None:
     store = IntentStore(settings.database_path)
     await store.initialize()
     (
