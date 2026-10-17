@@ -25,6 +25,8 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Stop the supervisor symbol sweep on raw SQLite write failures, preserving the
+  storage error cause instead of continuing exchange mutations on other symbols.
 - Persist submitted fixed-exit geometry and pause on owned-exit drift, including
   canceled partially filled orders. Keep genuine fills and omitted small exits
   distinct; retry operator pause alerts durably after Telegram failures/restart.
