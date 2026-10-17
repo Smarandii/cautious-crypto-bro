@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
@@ -129,6 +130,9 @@ class PositionStrategyRepositoryImpl(_Store):
                     exit_revision = ?,
                     rebalance_needed = ?,
                     installing_exits = ?,
+                    expected_exits_json = ?,
+                    pause_reason = ?,
+                    pause_notified = ?,
                     updated_at = ?
                 WHERE strategy_id = ?
                 """,
@@ -167,6 +171,16 @@ class PositionStrategyRepositoryImpl(_Store):
                     state.exit_revision,
                     int(state.rebalance_needed),
                     int(state.installing_exits),
+                    json.dumps(
+                        {
+                            link: [str(qty), str(price)]
+                            for link, (qty, price) in state.expected_exits.items()
+                        }
+                    )
+                    if state.expected_exits is not None
+                    else None,
+                    state.pause_reason,
+                    int(state.pause_notified),
                     state.updated_at.isoformat(),
                     str(state.strategy_id),
                 ),
@@ -175,6 +189,30 @@ class PositionStrategyRepositoryImpl(_Store):
             if cursor.rowcount != 1:
                 raise RuntimeError("Position strategy no longer exists")
 
+            await db.commit()
+
+    async def get_pending_strategy_alerts(self) -> tuple[PositionStrategy, ...]:
+        rows = await self._fetch(
+            """
+            SELECT * FROM position_strategies
+            WHERE status = ? AND pause_reason IS NOT NULL AND pause_notified = 0
+            ORDER BY updated_at ASC LIMIT 100
+            """,
+            (StrategyStatus.MANUAL_OVERRIDE.value,),
+            many=True,
+            row_factory=True,
+        )
+        return tuple(self._position_strategy_from_row(row) for row in rows)
+
+    async def mark_strategy_alert_delivered(
+        self, strategy_id: UUID, reason: str
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                "UPDATE position_strategies SET pause_notified = 1 "
+                "WHERE strategy_id = ? AND pause_reason = ? AND status = ?",
+                (str(strategy_id), reason, StrategyStatus.MANUAL_OVERRIDE.value),
+            )
             await db.commit()
 
     async def set_position_strategy_status(
@@ -280,6 +318,11 @@ class PositionStrategyRepositoryImpl(_Store):
             exit_revision=int(row["exit_revision"]),
             rebalance_needed=bool(row["rebalance_needed"]),
             installing_exits=bool(row["installing_exits"]),
+            expected_exits=json.loads(row["expected_exits_json"])
+            if row["expected_exits_json"] is not None
+            else None,
+            pause_reason=row["pause_reason"],
+            pause_notified=bool(row["pause_notified"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )

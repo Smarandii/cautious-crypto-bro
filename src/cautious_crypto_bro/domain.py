@@ -1309,6 +1309,11 @@ class PositionStrategy(BaseModel):
     rebalance_needed: bool = False
     installing_exits: bool = False
 
+    # Exact geometry frozen before submitting this exit revision. None is legacy.
+    expected_exits: dict[str, tuple[Decimal, Decimal]] | None = None
+    pause_reason: str | None = Field(default=None, max_length=2000)
+    pause_notified: bool = False
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

@@ -15,6 +15,13 @@ MIGRATION_6_TO_7_SQL = "\nALTER TABLE execution_policy\nRENAME TO execution_poli
 MIGRATION_7_TO_8_SQL = "\nALTER TABLE position_strategies ADD COLUMN installing_exits INTEGER NOT NULL DEFAULT 0;\nCREATE TABLE manual_deliveries (\n    record_id TEXT PRIMARY KEY,\n    kind TEXT NOT NULL CHECK(kind IN ('OPEN', 'ACTION')),\n    claim_token TEXT,\n    retry_after TEXT,\n    delivered_at TEXT\n);\n"
 
 
+MIGRATION_8_TO_9_SQL = """
+ALTER TABLE position_strategies ADD COLUMN expected_exits_json TEXT;
+ALTER TABLE position_strategies ADD COLUMN pause_reason TEXT;
+ALTER TABLE position_strategies ADD COLUMN pause_notified INTEGER NOT NULL DEFAULT 0;
+"""
+
+
 async def initialize_database(database_path: Path) -> None:
     database_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -28,19 +35,18 @@ async def initialize_database(database_path: Path) -> None:
         if version == LATEST_SCHEMA_VERSION:
             return
 
-        if version in {4, 5, 6, 7}:
+        if version in {4, 5, 6, 7, 8}:
             try:
-                migration_sql = ""
-
-                if version == 4:
-                    migration_sql += MIGRATION_4_TO_5_SQL + "\n"
-
-                if version in {4, 5}:
-                    migration_sql += MIGRATION_5_TO_6_SQL + "\n"
-
-                if version in {4, 5, 6}:
-                    migration_sql += MIGRATION_6_TO_7_SQL
-                migration_sql += MIGRATION_7_TO_8_SQL
+                steps = (
+                    (4, MIGRATION_4_TO_5_SQL),
+                    (5, MIGRATION_5_TO_6_SQL),
+                    (6, MIGRATION_6_TO_7_SQL),
+                    (7, MIGRATION_7_TO_8_SQL),
+                    (8, MIGRATION_8_TO_9_SQL),
+                )
+                migration_sql = "\n".join(
+                    sql for source_version, sql in steps if version <= source_version
+                )
 
                 await db.executescript(
                     "BEGIN IMMEDIATE;\n"
@@ -58,7 +64,7 @@ async def initialize_database(database_path: Path) -> None:
         if version != 0:
             raise RuntimeError(
                 "Unsupported database schema version: "
-                f"{version}; expected 0, 4, 5, 6, 7, "
+                f"{version}; expected 0, 4, 5, 6, 7, 8, "
                 f"or {LATEST_SCHEMA_VERSION}"
             )
 

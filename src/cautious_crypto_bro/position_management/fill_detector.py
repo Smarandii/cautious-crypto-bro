@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ._helpers import _matches_exit
+
 if TYPE_CHECKING:
     from ..domain import AccountPosition, AccountStateSummary, PositionStrategy
     from ..ports import AccountGateway
@@ -14,6 +16,51 @@ class FillDetector:
         executor: AccountGateway,
     ) -> None:
         self._executor = executor
+
+    async def drift_reason(
+        self, state: PositionStrategy, account: AccountStateSummary
+    ) -> str | None:
+        if state.exit_revision <= 0 or state.rebalance_needed:
+            return None
+        if state.expected_exits is None:
+            return "Legacy exit snapshot unavailable; manual review required"
+        prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-t"
+        if any(
+            order.symbol == state.symbol
+            and order.order_link_id.startswith(prefix)
+            and order.order_link_id not in state.expected_exits
+            for order in account.open_orders
+        ):
+            return "Unexpected owned fixed exit outside the saved revision"
+        completed = {
+            self.exit_link_id(state, index)
+            for index, done in enumerate(
+                (state.tp1_done, state.tp2_done, state.tp3_done), 1
+            )
+            if done
+        }
+        for link, (quantity, price) in state.expected_exits.items():
+            if link in completed:
+                continue
+            order = next(
+                (
+                    item
+                    for item in account.open_orders
+                    if item.symbol == state.symbol and item.order_link_id == link
+                ),
+                None,
+            )
+            if order is None:
+                order = await self._executor.strategy_order(state.symbol, link)
+            if order is None:
+                return f"Owned exit missing or unconfirmed: {link}"
+            if not _matches_exit(order, state.side, quantity, price):
+                return (
+                    f"Owned exit changed or canceled: {link}; status={order.status}; "
+                    f"expected qty/price={quantity}/{price}, "
+                    f"live={order.quantity}/{order.price}"
+                )
+        return None
 
     async def detect(
         self,

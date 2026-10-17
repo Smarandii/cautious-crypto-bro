@@ -26,6 +26,7 @@ from cautious_crypto_bro.domain import (
     Side,
     SignalExtraction,
     SourceMessage,
+    StrategyStatus,
     TradingIntent,
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
@@ -634,7 +635,11 @@ def test_cancelled_exit_is_not_inferred_as_profit_fill(tmp_path):
             order["leavesQty"] = "0"
             exchange.size -= D("0.1")  # unrelated manual reduction
             await supervisor.reconcile_once()
-            saved = await state_for(store)
+            alerts = await store.get_pending_strategy_alerts()
+            assert len(alerts) == 1
+            saved = alerts[0]
+            assert saved.status is StrategyStatus.MANUAL_OVERRIDE
+            assert not await store.get_active_position_strategies()
             assert not any((saved.tp1_done, saved.tp2_done, saved.tp3_done))
 
     asyncio.run(run())

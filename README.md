@@ -57,6 +57,8 @@ recovered actions. Preview failures do not suppress the execution result.
 - MARKET E1 fills before E2/E3 are calculated and submitted.
 - Pre-submit failures close empty strategies; potentially accepted submissions
   stay quarantined. Paused strategies require deliberate recovery.
+- Fixed-exit edits, cancellation, or missing orders pause automation with a
+  persisted reason and retryable Telegram alert; existing orders remain intact.
 
 See [STRATEGY.md](STRATEGY.md) for execution rules, [TESTING.md](TESTING.md) for
 checks and operations, [CHANGELOG.md](CHANGELOG.md) for release history, and

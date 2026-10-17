@@ -300,6 +300,10 @@ class PositionSupervisor:
             if position is None:
                 return account
 
+        exit_drift = await self._fill_detector.drift_reason(state, account)
+        if exit_drift is not None:
+            return await self._manual_override(state, account, exit_drift)
+
         live_r = self._live_r(
             position,
             plan.stop_loss,
@@ -394,6 +398,8 @@ class PositionSupervisor:
             state.model_copy(
                 update={
                     "status": (StrategyStatus.MANUAL_OVERRIDE),
+                    "pause_reason": reason,
+                    "pause_notified": False,
                 }
             )
         )
@@ -413,7 +419,12 @@ class PositionSupervisor:
             size=state.last_position_qty or position.size,
             avg_price=state.last_avg_price or position.avg_price,
         )
-        account, stop, trail = await self._exit_installer.install_structure(
+        (
+            account,
+            stop,
+            trail,
+            expected_exits,
+        ) = await self._exit_installer.install_structure(
             state,
             plan,
             snapshot,
@@ -426,6 +437,7 @@ class PositionSupervisor:
                     "installing_exits": False,
                     "protected_stop_loss": stop,
                     "trailing_distance": trail,
+                    "expected_exits": expected_exits,
                     "status": (
                         StrategyStatus.PROFIT_PROTECTED
                         if state.trailing_active
@@ -619,6 +631,7 @@ class PositionSupervisor:
             account,
             installed_stop,
             installed_trail,
+            expected_exits,
         ) = await self._exit_installer.install_structure(
             state,
             plan,
@@ -632,6 +645,7 @@ class PositionSupervisor:
                 update={
                     "protected_stop_loss": (installed_stop),
                     "trailing_distance": (installed_trail),
+                    "expected_exits": expected_exits,
                 }
             ),
             account,
@@ -678,6 +692,7 @@ class PositionSupervisor:
             account,
             installed_stop,
             installed_trail,
+            expected_exits,
         ) = await self._exit_installer.install_structure(
             state,
             plan,
@@ -691,6 +706,7 @@ class PositionSupervisor:
                 "trailing_active": trailing,
                 "protected_stop_loss": (installed_stop),
                 "trailing_distance": (installed_trail),
+                "expected_exits": expected_exits,
                 "status": (
                     StrategyStatus.PROFIT_PROTECTED
                     if trailing

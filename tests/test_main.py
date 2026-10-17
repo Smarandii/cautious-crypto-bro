@@ -55,6 +55,7 @@ def test_initial_reconciliation_precedes_any_execution(
         start=step("bot.start"),
         send_recovery_warning=warning,
         run=step("bot.run"),
+        run_strategy_alert_delivery=step("bot.strategy_alerts"),
         close=step("bot.close"),
     )
     service = SimpleNamespace(

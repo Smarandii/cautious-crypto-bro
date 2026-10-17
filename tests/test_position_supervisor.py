@@ -564,7 +564,7 @@ def test_supervisor_installs_exits_before_profit_threshold() -> None:
     assert store.state.exit_revision == 1
 
 
-def test_active_strategy_replaces_legacy_partial_stops_once() -> None:
+def test_legacy_strategy_hands_off_partial_stops_before_manual_review() -> None:
     strategy_plan = plan()
     state = PositionStrategy(
         strategy_id=strategy_plan.intent_id,
@@ -626,7 +626,8 @@ def test_active_strategy_replaces_legacy_partial_stops_once() -> None:
     assert executor.protection == [("BTCUSDT", Decimal("90"), None)]
     assert executor.cancelled_orders == ["partial-1", "partial-2", "partial-3"]
     assert [o.order_id for o in executor.state.open_orders] == ["partial-4"]
-    assert store.state.status is StrategyStatus.OPEN_RISK
+    assert store.state.status is StrategyStatus.MANUAL_OVERRIDE
+    assert "Legacy exit snapshot" in store.state.pause_reason
 
 
 def test_failed_full_stop_verification_does_not_cancel_partials() -> None:

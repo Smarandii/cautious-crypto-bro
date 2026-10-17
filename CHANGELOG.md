@@ -25,6 +25,11 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Persist submitted fixed-exit geometry and pause on owned-exit drift, including
+  canceled partially filled orders. Keep genuine fills and omitted small exits
+  distinct; retry operator pause alerts durably after Telegram failures/restart.
+- Add schema 9 migration for exit snapshots and pause alerts. Installed legacy
+  revisions without a snapshot require review after verified protection handoff.
 - Recover durable failed/stale source posts independently of the Telegram history
   cursor, including full image albums after restart. Keep active claims intact.
 - Recover all pending AUTO records rather than silently stopping after 100 opens
