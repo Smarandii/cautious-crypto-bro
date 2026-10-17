@@ -27,6 +27,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 - Hold shared-state ownership from before SQLite initialization through runtime
   cleanup; reject duplicate app startup without quarantining another owner's work.
+- Defer task cancellation through locked exchange execution and durable outcomes;
+  drain Bybit workers before releasing locks or closing clients, including repeated
+  cancellation. Preserve cancellation propagation and log delayed worker errors.
 - Stop the supervisor symbol sweep on raw SQLite write failures, preserving the
   storage error cause instead of continuing exchange mutations on other symbols.
 - Persist submitted fixed-exit geometry and pause on owned-exit drift, including
