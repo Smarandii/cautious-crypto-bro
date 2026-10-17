@@ -25,6 +25,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Close acquired runtime clients after partial startup failure and continue cleanup
+  after a close fails, retaining exception chains and shared-state ownership until
+  cleanup finishes. Close Redis's owned pool even when its client close fails.
 - Hold shared-state ownership from before SQLite initialization through runtime
   cleanup; reject duplicate app startup without quarantining another owner's work.
 - Stop the supervisor symbol sweep on raw SQLite write failures, preserving the
