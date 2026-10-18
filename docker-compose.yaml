@@ -23,6 +23,7 @@ services:
 
   app:
     image: ${CCB_IMAGE:-cautious-crypto-bro:local}
+    stop_grace_period: 2m
     build:
       context: .
       target: runtime

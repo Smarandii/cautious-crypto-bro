@@ -1,4 +1,5 @@
 import asyncio
+import signal
 from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -252,3 +253,36 @@ def test_cleanup_attempts_all_clients_and_preserves_failure_chain(
     ]
     with fake.app.state_ownership(fake.settings.database_path):
         pass
+
+
+def test_sigterm_cleans_partial_startup_and_restores_handler(monkeypatch, tmp_path):
+    fake = _fake_application(monkeypatch, tmp_path)
+    previous = signal.getsignal(signal.SIGTERM)
+
+    async def terminate():
+        signal.raise_signal(signal.SIGTERM)
+        signal.raise_signal(signal.SIGTERM)
+        await asyncio.Event().wait()
+
+    fake.bot.start = terminate
+    asyncio.run(fake.app.async_main())
+    assert fake.events[-5:] == [
+        "source.disconnect",
+        "bot.close",
+        "executor.close",
+        "extractor.close",
+        "runtime.close",
+    ]
+    assert signal.getsignal(signal.SIGTERM) == previous
+    with fake.app.state_ownership(fake.settings.database_path):
+        pass
+
+
+def test_unrequested_cancellation_propagates_after_cleanup(monkeypatch, tmp_path):
+    fake = _fake_application(monkeypatch, tmp_path)
+    previous = signal.getsignal(signal.SIGTERM)
+    fake.bot.start = AsyncMock(side_effect=asyncio.CancelledError)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(fake.app.async_main())
+    assert fake.events[-1] == "runtime.close"
+    assert signal.getsignal(signal.SIGTERM) == previous
