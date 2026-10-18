@@ -495,24 +495,27 @@ class ExecutionCoordinator:
                 action=action,
             )
 
-        action, terminal = await self._claim_position_action(
-            action_id,
-            action,
-            approval_mode=approval_mode,
-            user_id=user_id,
-        )
-
-        if terminal is not None:
-            return terminal
-
         async with self._execution_lock:
             return await finish_before_cancellation(
-                self._execute_claimed_position_action(action)
+                self._execute_locked_position_action(
+                    action, approval_mode=approval_mode, user_id=user_id
+                )
             )
 
-    async def _execute_claimed_position_action(
-        self, action: PositionActionIntent
+    async def _execute_locked_position_action(
+        self,
+        action: PositionActionIntent,
+        *,
+        approval_mode: ApprovalMode,
+        user_id: int | None,
     ) -> PositionActionExecutionOutcome:
+        # Check age and claim only after queueing, then finish the durable
+        # transition under the same cancellation shield as exchange work.
+        action, terminal = await self._claim_position_action(
+            action.action_id, action, approval_mode=approval_mode, user_id=user_id
+        )
+        if terminal is not None:
+            return terminal
         action_id = action.action_id
         result: PositionActionExecutionResult | None = None
         if action.action is PositionActionType.CANCEL_ENTRIES:
