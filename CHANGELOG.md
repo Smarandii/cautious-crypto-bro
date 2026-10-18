@@ -28,6 +28,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Restrict source distributions to explicit public project paths so local caches
+  and environment variants cannot enter release archives from the workspace root.
+  Preserve shipped source, scripts, tests and docs; verify real archives with
+  synthetic private-file canaries and install the resulting wheel in CI.
 - Close acquired runtime clients after partial startup failure and continue cleanup
   after a close fails, retaining exception chains and shared-state ownership until
   cleanup finishes. Close Redis's owned pool even when its client close fails.
