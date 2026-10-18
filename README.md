@@ -117,6 +117,13 @@ history request can leave an older timestamp; a ledger read failure displays
   an interrupted source claim still follows the existing stale-lease recovery.
   This bounds active post/model pipelines, not individual image bytes or the
   number of waiting Telethon handlers. Exchange mutations remain serialized.
+- Telegram posts have a 20 MiB total raw-image budget, shared across the whole
+  album. Downloads use bounded output streams. Exceeding the budget rejects the
+  entire post before extraction; no partial images or captions alone reach the
+  model. The source ledger records a terminal `COMPLETED` processing disposition
+  with the rejection reason in `last_error`, and logs a warning. Later posts keep
+  progressing; oversized posts are not retried automatically. Repost smaller
+  images as a new post. Transient and empty downloads retain normal retry behavior.
 - OPEN needs symbol, direction and explicit MARKET/LIMIT/RANGE semantics.
   Missing stops use a deterministic 2% fallback; missing targets use policy exits.
 - Entries copy explicit trader leverage from text/images, with a 10x fallback.

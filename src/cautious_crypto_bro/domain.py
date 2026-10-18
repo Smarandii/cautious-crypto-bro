@@ -487,6 +487,7 @@ class ImageAttachment:
 class IncomingPost:
     source: SourceMessage
     images: tuple[ImageAttachment, ...] = ()
+    rejection_reason: str | None = None
 
 
 class Entry(BaseModel):

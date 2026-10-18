@@ -256,6 +256,8 @@ class SourceRepository(Protocol):
         self,
         source: SourceMessage,
         claim_token: str,
+        *,
+        reason: str | None = None,
     ) -> bool: ...
 
     async def mark_source_failed(
