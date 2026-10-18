@@ -77,6 +77,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
   state ownership through cleanup, including repeated termination and startup.
   Allow a two-minute Compose stop grace period; forced termination still uses
   startup quarantine.
+- Fail the application after a terminal Telegram listener disconnect instead of
+  leaving ingestion absent while background tasks keep running. Use existing
+  TaskGroup cancellation, client cleanup and Compose restart behavior.
 - Restrict source distributions to explicit public project paths so local caches
   and environment variants cannot enter release archives from the workspace root.
   Preserve shipped source, scripts, tests and docs; verify real archives with

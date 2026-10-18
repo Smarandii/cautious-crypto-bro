@@ -240,6 +240,80 @@ def test_partial_startup_closes_every_acquired_client(
         pass
 
 
+@pytest.mark.parametrize("listener_fails", [False, True])
+def test_terminal_telegram_disconnect_stops_siblings_and_releases_state(
+    monkeypatch, tmp_path, listener_fails
+):
+    from cautious_crypto_bro.supervision_health import (
+        publish_success,
+        supervision_health_path,
+    )
+    from cautious_crypto_bro.telegram_source import TelegramSource
+
+    fake = _fake_application(monkeypatch, tmp_path)
+    start = fake.source.start
+
+    async def source_start():
+        publish_success(supervision_health_path(fake.settings.database_path))
+        await start()
+
+    fake.source.start = source_start
+
+    async def background():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            fake.events.append("background.stopped")
+
+    async def disconnected():
+        fake.events.append("source.disconnected")
+        if listener_fails:
+            raise RuntimeError("synthetic listener failure")
+
+    # Keep the actual source adapter; replace only its Telegram client boundary.
+    client = SimpleNamespace(run_until_disconnected=disconnected)
+
+    async def listener():
+        await TelegramSource.run_until_disconnected(SimpleNamespace(_client=client))
+
+    fake.source.run_until_disconnected = listener
+    fake.source.run_catchup = background
+    fake.bot.run = background
+    fake.bot.run_strategy_alert_delivery = background
+    fake.app.PositionSupervisor().run = background
+    service = fake.app.SignalService()
+    service.run_delivery_recovery = background
+    service.run_periodic_account_pnl_sync = background
+
+    async def run():
+        # A normal-returning listener previously left these six siblings alive.
+        with pytest.raises(ExceptionGroup) as caught:
+            await asyncio.wait_for(fake.app.async_main(), timeout=2)
+        errors = caught.value.exceptions
+        assert len(errors) == 1 and isinstance(errors[0], RuntimeError)
+        assert str(errors[0]) == (
+            "synthetic listener failure"
+            if listener_fails
+            else "Telegram source disconnected; ingestion stopped"
+        )
+
+    asyncio.run(run())
+    assert fake.events.count("background.stopped") == 6
+    assert max(
+        i for i, event in enumerate(fake.events) if event == "background.stopped"
+    ) < (fake.events.index("source.disconnect"))
+    assert fake.events[-5:] == [
+        "source.disconnect",
+        "bot.close",
+        "executor.close",
+        "extractor.close",
+        "runtime.close",
+    ]
+    assert not supervision_health_path(fake.settings.database_path).exists()
+    with fake.app.state_ownership(fake.settings.database_path):
+        pass
+
+
 def test_cleanup_attempts_all_clients_and_preserves_failure_chain(
     monkeypatch, tmp_path
 ):
