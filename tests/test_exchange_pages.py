@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from test_remaining_concerns import Exchange, executor_for, make_intent
+from test_remaining_concerns import Exchange, executor_for, make_intent, source
 
 from cautious_crypto_bro.domain import (
     ApprovalMode,
@@ -13,12 +13,95 @@ from cautious_crypto_bro.domain import (
     InstrumentContext,
     IntentStatus,
     OpenRelation,
+    PositionActionIntent,
+    PositionActionType,
+    Side,
+    TradeExecutionError,
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.storage import IntentStore
 
 pytestmark = pytest.mark.integration
+
+
+class SymbolPagedExchange(Exchange):
+    def __init__(self, endpoint, pages):
+        super().__init__()
+        self.size = Decimal("1")
+        self.endpoint = endpoint
+        self.pages = pages
+        self.page_requests = []
+
+    def handle(self, request):
+        if request.url.path == self.endpoint and "symbol" in request.url.params:
+            self.page_requests.append(dict(request.url.params))
+            # Bound the broken implementation too, without hanging the suite.
+            assert len(self.page_requests) <= len(self.pages), "Pagination did not stop"
+            return httpx.Response(200, json=self.pages[len(self.page_requests) - 1])
+        return super().handle(request)
+
+
+@pytest.mark.parametrize("endpoint", ["/v5/position/list", "/v5/order/realtime"])
+@pytest.mark.parametrize("fault", ["missing-list", "repeated-cursor"])
+def test_invalid_symbol_pages_stop_close_before_any_mutation(endpoint, fault):
+    async def run():
+        pages = (
+            [{"retCode": 0, "result": {}}]
+            if fault == "missing-list"
+            else [
+                {"retCode": 0, "result": {"list": [], "nextPageCursor": "A"}},
+                {"retCode": 0, "result": {"list": [], "nextPageCursor": "A"}},
+            ]
+        )
+        exchange = SymbolPagedExchange(endpoint, pages)
+        action = PositionActionIntent(
+            source=source("Close BTCUSDT"),
+            symbol="BTCUSDT",
+            action=PositionActionType.CLOSE,
+            expected_side=Side.LONG,
+            summary="Close position",
+            confidence=1,
+        )
+        with executor_for(exchange) as executor:
+            with pytest.raises(TradeExecutionError, match="Bybit.*page"):
+                await executor.execute_position_action(action)
+        assert len(exchange.page_requests) == len(pages)
+        assert not any(
+            path in {"/v5/order/cancel", "/v5/order/create", "/v5/order/create-batch"}
+            for path, _ in exchange.requests
+        )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("endpoint", ["/v5/position/list", "/v5/order/realtime"])
+def test_symbol_exposure_includes_later_pages_and_preserves_filters(endpoint):
+    exchange = SymbolPagedExchange(endpoint, [])
+    row = exchange.position() | {
+        "orderLinkId": "ccb-existing",
+        "reduceOnly": False,
+        "leavesQty": "1",
+        "price": "100",
+    }
+    exchange.pages = [
+        {"retCode": 0, "result": {"list": [], "nextPageCursor": "next"}},
+        {"retCode": 0, "result": {"list": [row], "nextPageCursor": ""}},
+    ]
+    with executor_for(exchange) as executor:
+        exposure = executor._exposure_sync("BTCUSDT")
+    if endpoint == "/v5/position/list":
+        assert len(exposure.positions) == 1
+        assert exposure.positions[0].size == Decimal("1")
+    else:
+        assert len(exposure.pending_entry_orders) == 1
+    first, second = exchange.page_requests
+    assert first["symbol"] == "BTCUSDT"
+    assert second == first | {"cursor": "next"}
+    if endpoint == "/v5/order/realtime":
+        assert first["openOnly"] == "0"
+        assert first["orderFilter"] == "Order"
+        assert first["limit"] == "50"
 
 
 async def prepared_entry(path, executor, mode=ApprovalMode.MANUAL):

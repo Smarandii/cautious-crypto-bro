@@ -46,6 +46,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Validate every position-action exposure page with the shared Bybit paginator.
+  Reject missing lists and repeated cursors before cancellation or close submission,
+  and include later position pages instead of silently dropping their exposure.
+
 - Reject missing or malformed exchange list pages and cyclic page cursors before
   account safety checks can mistake unavailable exposure for an empty account.
 - Remove closed-P&L history fetches from signal processing and AUTO result
