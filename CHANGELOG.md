@@ -13,6 +13,13 @@ what remains unproven.
 
 Refactoring, correctness and repository hardening since `v2.0.0`.
 
+### Added
+
+- Offline state-backup CLI snapshots the application database and Telegram session
+  under the existing owner lock, includes committed WAL data, refuses overwrites
+  and verifies an isolated restore before success. Add a Docker backup/restore
+  drill with saved hashes, image identity and explicit cutover checks.
+
 ### Changed
 
 - Extracted strategy supervision into phased builders and split execution,

@@ -38,6 +38,10 @@ For a published image, pull the chosen tag/digest before `up --no-build`. Preser
 a stopped-writer state backup before upgrades; see [STRATEGY.md](STRATEGY.md) for
 schema compatibility and rollback.
 
+[State backup and restore drill](docs/state-backups.md) provides a locked,
+offline backup command and an isolated verification workflow for SQLite and the
+Telegram session. It leaves live restore/cutover as an explicit operator step.
+
 Run one app per shared SQLite state directory. Startup takes an OS-held lock at
 `DATABASE_PATH.owner.lock` before database initialization, migration or quarantine,
 and holds it through shutdown. A second cooperating instance exits before touching
