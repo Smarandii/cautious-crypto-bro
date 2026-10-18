@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
 from uuid import UUID
 
 from aiogram import (
@@ -11,6 +13,7 @@ from aiogram import (
     F,
     Router,
 )
+from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import (
     CallbackData,
 )
@@ -19,6 +22,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    TelegramObject,
 )
 from aiogram.utils.backoff import (
     BackoffConfig,
@@ -28,8 +32,10 @@ from .approval_presenter import (
     render,
     render_account_state,
     render_action_outcome,
+    render_operator_attention,
     render_position_action,
 )
+from .cancellation import finish_before_cancellation
 from .domain import (
     AccountPnlSummary,
     AccountSnapshotDelivery,
@@ -50,6 +56,8 @@ from .ports import (
 )
 
 logger = logging.getLogger(__name__)
+
+ATTENTION_PAGE_SIZE = 5
 
 POLLING_BACKOFF = BackoffConfig(
     min_delay=5.0,
@@ -88,6 +96,8 @@ class ApprovalBot:
         self._bot = Bot(token=token)
         self._dispatcher = Dispatcher()
         self._router = Router()
+        self._update_tasks: set[asyncio.Task[Any]] = set()
+        self._dispatcher.update.outer_middleware(self._track_update)
 
         self._dispatcher.include_router(self._router)
 
@@ -95,6 +105,7 @@ class ApprovalBot:
         self._approver_user_id = approver_user_id
         self._store = store
         self._executor = executor
+        self._router.message(Command("attention"))(self._attention)
 
         self._router.callback_query(IntentAction.filter(F.action == "execute"))(
             self._execute
@@ -110,14 +121,93 @@ class ApprovalBot:
             self._skip_position_action
         )
 
+    async def _attention(self, message: Message, command: CommandObject) -> None:
+        if (
+            message.chat.id != self._approval_chat_id
+            or message.from_user is None
+            or message.from_user.id != self._approver_user_id
+        ):
+            return
+        argument = (command.args or "1").strip()
+        if (
+            not argument.isascii()
+            or not argument.isdecimal()
+            or len(argument) > 6
+            or int(argument) < 1
+        ):
+            await self._send_html("Usage: /attention [page number from 1 to 999999]")
+            return
+        page = int(argument)
+        try:
+            items = await self._store.get_operator_attention(
+                limit=ATTENTION_PAGE_SIZE + 1,
+                offset=(page - 1) * ATTENTION_PAGE_SIZE,
+            )
+        except Exception:
+            logger.exception("Failed to read operator attention records")
+            await self._send_html(
+                "Operator review unavailable: local storage could not be read. "
+                "Try again; this does not mean there are no quarantined records."
+            )
+            return
+        await self._send_html(
+            render_operator_attention(
+                items[:ATTENTION_PAGE_SIZE],
+                page=page,
+                has_more=len(items) > ATTENTION_PAGE_SIZE,
+            )
+        )
+
     async def start(self) -> None:
         await self._bot.delete_webhook(drop_pending_updates=False)
 
     async def run(self) -> None:
-        await self._dispatcher.start_polling(
-            self._bot,
-            backoff_config=(POLLING_BACKOFF),
+        polling = asyncio.create_task(
+            self._dispatcher.start_polling(
+                self._bot,
+                backoff_config=POLLING_BACKOFF,
+                handle_signals=False,
+                close_bot_session=False,
+            )
         )
+        try:
+            await asyncio.shield(polling)
+        finally:
+            await finish_before_cancellation(self._finish_polling(polling))
+
+    async def _track_update(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        task = asyncio.current_task()
+        assert task is not None
+        self._update_tasks.add(task)
+        try:
+            return await handler(event, data)
+        finally:
+            self._update_tasks.discard(task)
+
+    async def _finish_polling(self, polling: asyncio.Task[Any]) -> None:
+        # Let a newly scheduled poller enter its lifecycle before asking it to stop.
+        await asyncio.sleep(0)
+        if not polling.done():
+            try:
+                await self._dispatcher.stop_polling()
+            except RuntimeError:
+                polling.cancel()  # Startup never entered polling.
+        results = list(await asyncio.gather(polling, return_exceptions=True))
+        updates = tuple(self._update_tasks)
+        for task in updates:
+            task.cancel()
+        results += await asyncio.gather(*updates, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(
+                    "Telegram task failed during shutdown",
+                    exc_info=(type(result), result, result.__traceback__),
+                )
 
     async def close(self) -> None:
         await self._bot.session.close()

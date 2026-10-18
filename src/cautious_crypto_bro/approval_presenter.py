@@ -13,6 +13,7 @@ from .domain import (
     ExecutionPlan,
     IntentStatus,
     OpenOrderExposure,
+    OperatorAttentionItem,
     PositionActionExecutionOutcome,
     PositionActionIntent,
     PositionActionType,
@@ -22,6 +23,43 @@ from .domain import (
     TakeProfitSource,
     TradingIntent,
 )
+
+
+def render_operator_attention(
+    items: tuple[OperatorAttentionItem, ...], *, page: int, has_more: bool
+) -> str:
+    lines = [
+        f"<b>Needs operator review — page {page}</b>",
+        "Local records only; not a live exchange check.",
+    ]
+    if not items:
+        lines.append(
+            "No paused or uncertain records."
+            if page == 1
+            else "No records on this page. Start again with /attention."
+        )
+    for item in items:
+        reason = item.reason or (
+            "No pause reason recorded (legacy state)."
+            if item.status == "MANUAL_OVERRIDE"
+            else "Exchange outcome unknown; not retried automatically."
+        )
+        if len(reason) > 240:
+            reason = reason[:240] + "… (truncated)"
+        lines.append(
+            f"\n<b>{html.escape(item.symbol[:40])}</b> — {item.kind}\n"
+            f"{html.escape(item.status)}\n"
+            f"<code>{item.record_id}</code>\n"
+            f"Updated: {html.escape(item.updated_at[:40])}\n"
+            f"{html.escape(reason)}"
+        )
+    if has_more:
+        lines.append(f"\nNext: /attention {page + 1}")
+    lines.append(
+        "\nRead-only. Reconcile positions, orders and protection on Bybit before "
+        "any retry. This command does not resume automation or acknowledge alerts."
+    )
+    return "\n".join(lines)
 
 
 def fmt_decimal(value: Decimal) -> str:

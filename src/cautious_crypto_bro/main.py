@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from types import FrameType
 from uuid import UUID
 
 from .approval_bot import ApprovalBot
@@ -34,8 +36,27 @@ async def async_main() -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    with state_ownership(settings.database_path):
-        await _run_owned_application(settings)
+    loop = asyncio.get_running_loop()
+    application = asyncio.current_task()
+    assert application is not None
+    shutdown_requested = False
+
+    def request_shutdown(_signum: int, _frame: FrameType | None) -> None:
+        nonlocal shutdown_requested
+        if not shutdown_requested:
+            shutdown_requested = True
+            loop.call_soon_threadsafe(application.cancel)
+
+    previous_handler = signal.signal(signal.SIGTERM, request_shutdown)
+    try:
+        with state_ownership(settings.database_path):
+            await _run_owned_application(settings)
+    except asyncio.CancelledError:
+        if not shutdown_requested:
+            raise
+        logging.getLogger(__name__).info("SIGTERM shutdown complete")
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
 
 
 async def _run_owned_application(settings: Settings) -> None:

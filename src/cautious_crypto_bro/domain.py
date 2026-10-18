@@ -354,6 +354,16 @@ class StrategyStatus(StrEnum):
     UNCERTAIN = "UNCERTAIN"
 
 
+@dataclass(frozen=True, slots=True)
+class OperatorAttentionItem:
+    kind: Literal["strategy", "entry", "action"]
+    record_id: UUID
+    symbol: str
+    status: str
+    reason: str | None
+    updated_at: str
+
+
 def _normalize_usdt_symbol(
     symbol: str,
 ) -> str:
