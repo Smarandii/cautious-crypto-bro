@@ -22,6 +22,9 @@ docker compose logs -f app
 Fill `.env` with credentials and account/channel IDs from [.env.example](.env.example).
 The dialog helper authorizes the Telegram session.
 
+Git and Docker ignore `.env` and `.env.*` files, including nested locations;
+`.env.example` remains a public template. Keep real credentials out of examples.
+
 Default Compose runs code packaged in the image and mounts only `/state` into the
 app. Editing the checkout does not change the running app; rebuild/recreate to
 apply changes. `CCB_IMAGE` selects an image tag or registry digest, defaulting to
