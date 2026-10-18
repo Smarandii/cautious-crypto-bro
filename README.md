@@ -22,6 +22,9 @@ docker compose logs -f app
 Fill `.env` with credentials and account/channel IDs from [.env.example](.env.example).
 The dialog helper authorizes the Telegram session.
 
+Git and Docker ignore `.env` and `.env.*` files, including nested locations;
+`.env.example` remains a public template. Keep real credentials out of examples.
+
 Default Compose runs code packaged in the image and mounts only `/state` into the
 app. Editing the checkout does not change the running app; rebuild/recreate to
 apply changes. `CCB_IMAGE` selects an image tag or registry digest, defaulting to
@@ -56,6 +59,13 @@ The caller still receives cancellation afterward; cancellation does not withdraw
 orders. Direct Bybit calls also drain their synchronous worker before unwinding.
 This can delay shutdown by the duration of an in-flight request/workflow. Hard
 process termination still relies on startup quarantine for unknown outcomes.
+
+SIGTERM requests application-wide shutdown, including partial startup. Polling
+stops accepting updates; active Telegram handlers and non-abortable exchange work
+drain before clients close and state ownership is released. Repeated SIGTERM does
+not interrupt this cleanup. Compose allows two minutes before force-killing the
+container; unusually long workflows can exceed that window and will still need
+startup quarantine. SIGINT keeps Python's normal Ctrl-C behavior.
 
 The source reconciles each channel against history every
 `TELEGRAM_CATCHUP_INTERVAL_SECONDS` to recover posts absent from live processing.
@@ -110,6 +120,21 @@ conventions, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and
 blocked, and merged branches are auto-deleted. Protection applies to `master`
 only, so feature branches stay freely pushable and deletable.
 
+## Operator review
+
+In the configured approval chat, the configured approver can send `/attention`
+or `/attention 2` to inspect paused (`MANUAL_OVERRIDE`) and `UNCERTAIN` strategies,
+plus uncertain entry and position-action executions. Each page contains up to five
+records with their type, ID, update time and recorded reason. Already-delivered
+pause alerts and legacy strategies without a reason remain visible. Long reasons
+are explicitly truncated in the message; the complete reason stays in SQLite.
+
+This reads local durable state, not current exchange state. Reconcile positions,
+orders and protection on Bybit before any retry. The command neither resumes
+automation nor changes execution statuses or acknowledges pause alerts. Pages are
+read afresh, so changing records can move between requests; restart at page 1 if
+the list changes during review. An empty list does not prove the exchange is flat.
+
 ## Development
 
 For source-mounted Docker development, explicitly select the development file:
@@ -132,6 +157,12 @@ uv sync --python 3.12 --group dev
 uv run pre-commit install
 uv run pytest -q
 ```
+
+Source distributions use explicit public paths in `pyproject.toml`; add new
+top-level distribution files there deliberately. Private state and credentials
+must stay outside the included source, scripts, tests and docs directories.
+CI builds with synthetic local-file canaries, checks archive contents and imports
+the installed wheel from an isolated environment outside the checkout.
 
 SQLite and Telegram sessions persist in Docker volume `app_state`; Redis uses
 `redis_state`. Audit exports and backups stay local and outside build context.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ._connection import SQLiteConnectionMixin
+from .attention import OperatorAttentionRepositoryImpl
 from .execution_policy import ExecutionPolicyRepositoryImpl
 from .guidance import GuidanceRepositoryImpl
 from .intent import IntentRepositoryImpl
@@ -15,6 +16,7 @@ from .source import SourceRepositoryImpl
 
 class SQLiteStore(
     SQLiteConnectionMixin,
+    OperatorAttentionRepositoryImpl,
     SourceRepositoryImpl,
     IntentRepositoryImpl,
     PositionActionRepositoryImpl,
