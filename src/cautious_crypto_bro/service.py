@@ -464,6 +464,19 @@ class SignalService:
         if claim_token is None:
             return
 
+        if post.rejection_reason is not None:
+            if not await self._store.mark_source_completed(
+                source, claim_token, reason=post.rejection_reason
+            ):
+                raise RuntimeError("Source rejection could not be recorded")
+            logger.warning(
+                "Rejected Telegram post %s/%s: %s",
+                source.channel_id,
+                source.message_id,
+                post.rejection_reason,
+            )
+            return
+
         batch = await self._extract_and_plan(post, claim_token)
         if batch is None:
             return

@@ -4,6 +4,7 @@ import asyncio
 import logging
 from collections.abc import (
     Awaitable,
+    Buffer,
     Callable,
     Sequence,
 )
@@ -12,6 +13,7 @@ from datetime import (
     datetime,
     timedelta,
 )
+from io import BytesIO
 from typing import Any, cast
 
 from telethon import (
@@ -29,6 +31,23 @@ from .domain import (
 )
 
 logger = logging.getLogger(__name__)
+MAX_POST_IMAGE_BYTES = 20 * 1024 * 1024
+
+
+class _ImageBudgetExceeded(ValueError):
+    pass
+
+
+class _BoundedImageBuffer(BytesIO):
+    def __init__(self, limit: int) -> None:
+        super().__init__()
+        self._limit = limit
+
+    def write(self, data: Buffer, /) -> int:
+        if self.tell() + memoryview(data).nbytes > self._limit:
+            raise _ImageBudgetExceeded
+        return super().write(data)
+
 
 MessageHandler = Callable[
     [IncomingPost],
@@ -73,9 +92,17 @@ async def telegram_messages_to_post(
     if resolved_chat is None:
         return None
 
-    texts, images = await _collect_album_content(ordered)
+    texts = _album_captions(ordered)
+    rejection_reason = None
+    try:
+        images = await _collect_album_images(ordered)
+    except _ImageBudgetExceeded:
+        images = []
+        rejection_reason = (
+            f"Telegram post image budget exceeded ({MAX_POST_IMAGE_BYTES} bytes)"
+        )
 
-    if not texts and not images:
+    if not texts and not images and rejection_reason is None:
         logger.info(
             "Ignoring Telegram message group "
             "starting at %s: no text or "
@@ -94,30 +121,34 @@ async def telegram_messages_to_post(
     return IncomingPost(
         source=source,
         images=tuple(images),
+        rejection_reason=rejection_reason,
     )
 
 
-async def _collect_album_content(
-    ordered: tuple[Message, ...],
-) -> tuple[list[str], list[ImageAttachment]]:
+def _album_captions(ordered: tuple[Message, ...]) -> list[str]:
     texts: list[str] = []
-    images: list[ImageAttachment] = []
-
     for message in ordered:
         text = (message.message or "").strip()
-
-        # Telegram albums normally have one caption, but
-        # preserving multiple distinct captions is safer.
         if text and text not in texts:
             texts.append(text)
+    return texts
 
+
+async def _collect_album_images(ordered: tuple[Message, ...]) -> list[ImageAttachment]:
+    images: list[ImageAttachment] = []
+    remaining = MAX_POST_IMAGE_BYTES
+    for message in ordered:
         media_type = telegram_image_media_type(message)
 
         if media_type is None:
             continue
 
         try:
-            data = await message.download_media(file=bytes)
+            with _BoundedImageBuffer(remaining) as output:
+                await message.download_media(file=output)
+                data = output.getvalue()
+        except _ImageBudgetExceeded:
+            raise
         except Exception:
             logger.exception(
                 "Failed to download image from Telegram message %s",
@@ -140,8 +171,9 @@ async def _collect_album_content(
                 data=bytes(data),
             )
         )
+        remaining -= len(data)
 
-    return texts, images
+    return images
 
 
 def _album_source(

@@ -126,6 +126,8 @@ class SourceRepositoryImpl(_Store):
         self,
         source: SourceMessage,
         claim_token: str,
+        *,
+        reason: str | None = None,
     ) -> bool:
         async with aiosqlite.connect(self._database_path) as db:
             finished = await self._finish_source(
@@ -133,7 +135,7 @@ class SourceRepositoryImpl(_Store):
                 source,
                 claim_token,
                 status="COMPLETED",
-                error=None,
+                error=reason[:2000] if reason else None,
             )
             await db.commit()
             return finished

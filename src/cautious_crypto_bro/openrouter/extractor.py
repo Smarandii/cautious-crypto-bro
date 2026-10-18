@@ -1221,6 +1221,8 @@ class IntentExtractor:
         position_context: SignalPositionContext | None = None,
         bypass_evaluation_cache: bool = False,
     ) -> SignalExtraction:
+        if post.rejection_reason is not None:
+            raise ValueError(post.rejection_reason)
         source = post.source
 
         evaluation_fingerprint = _evaluation_fingerprint(

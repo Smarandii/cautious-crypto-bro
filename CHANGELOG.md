@@ -39,6 +39,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Bound raw Telegram image payloads to 20 MiB per post using download streams.
+  Reject oversized albums as a whole before model/exchange access, retain all
+  captions and a durable terminal reason, and continue with later posts. Keep
+  transient download recovery and stop catch-up when rejection cannot be recorded.
 - Own SIGTERM at application scope instead of stopping only Telegram polling.
   Stop polling and drain active update handlers before closing clients; preserve
   state ownership through cleanup, including repeated termination and startup.

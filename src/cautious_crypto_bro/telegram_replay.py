@@ -168,6 +168,8 @@ async def fetch_telegram_post(
                 raise TelegramReplayError(
                     "Telegram post contains no supported text or image"
                 )
+            if post.rejection_reason is not None:
+                raise TelegramReplayError(post.rejection_reason)
 
             return post
 

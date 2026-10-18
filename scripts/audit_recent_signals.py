@@ -697,15 +697,19 @@ async def main() -> int:
                             records.append(record)
                             continue
 
-                        if post is None:
+                        if post is None or post.rejection_reason is not None:
                             record["category"] = "PIPELINE_IGNORED"
 
                             record["decision_source"] = "production-parser"
 
                             record["evaluation_error"] = (
-                                "Production Telegram "
-                                "conversion produced no "
-                                "supported text/image post"
+                                post.rejection_reason
+                                if post
+                                else (
+                                    "Production Telegram "
+                                    "conversion produced no "
+                                    "supported text/image post"
+                                )
                             )
 
                             records.append(record)
