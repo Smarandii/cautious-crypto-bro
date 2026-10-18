@@ -281,11 +281,13 @@ async def prepare(
     side=Side.LONG,
     tp=None,
     mode=ApprovalMode.MANUAL,
-    relation=OpenRelation.UNCLASSIFIED,
+    relation: OpenRelation | None = None,
 ):
     store = IntentStore(path)
     await store.initialize()
-    intent = make_intent(side, tp, mode).model_copy(update={"relation": relation})
+    intent = make_intent(side, tp, mode)
+    if relation is not None:
+        intent = intent.model_copy(update={"relation": relation})
     planner = ExecutionPlanner()
     plan = planner.plan(
         intent,
