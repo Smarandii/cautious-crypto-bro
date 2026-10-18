@@ -46,6 +46,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Classify failed initial close/reduce reads as preflight failures, keeping the
+  existing strategy active when no mutation began. Retain durable uncertainty
+  after cancellation or submission begins, including failures on later reads.
+
 - Reject missing or malformed exchange list pages and cyclic page cursors before
   account safety checks can mistake unavailable exposure for an empty account.
 - Remove closed-P&L history fetches from signal processing and AUTO result
