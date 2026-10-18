@@ -43,6 +43,17 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Remove closed-P&L history fetches from signal processing and AUTO result
+  previews. The existing periodic worker owns history sync; previews use the
+  stored ledger with its successful-sync timestamp and explicit mixed-age total.
+  Keep persistence, execution and approval delivery independent of history outages.
+- Share a two-post intake limit across Telegram live, album, catch-up and retry
+  paths, before downloading images or claiming source work. Release admission on
+  cancellation and preserve existing durable source recovery without adding tasks.
+- Bound raw Telegram image payloads to 20 MiB per post using download streams.
+  Reject oversized albums as a whole before model/exchange access, retain all
+  captions and a durable terminal reason, and continue with later posts. Keep
+  transient download recovery and stop catch-up when rejection cannot be recorded.
 - Own SIGTERM at application scope instead of stopping only Telegram polling.
   Stop polling and drain active update handlers before closing clients; preserve
   state ownership through cleanup, including repeated termination and startup.
@@ -55,6 +66,11 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 - Ignore private `.env` variants in Git and Docker, including nested Docker
   paths, while retaining public `.env.example` templates. Verify the boundary
   with an isolated Git repository and an exported scratch-image build in CI.
+- Reserve AUTO outcome notices before execution and retry recorded terminal
+  outcomes after Telegram failure/restart, independently of AUTO trading mode.
+  Reuse durable delivery claims without a schema change; retries never call Bybit
+  or execute work. Preserve immediate rich results; recovered action cards show
+  saved status/order references and explicitly omit unavailable fill details.
 - Close acquired runtime clients after partial startup failure and continue cleanup
   after a close fails, retaining exception chains and shared-state ownership until
   cleanup finishes. Close Redis's owned pool even when its client close fails.

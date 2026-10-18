@@ -38,8 +38,11 @@ class FakeMessage:
         *,
         file,
     ):
-        assert file is bytes
-        return self._image
+        if file is bytes:
+            return self._image
+        if self._image is not None:
+            file.write(self._image)
+        return file
 
 
 class FakeTelegramClient:
@@ -419,7 +422,10 @@ def test_failed_image_retries_before_advancing_past_it(
                 if empty_download:
                     return b""
                 raise OSError("temporary download failure")
-            return b"chart"
+            if file is bytes:
+                return b"chart"
+            file.write(b"chart")
+            return file
 
     async def run():
         client = FakeTelegramClient(

@@ -279,6 +279,7 @@ class IntentExecutionOutcome:
     intent: TradingIntent | None = None
     plan: ExecutionPlan | None = None
     order_ids: tuple[str, ...] = ()
+    recovered: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +288,7 @@ class PositionActionExecutionOutcome:
     message: str
     action: PositionActionIntent | None = None
     result: PositionActionExecutionResult | None = None
+    recovered: bool = False
 
 
 class EntryType(StrEnum):
@@ -485,6 +487,7 @@ class ImageAttachment:
 class IncomingPost:
     source: SourceMessage
     images: tuple[ImageAttachment, ...] = ()
+    rejection_reason: str | None = None
 
 
 class Entry(BaseModel):

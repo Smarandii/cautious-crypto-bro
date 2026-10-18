@@ -66,6 +66,15 @@ class RecoveryStore(ServiceStore):
     async def mark_position_action_failed(self, action_id, message):
         self.failed_actions.append((action_id, message))
 
+    async def ensure_auto_outcome_delivery(self, record_id, kind):
+        pass
+
+    async def claim_manual_delivery(self, record_id):
+        return "synthetic-delivery-lease"
+
+    async def finish_manual_delivery(self, record_id, token, *, delivered):
+        pass
+
 
 class RecordingCoordinator:
     def __init__(self, *, intent_error=None, action_error=None) -> None:

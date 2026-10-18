@@ -121,7 +121,7 @@ async def owned(settings):
         supervisor=SimpleNamespace(reconcile_once=AsyncMock(), run=forever),
         service=SimpleNamespace(
             recover_auto_execution=AsyncMock(),
-            run_manual_delivery_recovery=forever,
+            run_delivery_recovery=forever,
             run_periodic_account_pnl_sync=forever,
         ),
         source=SimpleNamespace(
