@@ -35,6 +35,38 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cautious_crypto_bro"]
 
+[tool.hatch.build.targets.sdist]
+# Explicit public paths keep local environments, credentials and state out of
+# release archives and avoid traversing unrelated workspace directories.
+only-include = [
+  "src",
+  "scripts",
+  "tests",
+  "docs",
+  ".github",
+  ".dockerignore",
+  ".env.example",
+  ".gitattributes",
+  ".gitignore",
+  ".pre-commit-config.yaml",
+  "ACCESSIBILITY.md",
+  "CHANGELOG.md",
+  "CODE_OF_CONDUCT.md",
+  "CONTRIBUTING.md",
+  "Dockerfile",
+  "docker-compose.yaml",
+  "docker-compose.dev.yaml",
+  "droast.toml",
+  "LICENSE",
+  "pyproject.toml",
+  "README.md",
+  "SECURITY.md",
+  "STRATEGY.md",
+  "TESTING.md",
+  "TODO.md",
+  "uv.lock",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
