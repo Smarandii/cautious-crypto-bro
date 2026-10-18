@@ -52,7 +52,8 @@ def test_sigterm_drains_work_and_releases_ownership(tmp_path, phase):
         ],
         capture_output=True,
         text=True,
-        timeout=10,
+        # Allow cold dependency imports; the probe times the application separately.
+        timeout=60,
         env=os.environ
         | {"PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
     )
