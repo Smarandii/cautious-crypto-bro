@@ -83,11 +83,40 @@ an old close/reduce instruction does not make it fresh.
 signals, and `all` also enables eligible REDUCE/CLOSE/CANCEL_ENTRIES actions. Both manual and
 AUTO entries reject symbols already controlled by an active strategy or live
 exposure/orders. Independent V2 ladders cannot share a net position.
-Every AUTO result includes an account preview fetched after execution, including
-recovered actions. Preview failures do not suppress the execution result.
+Immediate AUTO results include an account preview fetched after execution,
+including work executed during startup recovery. Preview failures do not suppress
+the execution result.
+
+AUTO terminal notices are reserved with source work and retry durably after
+Telegram failure or restart, even if AUTO trading is later disabled. Delayed
+delivery is labeled as a recovered record and reads stored status, source/plan
+and saved order references only; it never queries Bybit or executes a trade.
+Recovered action notices explicitly mark
+exact fill details as unavailable. New terminal records get a 30-second grace
+period for immediate delivery, and retries use five-minute claims with a
+30-second failure backoff. Delivery is at least once: send acceptance followed by
+an acknowledgement failure can duplicate a notice, never its trade. Manual card
+and AUTO notice recovery failures are isolated. Pre-upgrade pending/interrupted
+work is covered; already-terminal history is not bulk-replayed.
+
+Account previews combine live exposure with stored realized P&L. Only the
+background accounting worker fetches closed-P&L history: it starts immediately
+and waits 15 minutes between attempts. Signal processing and result previews
+never fetch that history. They read the existing ledger and display its last
+successful sync time in UTC; the combined figure is labeled `stored + live`.
+Before the first successful sync, tracked realized P&L is `not synced`. A failed
+history request can leave an older timestamp; a ledger read failure displays
+`unavailable`. Neither accounting condition blocks execution or manual cards.
 
 ## Behavior
 
+- Telegram intake admits at most two posts at once across live messages, albums,
+  catch-up and failed-post retries. Posts wait before album resolution, image
+  download and source claiming; each admitted post keeps its complete album and
+  runs through dispatch before releasing its slot. Cancellation releases capacity;
+  an interrupted source claim still follows the existing stale-lease recovery.
+  This bounds active post/model pipelines, not individual image bytes or the
+  number of waiting Telethon handlers. Exchange mutations remain serialized.
 - Telegram posts have a 20 MiB total raw-image budget, shared across the whole
   album. Downloads use bounded output streams. Exceeding the budget rejects the
   entire post before extraction; no partial images or captions alone reach the

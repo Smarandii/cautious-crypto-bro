@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+from datetime import UTC
 from decimal import Decimal
 
 from .domain import (
@@ -463,7 +464,12 @@ def _account_pnl_lines(
         return [
             (f"Realized (tracked): <b>{fmt_signed(pnl.realized_pnl)} USDT</b>"),
             (f"Live uPnL (Bybit): <b>{fmt_signed(state.unrealised_pnl)} USDT</b>"),
-            (f"Combined: <b>{fmt_signed(combined)} USDT</b>"),
+            (f"Combined (stored + live): <b>{fmt_signed(combined)} USDT</b>"),
+            (
+                "Realized sync: <b>"
+                f"{pnl.last_synced_at.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                "</b>"
+            ),
             (
                 "History: since "
                 f"<b>{pnl.history_start_at.date().isoformat()}</b>"

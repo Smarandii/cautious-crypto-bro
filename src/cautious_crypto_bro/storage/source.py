@@ -210,7 +210,7 @@ class SourceRepositoryImpl(_Store):
                         action,
                     )
 
-                for record_id, kind in self._pending_manual_rows(
+                for record_id, kind in self._pending_delivery_rows(
                     items,
                     position_actions,
                 ):
@@ -275,7 +275,7 @@ class SourceRepositoryImpl(_Store):
         return source
 
     @staticmethod
-    def _pending_manual_rows(
+    def _pending_delivery_rows(
         items: Sequence[
             tuple[
                 TradingIntent,
@@ -288,12 +288,12 @@ class SourceRepositoryImpl(_Store):
             *(
                 (str(intent.intent_id), "OPEN")
                 for intent, _ in items
-                if intent.approval_mode is ApprovalMode.MANUAL
+                if intent.approval_mode in {ApprovalMode.MANUAL, ApprovalMode.AUTO}
             ),
             *(
                 (str(action.action_id), "ACTION")
                 for action in position_actions
-                if action.approval_mode is ApprovalMode.MANUAL
+                if action.approval_mode in {ApprovalMode.MANUAL, ApprovalMode.AUTO}
             ),
         ]
 

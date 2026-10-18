@@ -58,6 +58,10 @@ from .ports import (
 logger = logging.getLogger(__name__)
 
 ATTENTION_PAGE_SIZE = 5
+RECOVERED_OUTCOME_NOTICE = (
+    "<b>RECOVERED EXECUTION RECORD</b>\n"
+    "Stored outcome only; this is not a new trade or live confirmation.\n\n"
+)
 
 POLLING_BACKOFF = BackoffConfig(
     min_delay=5.0,
@@ -575,11 +579,12 @@ class ApprovalBot:
         self,
         outcome: IntentExecutionOutcome,
     ) -> None:
+        notice = RECOVERED_OUTCOME_NOTICE if outcome.recovered else ""
         if outcome.intent is None or outcome.plan is None:
             await self._bot.send_message(
                 chat_id=self._approval_chat_id,
                 text=(
-                    "<b>AUTO EXECUTION ERROR</b>\n"
+                    f"{notice}<b>AUTO EXECUTION ERROR</b>\n"
                     f"<code>"
                     f"{html.escape(outcome.message)}"
                     f"</code>"
@@ -606,7 +611,8 @@ class ApprovalBot:
             )
 
         await self._send_html(
-            render(
+            notice
+            + render(
                 outcome.intent,
                 outcome.plan,
             )
@@ -617,11 +623,12 @@ class ApprovalBot:
         self,
         outcome: PositionActionExecutionOutcome,
     ) -> None:
+        notice = RECOVERED_OUTCOME_NOTICE if outcome.recovered else ""
         if outcome.action is None:
             await self._bot.send_message(
                 chat_id=self._approval_chat_id,
                 text=(
-                    "<b>AUTO EXECUTION ERROR</b>\n"
+                    f"{notice}<b>AUTO EXECUTION ERROR</b>\n"
                     f"<code>"
                     f"{html.escape(outcome.message)}"
                     f"</code>"
@@ -631,7 +638,8 @@ class ApprovalBot:
             return
 
         await self._send_html(
-            render_position_action(outcome.action)
+            notice
+            + render_position_action(outcome.action)
             + render_action_outcome(
                 outcome,
                 auto=True,

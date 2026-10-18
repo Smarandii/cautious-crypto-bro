@@ -10,6 +10,8 @@ from ._connection import _Store
 
 
 class ManualDeliveryRepositoryImpl(_Store):
+    """Manual-card queries and shared delivery leases/acknowledgements."""
+
     async def pending_manual_deliveries(self) -> tuple[tuple[UUID, str], ...]:
         rows = await self._fetch(
             """SELECT d.record_id, d.kind FROM manual_deliveries d
