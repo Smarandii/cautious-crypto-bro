@@ -482,17 +482,17 @@ class BybitDemoExecutor:
             raise PositionActionPreflightError(
                 "Entry cancellation requires source-scoped coordinator"
             )
-        self._sync_clock()
-
-        initial_exposure = self._exposure_sync(action.symbol)
-
         # Validate before causing any side effects.
         try:
+            self._sync_clock()
+            initial_exposure = self._exposure_sync(action.symbol)
             self._position_for_action(
                 action,
                 initial_exposure,
             )
-        except TradeExecutionError as exc:
+        except Exception as exc:
+            # This block contains reads only. Preserve uncertain outcomes once
+            # cancellation or submission starts below, including later read failures.
             raise PositionActionPreflightError(str(exc)) from exc
 
         cancelled_entries, cancelled_exits = self._cancel_conflicting_orders(
