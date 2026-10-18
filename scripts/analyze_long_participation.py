@@ -5,13 +5,18 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import sys
 import zipfile
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from analyze_forensic_pnl import reconcile, summarize
-from analyze_signal_followthrough import load_market_candles
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from analyze_signal_followthrough import load_market_candles  # noqa: E402
+
+from cautious_crypto_bro.forensic_pnl import reconcile, summarize  # noqa: E402
 
 REVIEW_TARGET_PER_ARM = 20
 BOOTSTRAP_SAMPLES = 10_000

@@ -23,7 +23,19 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from analyze_forensic_pnl import (  # noqa: E402
+from analyze_signal_followthrough import fill_followthrough_summary  # noqa: E402
+
+from cautious_crypto_bro.bybit.normalize import (  # noqa: E402
+    closed_pnl_record_from_item,
+)
+from cautious_crypto_bro.dashboard_metrics import (  # noqa: E402
+    summarize_intent_outcomes,
+    summarize_open_positions,
+    summarize_portfolio_stop_risk,
+    summarize_position_sides,
+    summarize_reconciled_positions,
+)
+from cautious_crypto_bro.forensic_pnl import (  # noqa: E402
     DEMO_EXIT_PROFILE_REVIEW_CASES,
     DEMO_LONG_EXIT_AB_CONTROL_PROFILE,
     DEMO_LONG_EXIT_AB_TREATMENT_PROFILE,
@@ -36,18 +48,6 @@ from analyze_forensic_pnl import (  # noqa: E402
     read_open_entry_orders_snapshot,
     read_open_positions_snapshot,
     reconcile,
-)
-from analyze_signal_followthrough import fill_followthrough_summary  # noqa: E402
-
-from cautious_crypto_bro.bybit.normalize import (  # noqa: E402
-    closed_pnl_record_from_item,
-)
-from cautious_crypto_bro.dashboard_metrics import (  # noqa: E402
-    summarize_intent_outcomes,
-    summarize_open_positions,
-    summarize_portfolio_stop_risk,
-    summarize_position_sides,
-    summarize_reconciled_positions,
 )
 
 

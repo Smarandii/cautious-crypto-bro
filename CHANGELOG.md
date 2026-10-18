@@ -30,6 +30,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Changed
 
+- Research tools share packaged forensic reconciliation, statistics and frozen
+  cohort definitions instead of importing the analyzer CLI. Keep analyzer imports
+  compatible and preserve report output, accounting formulas and random seeds.
 - Extracted strategy supervision into phased builders and split execution,
   coordinator, approval presentation and extraction into named modules rather
   than growing top-level files.
