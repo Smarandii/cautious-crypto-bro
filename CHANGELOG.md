@@ -52,6 +52,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
   previews. The existing periodic worker owns history sync; previews use the
   stored ledger with its successful-sync timestamp and explicit mixed-age total.
   Keep persistence, execution and approval delivery independent of history outages.
+- Treat unavailable exchange quantities as errors instead of zero exposure. Reject
+  invalid active symbols, position average/mark prices and stops, and inconsistent
+  order quantities. Retain explicit zero positions and partial protective stops.
 - Share a two-post intake limit across Telegram live, album, catch-up and retry
   paths, before downloading images or claiming source work. Release admission on
   cancellation and preserve existing durable source recovery without adding tasks.
