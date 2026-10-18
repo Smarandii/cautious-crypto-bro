@@ -31,6 +31,8 @@ class SourceRepositoryImpl(_Store):
             SELECT message_id FROM source_messages
             WHERE channel_id = ? AND (
                 status = 'FAILED'
+                OR (status = 'UNAVAILABLE'
+                    AND updated_at <= datetime('now', '-1 day'))
                 OR (status = 'PROCESSING'
                     AND updated_at <= datetime('now', ?))
             )
@@ -41,6 +43,38 @@ class SourceRepositoryImpl(_Store):
             many=True,
         )
         return tuple(row[0] for row in rows)
+
+    async def defer_unavailable_source_messages(
+        self,
+        channel_id: int,
+        message_ids: tuple[int, ...],
+        *,
+        lease_seconds: int,
+    ) -> None:
+        """Retain missing posts for a daily retry without stealing active claims."""
+        if lease_seconds <= 0:
+            raise ValueError("Retry lease must be positive")
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.executemany(
+                """
+                UPDATE source_messages
+                SET status = 'UNAVAILABLE', claim_token = NULL,
+                    last_error = 'Telegram post unavailable; automatic retry deferred for 24 hours',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE channel_id = ? AND message_id = ? AND (
+                    status = 'FAILED'
+                    OR (status = 'UNAVAILABLE'
+                        AND updated_at <= datetime('now', '-1 day'))
+                    OR (status = 'PROCESSING'
+                        AND updated_at <= datetime('now', ?))
+                )
+                """,
+                [
+                    (channel_id, message_id, f"-{lease_seconds} seconds")
+                    for message_id in message_ids
+                ],
+            )
+            await db.commit()
 
     async def claim_source(
         self,
@@ -95,6 +129,7 @@ class SourceRepositoryImpl(_Store):
                 WHERE
                     source_messages.status =
                         'FAILED'
+                    OR source_messages.status = 'UNAVAILABLE'
                     OR (
                         source_messages.status =
                             'PROCESSING'

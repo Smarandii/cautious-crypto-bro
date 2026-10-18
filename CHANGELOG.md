@@ -107,6 +107,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
   distinct; retry operator pause alerts durably after Telegram failures/restart.
 - Add schema 9 migration for exit snapshots and pause alerts. Installed legacy
   revisions without a snapshot require review after verified protection handoff.
+- Defer unavailable Telegram retry posts for 24 hours in durable source state,
+  avoiding one-minute refetch/log loops across restarts. Retain the payload,
+  retry daily, allow verified live reappearance and preserve active claims.
 - Recover durable failed/stale source posts independently of the Telegram history
   cursor, including full image albums after restart. Keep active claims intact.
 - Recover all pending AUTO records rather than silently stopping after 100 opens

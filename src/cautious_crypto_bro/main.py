@@ -199,6 +199,15 @@ async def _build_runtime(
             channel_id, lease_seconds=settings.source_processing_lease_seconds
         )
 
+    async def defer_unavailable_messages(
+        channel_id: int, message_ids: tuple[int, ...]
+    ) -> None:
+        await store.defer_unavailable_source_messages(
+            channel_id,
+            message_ids,
+            lease_seconds=settings.source_processing_lease_seconds,
+        )
+
     source = TelegramSource(
         api_id=settings.telegram_api_id,
         api_hash=(settings.telegram_api_hash),
@@ -208,6 +217,7 @@ async def _build_runtime(
         startup_lookback_hours=(settings.telegram_startup_lookback_hours),
         catchup_interval_seconds=(settings.telegram_catchup_interval_seconds),
         retry_message_ids=retry_message_ids,
+        defer_unavailable_messages=defer_unavailable_messages,
     )
     cleanup.push_async_callback(source.disconnect)
 
