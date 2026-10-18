@@ -1,0 +1,7 @@
+# Explicit local development only; the base deployment uses code from its image.
+services:
+  app:
+    image: cautious-crypto-bro:dev
+    volumes:
+      - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro

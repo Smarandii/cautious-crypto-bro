@@ -6,6 +6,7 @@ on:
     paths:
       - "Dockerfile"
       - "docker-compose.yaml"
+      - "docker-compose.dev.yaml"
       - ".dockerignore"
       - "src/**"
       - "scripts/**"
@@ -17,6 +18,7 @@ on:
     paths:
       - "Dockerfile"
       - "docker-compose.yaml"
+      - "docker-compose.dev.yaml"
       - ".dockerignore"
       - "src/**"
       - "scripts/**"
@@ -60,6 +62,21 @@ jobs:
         run: |
           cp .env.example .env
           docker compose config --quiet
+          docker compose -f docker-compose.yaml -f docker-compose.dev.yaml config --quiet
+          docker compose config --format json > compose-runtime.json
+          docker compose -f docker-compose.yaml -f docker-compose.dev.yaml config --format json > compose-dev.json
+          python - <<'PY'
+          import json
+          runtime = json.load(open("compose-runtime.json"))["services"]["app"]
+          development = json.load(open("compose-dev.json"))["services"]["app"]
+          assert [(v["type"], v["target"]) for v in runtime["volumes"]] == [("volume", "/state")]
+          assert runtime["image"] == "cautious-crypto-bro:local"
+          assert development["image"] == "cautious-crypto-bro:dev"
+          mounts = {v["target"]: v for v in development["volumes"]}
+          assert mounts["/state"]["type"] == "volume"
+          for target in ("/app/src", "/app/scripts"):
+              assert mounts[target]["type"] == "bind" and mounts[target]["read_only"]
+          PY
       - name: Build runtime image
         run: docker build --target runtime --tag cautious-crypto-bro:ci .
       - name: Scan runtime image

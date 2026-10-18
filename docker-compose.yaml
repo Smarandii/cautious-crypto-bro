@@ -22,6 +22,7 @@ services:
     restart: unless-stopped
 
   app:
+    image: ${CCB_IMAGE:-cautious-crypto-bro:local}
     build:
       context: .
       target: runtime
@@ -38,8 +39,6 @@ services:
       DEMO_ENTRY_ORDER_TTL_MINUTES: "240"
     volumes:
       - app_state:/state
-      - ./src:/app/src:ro
-      - ./scripts:/app/scripts:ro
     depends_on:
       redis:
         condition: service_healthy

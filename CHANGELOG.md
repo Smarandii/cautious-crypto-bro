@@ -22,6 +22,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
   exempt as linear run-once procedures.
 - Planning derives scale-in legs separately from rebase logic, and exits plan
   separately from placement.
+- Default Compose runs packaged image code with only its state volume. Select
+  `docker-compose.dev.yaml` explicitly for developer source mounts; pin a release
+  image through `CCB_IMAGE` without a private Compose override.
 
 ### Fixed
 
