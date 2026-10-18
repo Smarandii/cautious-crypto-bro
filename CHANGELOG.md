@@ -28,6 +28,11 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Own SIGTERM at application scope instead of stopping only Telegram polling.
+  Stop polling and drain active update handlers before closing clients; preserve
+  state ownership through cleanup, including repeated termination and startup.
+  Allow a two-minute Compose stop grace period; forced termination still uses
+  startup quarantine.
 - Close acquired runtime clients after partial startup failure and continue cleanup
   after a close fails, retaining exception chains and shared-state ownership until
   cleanup finishes. Close Redis's owned pool even when its client close fails.

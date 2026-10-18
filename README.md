@@ -53,6 +53,13 @@ orders. Direct Bybit calls also drain their synchronous worker before unwinding.
 This can delay shutdown by the duration of an in-flight request/workflow. Hard
 process termination still relies on startup quarantine for unknown outcomes.
 
+SIGTERM requests application-wide shutdown, including partial startup. Polling
+stops accepting updates; active Telegram handlers and non-abortable exchange work
+drain before clients close and state ownership is released. Repeated SIGTERM does
+not interrupt this cleanup. Compose allows two minutes before force-killing the
+container; unusually long workflows can exceed that window and will still need
+startup quarantine. SIGINT keeps Python's normal Ctrl-C behavior.
+
 The source reconciles each channel against history every
 `TELEGRAM_CATCHUP_INTERVAL_SECONDS` to recover posts absent from live processing.
 Only history scans advance the recovery cursor; newer live messages cannot hide
