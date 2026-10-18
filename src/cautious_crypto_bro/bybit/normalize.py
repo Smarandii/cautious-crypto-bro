@@ -6,7 +6,7 @@ from datetime import (
     UTC,
     datetime,
 )
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from ..domain import (
     AccountOrder,
@@ -25,7 +25,10 @@ def parse_decimal(value: object) -> Decimal:
     if not raw:
         return Decimal("0")
 
-    return Decimal(raw)
+    parsed = Decimal(raw)
+    if not parsed.is_finite():
+        raise TradeExecutionError("Bybit numeric value must be finite")
+    return parsed
 
 
 def parse_optional_decimal(value: object) -> Decimal | None:
@@ -51,16 +54,28 @@ def format_decimal(value: Decimal) -> str:
     )
 
 
+def _required_quantity(value: object, name: str) -> Decimal:
+    if value is None or not str(value).strip():
+        raise TradeExecutionError(f"Bybit {name} is missing")
+    try:
+        quantity = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise TradeExecutionError(f"Bybit {name} is invalid") from exc
+    if not quantity.is_finite() or quantity < 0:
+        raise TradeExecutionError(f"Bybit {name} must be finite and nonnegative")
+    return quantity
+
+
 def account_position_from_item(item: dict) -> AccountPosition | None:
-    size = parse_decimal(item.get("size"))
+    size = _required_quantity(item.get("size"), "position size")
 
     if size <= 0:
         return None
 
-    symbol = str(item.get("symbol") or "").upper()
-
-    if not symbol:
-        return None
+    symbol = item.get("symbol")
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise TradeExecutionError("Active Bybit position contains no symbol")
+    symbol = symbol.strip().upper()
 
     avg_price = parse_decimal(item.get("avgPrice"))
 
@@ -68,6 +83,9 @@ def account_position_from_item(item: dict) -> AccountPosition | None:
 
     if avg_price <= 0 or mark_price <= 0:
         raise TradeExecutionError("Active Bybit position contains invalid pricing")
+    stop_loss = parse_optional_decimal(item.get("stopLoss"))
+    if stop_loss is not None and stop_loss < 0:
+        raise TradeExecutionError("Active Bybit position contains invalid stop price")
 
     return AccountPosition(
         symbol=symbol,
@@ -78,17 +96,17 @@ def account_position_from_item(item: dict) -> AccountPosition | None:
         unrealised_pnl=(parse_decimal(item.get("unrealisedPnl"))),
         status=str(item.get("positionStatus") or "Unknown"),
         take_profit=(parse_optional_decimal(item.get("takeProfit"))),
-        stop_loss=(parse_optional_decimal(item.get("stopLoss"))),
+        stop_loss=stop_loss,
         break_even_price=(parse_optional_decimal(item.get("breakEvenPrice"))),
         trailing_stop=(parse_optional_decimal(item.get("trailingStop"))),
     )
 
 
 def is_live_open_order(item: dict) -> bool:
-    return parse_decimal(item.get("leavesQty")) > 0 or (
+    return _required_quantity(item.get("leavesQty"), "order leavesQty") > 0 or (
         item.get("stopOrderType") == "PartialStopLoss"
         and str(item.get("orderStatus")) == "Untriggered"
-        and parse_decimal(item.get("qty")) > 0
+        and _required_quantity(item.get("qty"), "stop order qty") > 0
     )
 
 
@@ -97,9 +115,9 @@ def position_exposure_from_item(item: object) -> PositionExposure | None:
         item,
         dict,
     ):
-        return None
+        raise TradeExecutionError("Bybit position is not an object")
 
-    size = Decimal(str(item.get("size") or "0"))
+    size = _required_quantity(item.get("size"), "position size")
 
     if size <= 0:
         return None
@@ -108,11 +126,14 @@ def position_exposure_from_item(item: object) -> PositionExposure | None:
 
     if avg_price_raw is None or str(avg_price_raw).strip() == "":
         raise TradeExecutionError("Active Bybit position contains no average price")
+    avg_price = parse_decimal(avg_price_raw)
+    if avg_price <= 0:
+        raise TradeExecutionError("Active Bybit position contains invalid pricing")
 
     return PositionExposure(
         side=(parse_side(item.get("side"))),
         size=size,
-        avg_price=Decimal(str(avg_price_raw)),
+        avg_price=avg_price,
     )
 
 
@@ -121,7 +142,7 @@ def pending_entry_order_from_item(item: object) -> OpenOrderExposure | None:
         item,
         dict,
     ):
-        return None
+        raise TradeExecutionError("Bybit entry order is not an object")
 
     order_link_id = str(item.get("orderLinkId") or "")
 
@@ -135,7 +156,7 @@ def pending_entry_order_from_item(item: object) -> OpenOrderExposure | None:
     if reduce_only is True or str(reduce_only).casefold() == "true":
         return None
 
-    remaining = Decimal(str(item.get("leavesQty") or "0"))
+    remaining = _required_quantity(item.get("leavesQty"), "entry order leavesQty")
 
     if remaining <= 0:
         return None
@@ -232,24 +253,29 @@ def closed_pnl_record_from_item(item: dict) -> ClosedPnlRecord:
 
 def account_order_from_item(item: dict) -> AccountOrder:
     updated_ms = int(item.get("updatedTime") or item.get("createdTime") or 0)
+    symbol = item.get("symbol")
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise TradeExecutionError("Bybit order contains no symbol")
+    quantity = _required_quantity(item.get("qty"), "order qty")
+    remaining = _required_quantity(item.get("leavesQty"), "order leavesQty")
+    if remaining > quantity:
+        raise TradeExecutionError(
+            "Bybit order remaining quantity exceeds total quantity"
+        )
+    if (
+        not remaining
+        and item.get("stopOrderType") == "PartialStopLoss"
+        and item.get("orderStatus") == "Untriggered"
+    ):
+        remaining = quantity
 
     return AccountOrder(
-        symbol=str(item.get("symbol") or "").upper(),
+        symbol=symbol.strip().upper(),
         side=parse_side(item.get("side")),
         order_type=str(item.get("orderType") or "Unknown"),
         status=str(item.get("orderStatus") or "Unknown"),
-        quantity=parse_decimal(item.get("qty")),
-        remaining_quantity=(
-            parse_decimal(item.get("leavesQty"))
-            or (
-                parse_decimal(item.get("qty"))
-                if (
-                    item.get("stopOrderType") == "PartialStopLoss"
-                    and item.get("orderStatus") == "Untriggered"
-                )
-                else Decimal("0")
-            )
-        ),
+        quantity=quantity,
+        remaining_quantity=remaining,
         price=parse_optional_decimal(item.get("price")),
         avg_price=(parse_optional_decimal(item.get("avgPrice"))),
         order_id=str(item.get("orderId") or ""),

@@ -23,6 +23,7 @@ from cautious_crypto_bro.domain import (
     InstrumentContext,
     IntentExtraction,
     IntentStatus,
+    OpenRelation,
     Side,
     SignalExtraction,
     SourceMessage,
@@ -274,11 +275,17 @@ def make_intent(side=Side.LONG, tp=None, mode=ApprovalMode.MANUAL):
 
 
 async def prepare(
-    path, exchange, executor, side=Side.LONG, tp=None, mode=ApprovalMode.MANUAL
+    path,
+    exchange,
+    executor,
+    side=Side.LONG,
+    tp=None,
+    mode=ApprovalMode.MANUAL,
+    relation=OpenRelation.UNCLASSIFIED,
 ):
     store = IntentStore(path)
     await store.initialize()
-    intent = make_intent(side, tp, mode)
+    intent = make_intent(side, tp, mode).model_copy(update={"relation": relation})
     planner = ExecutionPlanner()
     plan = planner.plan(
         intent,
