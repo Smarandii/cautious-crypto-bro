@@ -136,6 +136,28 @@ def test_initial_reconciliation_precedes_any_execution(
 ) -> None:
     fake = _fake_application(monkeypatch, tmp_path, failed_reconciliation)
     app, events, settings = fake.app, fake.events, fake.settings
+    from cautious_crypto_bro.supervision_health import (
+        publish_success,
+        supervision_health_path,
+    )
+
+    progress = supervision_health_path(settings.database_path)
+    publish_success(progress)
+    store = app.IntentStore(settings.database_path)
+    initialize = store.initialize
+
+    async def initialize_without_stale_progress():
+        assert not progress.exists()
+        await initialize()
+
+    store.initialize = initialize_without_stale_progress
+    start = fake.source.start
+
+    async def source_start_with_progress():
+        publish_success(progress)
+        await start()
+
+    fake.source.start = source_start_with_progress
 
     if failed_reconciliation is not None:
         with pytest.raises(RuntimeError, match="Initial account state"):
@@ -177,6 +199,7 @@ def test_initial_reconciliation_precedes_any_execution(
         "runtime.close",
     ]
     # Startup failures and normal shutdown both release ownership after cleanup.
+    assert not progress.exists()
     with app.state_ownership(settings.database_path):
         pass
 

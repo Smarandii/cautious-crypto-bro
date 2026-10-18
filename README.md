@@ -171,6 +171,31 @@ automation nor changes execution statuses or acknowledges pause alerts. Pages ar
 read afresh, so changing records can move between requests; restart at page 1 if
 the list changes during review. An empty list does not prove the exchange is flat.
 
+## Supervision progress
+
+Compose checks the application's successful-supervision marker every 30 seconds,
+with a two-minute startup grace period. No successful pass for five minutes, a
+missing marker, or an invalid marker produces `unhealthy`. Failed reconciliation
+passes do not refresh it; a later successful pass restores health. An empty
+strategy ledger is a successful pass. This measures supervision progress, not
+Telegram delivery, model availability, account connectivity or whether quarantined
+positions need operator review. `unhealthy` alone neither sends an alert nor
+restarts the container; attach an external monitor to that status if desired.
+
+For native runs, the same read-only probe is:
+
+```sh
+uv run python -m cautious_crypto_bro.supervision_health --database data/cautious_crypto_bro.sqlite3
+```
+
+The probe reads only `<database>.supervision-health.json`; it never opens SQLite
+or calls an API. Success timestamps use Python's system-wide
+[monotonic clock](https://docs.python.org/3.12/library/time.html#time.monotonic).
+The application clears old progress after taking state ownership and removes it
+after resource cleanup. Progress-file write failures are logged without stopping
+protection work; the probe eventually becomes unhealthy if publishing remains
+broken. The sidecar is ephemeral and excluded from the canonical state backup.
+
 ## Development
 
 For source-mounted Docker development, explicitly select the development file:

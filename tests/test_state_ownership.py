@@ -50,6 +50,14 @@ def test_second_startup_cannot_touch_owned_state_and_owner_exit_releases_it(
     try:
         assert owner.stdout.readline().strip() == "OWNED"
         app = import_module("cautious_crypto_bro.main")
+        from cautious_crypto_bro.supervision_health import (
+            publish_success,
+            supervision_health_path,
+        )
+
+        progress = supervision_health_path(database)
+        publish_success(progress)
+        owner_progress = progress.read_bytes()
         # Independent state paths are not blocked by an unrelated owner.
         with app.state_ownership(tmp_path / "other.db"):
             pass
@@ -66,6 +74,7 @@ def test_second_startup_cannot_touch_owned_state_and_owner_exit_releases_it(
         monkeypatch.setattr(app, "BybitDemoExecutor", forbidden)
         with pytest.raises(RuntimeError, match="already owned"):
             asyncio.run(app.async_main())
+        assert progress.read_bytes() == owner_progress
         with sqlite3.connect(database) as db:
             assert db.execute("SELECT status FROM owner_work").fetchall() == [
                 ("EXECUTING",)
