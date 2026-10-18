@@ -65,7 +65,7 @@ def _fake_application(monkeypatch, tmp_path, failed_reconciliation=None):
         close=step("bot.close"),
     )
     service = SimpleNamespace(
-        run_manual_delivery_recovery=step("manual.recover"),
+        run_delivery_recovery=step("manual.recover"),
         run_periodic_account_pnl_sync=step("pnl.sync"),
         recover_auto_execution=step("service.recover"),
         on_message=AsyncMock(),

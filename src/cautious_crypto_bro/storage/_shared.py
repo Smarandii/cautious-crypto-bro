@@ -108,6 +108,12 @@ class SharedRepositoryMixin(_Store):
         id_column: str,
         error: str,
     ) -> tuple[UUID, ...]:
+        await db.execute(
+            f"""INSERT OR IGNORE INTO manual_deliveries(record_id, kind)
+                SELECT {id_column}, ? FROM {table}
+                WHERE status = 'EXECUTING' AND approval_mode = 'AUTO'""",
+            ("OPEN" if table == "intents" else "ACTION",),
+        )
         cursor = await db.execute(
             f"SELECT {id_column} FROM {table} WHERE status = ?",
             (IntentStatus.EXECUTING.value,),

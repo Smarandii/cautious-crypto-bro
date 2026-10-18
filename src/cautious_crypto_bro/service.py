@@ -192,12 +192,23 @@ class SignalService:
                 if action is not None and action.status is IntentStatus.PENDING:
                     await self._deliver_manual(action)
 
-    async def run_manual_delivery_recovery(self) -> None:
+    async def recover_auto_outcome_deliveries(self) -> None:
+        for record_id, kind in await self._store.pending_auto_outcome_deliveries():
+            try:
+                await self._deliver_auto_outcome(record_id, kind)
+            except Exception:
+                logger.exception("AUTO outcome retry failed for %s", record_id)
+
+    async def run_delivery_recovery(self) -> None:
         while True:
             try:
                 await self.recover_manual_deliveries()
             except Exception:
                 logger.exception("Manual approval recovery failed")
+            try:
+                await self.recover_auto_outcome_deliveries()
+            except Exception:
+                logger.exception("AUTO outcome recovery failed")
             await asyncio.sleep(30)
 
     async def run_periodic_account_pnl_sync(self) -> None:
@@ -366,30 +377,67 @@ class SignalService:
 
         return ApprovalMode.AUTO
 
-    async def _send_auto_outcome(
-        self, outcome: IntentExecutionOutcome | PositionActionExecutionOutcome
-    ) -> None:
-        # Fetch after execution so the preview includes the resulting account state.
-        state = pnl = None
-        state_error = pnl_error = None
+    async def _send_auto_preview(self) -> None:
+        # Refresh exposure after execution; accounting uses the periodic ledger.
+        state = None
+        state_error = None
         try:
             state = await self._executor.account_state()
         except Exception as exc:
             state_error = f"{type(exc).__name__}: {exc}"
-        try:
-            pnl = await self._sync_account_pnl()
-        except Exception as exc:
-            pnl_error = f"{type(exc).__name__}: {exc}"
+        pnl, pnl_error = await self._stored_account_pnl_safe()
         try:
             await self._approval_bot.send_account_snapshot(
                 state, state_error=state_error, pnl=pnl, pnl_error=pnl_error
             )
         except Exception:
             logger.exception("AUTO account preview delivery failed")
+
+    async def _send_auto_outcome(
+        self,
+        outcome: IntentExecutionOutcome | PositionActionExecutionOutcome,
+    ) -> None:
+        if not outcome.recovered:
+            await self._send_auto_preview()
         if isinstance(outcome, IntentExecutionOutcome):
             await self._approval_bot.send_auto_intent_outcome(outcome)
         else:
             await self._approval_bot.send_auto_action_outcome(outcome)
+
+    async def _deliver_auto_outcome(
+        self,
+        record_id: UUID,
+        kind: str,
+        outcome: IntentExecutionOutcome | PositionActionExecutionOutcome | None = None,
+    ) -> bool:
+        if outcome is not None and outcome.status in {
+            IntentStatus.PENDING,
+            IntentStatus.EXECUTING,
+        }:
+            return False
+        # Legacy table/method names also serve AUTO terminal notices, not just cards.
+        token = await self._store.claim_manual_delivery(record_id)
+        if token is None:
+            return False
+        try:
+            if outcome is None:
+                outcome = await self._store.get_recorded_auto_outcome(record_id, kind)
+            if outcome is None:
+                raise RuntimeError("Terminal AUTO outcome no longer available")
+            await self._send_auto_outcome(outcome)
+        except Exception:
+            await self._store.finish_manual_delivery(record_id, token, delivered=False)
+            raise
+        await self._store.finish_manual_delivery(record_id, token, delivered=True)
+        return True
+
+    async def _reserve_recovery_notices(
+        self, pending_intents: tuple[UUID, ...], pending_actions: tuple[UUID, ...]
+    ) -> None:
+        for intent_id in pending_intents:
+            await self._store.ensure_auto_outcome_delivery(intent_id, "OPEN")
+        for action_id in pending_actions:
+            await self._store.ensure_auto_outcome_delivery(action_id, "ACTION")
 
     async def recover_auto_execution(
         self,
@@ -397,6 +445,9 @@ class SignalService:
         pending_intents = await self._store.get_pending_auto_intent_ids()
 
         pending_actions = await self._store.get_pending_auto_action_ids()
+
+        # Reserve notices before any legacy pending work can reach the exchange.
+        await self._reserve_recovery_notices(pending_intents, pending_actions)
 
         if self._auto_approval_mode is AutoApprovalMode.DISABLED:
             for intent_id in pending_intents:
@@ -420,7 +471,7 @@ class SignalService:
             )
 
             try:
-                await self._send_auto_outcome(outcome)
+                await self._deliver_auto_outcome(intent_id, "OPEN", outcome)
             except Exception:
                 logger.exception(
                     "Failed to send recovered AUTO intent outcome %s",
@@ -447,7 +498,7 @@ class SignalService:
             )
 
             try:
-                await self._send_auto_outcome(outcome)
+                await self._deliver_auto_outcome(action_id, "ACTION", outcome)
             except Exception:
                 logger.exception(
                     "Failed to send recovered AUTO action outcome %s",
@@ -489,8 +540,6 @@ class SignalService:
                 len(batch.planning_errors),
             )
 
-        account_pnl, account_pnl_error = await self._sync_account_pnl_safe(source)
-
         finalized = await self._persist_batch(
             source,
             claim_token,
@@ -500,6 +549,7 @@ class SignalService:
         if not finalized:
             return
 
+        account_pnl, account_pnl_error = await self._stored_account_pnl_safe()
         snapshot = AccountSnapshotDelivery(
             state=batch.account_state,
             state_error=batch.account_state_error,
@@ -946,19 +996,14 @@ class SignalService:
                 claim_token,
             )
 
-    async def _sync_account_pnl_safe(
+    async def _stored_account_pnl_safe(
         self,
-        source: SourceMessage,
     ) -> tuple[AccountPnlSummary | None, str | None]:
         try:
-            return await self._sync_account_pnl(), None
+            return await self._store.get_account_pnl_summary(), None
 
         except Exception as exc:
-            logger.exception(
-                "Account P&L sync failed for %s/%s",
-                source.channel_id,
-                source.message_id,
-            )
+            logger.exception("Stored account P&L preview unavailable")
             return None, f"{type(exc).__name__}: {exc}"
 
     async def _persist_batch(
@@ -1028,7 +1073,7 @@ class SignalService:
                 )
 
                 try:
-                    await self._send_auto_outcome(outcome)
+                    await self._deliver_auto_outcome(intent.intent_id, "OPEN", outcome)
                 except Exception:
                     logger.exception(
                         "AUTO outcome delivery failed for intent %s",
@@ -1083,7 +1128,9 @@ class SignalService:
                 )
 
                 try:
-                    await self._send_auto_outcome(outcome)
+                    await self._deliver_auto_outcome(
+                        action.action_id, "ACTION", outcome
+                    )
                 except Exception:
                     logger.exception(
                         "AUTO outcome delivery failed for action %s",

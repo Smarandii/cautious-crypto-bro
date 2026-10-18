@@ -449,6 +449,18 @@ class ManualDeliveryRepository(Protocol):
     ) -> tuple[int, int]: ...
 
 
+class AutoOutcomeRepository(Protocol):
+    async def ensure_auto_outcome_delivery(
+        self, record_id: UUID, kind: str
+    ) -> None: ...
+
+    async def pending_auto_outcome_deliveries(self) -> tuple[tuple[UUID, str], ...]: ...
+
+    async def get_recorded_auto_outcome(
+        self, record_id: UUID, kind: str
+    ) -> IntentExecutionOutcome | PositionActionExecutionOutcome | None: ...
+
+
 class PnlRepository(Protocol):
     async def upsert_closed_pnl(
         self,
@@ -500,6 +512,7 @@ class SignalServiceStore(
     PositionActionRepository,
     PositionStrategyRepository,
     ManualDeliveryRepository,
+    AutoOutcomeRepository,
     PnlRepository,
     RecoveryRepository,
     Protocol,
