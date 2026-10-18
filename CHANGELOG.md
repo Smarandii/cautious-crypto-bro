@@ -51,6 +51,11 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 - Ignore private `.env` variants in Git and Docker, including nested Docker
   paths, while retaining public `.env.example` templates. Verify the boundary
   with an isolated Git repository and an exported scratch-image build in CI.
+- Reserve AUTO outcome notices before execution and retry recorded terminal
+  outcomes after Telegram failure/restart, independently of AUTO trading mode.
+  Reuse durable delivery claims without a schema change; retries never call Bybit
+  or execute work. Preserve immediate rich results; recovered action cards show
+  saved status/order references and explicitly omit unavailable fill details.
 - Close acquired runtime clients after partial startup failure and continue cleanup
   after a close fails, retaining exception chains and shared-state ownership until
   cleanup finishes. Close Redis's owned pool even when its client close fails.
