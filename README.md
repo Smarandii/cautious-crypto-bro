@@ -88,6 +88,13 @@ recovered actions. Preview failures do not suppress the execution result.
 
 ## Behavior
 
+- Telegram intake admits at most two posts at once across live messages, albums,
+  catch-up and failed-post retries. Posts wait before album resolution, image
+  download and source claiming; each admitted post keeps its complete album and
+  runs through dispatch before releasing its slot. Cancellation releases capacity;
+  an interrupted source claim still follows the existing stale-lease recovery.
+  This bounds active post/model pipelines, not individual image bytes or the
+  number of waiting Telethon handlers. Exchange mutations remain serialized.
 - OPEN needs symbol, direction and explicit MARKET/LIMIT/RANGE semantics.
   Missing stops use a deterministic 2% fallback; missing targets use policy exits.
 - Entries copy explicit trader leverage from text/images, with a 10x fallback.

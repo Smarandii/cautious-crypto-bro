@@ -39,6 +39,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Share a two-post intake limit across Telegram live, album, catch-up and retry
+  paths, before downloading images or claiming source work. Release admission on
+  cancellation and preserve existing durable source recovery without adding tasks.
 - Own SIGTERM at application scope instead of stopping only Telegram polling.
   Stop polling and drain active update handlers before closing clients; preserve
   state ownership through cleanup, including repeated termination and startup.
