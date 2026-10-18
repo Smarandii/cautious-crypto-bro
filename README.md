@@ -106,6 +106,21 @@ conventions, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and
 blocked, and merged branches are auto-deleted. Protection applies to `master`
 only, so feature branches stay freely pushable and deletable.
 
+## Operator review
+
+In the configured approval chat, the configured approver can send `/attention`
+or `/attention 2` to inspect paused (`MANUAL_OVERRIDE`) and `UNCERTAIN` strategies,
+plus uncertain entry and position-action executions. Each page contains up to five
+records with their type, ID, update time and recorded reason. Already-delivered
+pause alerts and legacy strategies without a reason remain visible. Long reasons
+are explicitly truncated in the message; the complete reason stays in SQLite.
+
+This reads local durable state, not current exchange state. Reconcile positions,
+orders and protection on Bybit before any retry. The command neither resumes
+automation nor changes execution statuses or acknowledges pause alerts. Pages are
+read afresh, so changing records can move between requests; restart at page 1 if
+the list changes during review. An empty list does not prove the exchange is flat.
+
 ## Development
 
 For source-mounted Docker development, explicitly select the development file:

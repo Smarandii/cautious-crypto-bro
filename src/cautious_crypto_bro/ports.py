@@ -20,6 +20,7 @@ from .domain import (
     InstrumentContext,
     IntentExecutionOutcome,
     MarketPrimaryExecutionResult,
+    OperatorAttentionItem,
     PositionActionExecutionOutcome,
     PositionActionExecutionResult,
     PositionActionIntent,
@@ -532,10 +533,17 @@ class StrategyAlertRepository(Protocol):
     ) -> None: ...
 
 
+class OperatorAttentionRepository(Protocol):
+    async def get_operator_attention(
+        self, *, limit: int, offset: int
+    ) -> tuple[OperatorAttentionItem, ...]: ...
+
+
 class ApprovalBotStore(
     IntentRepository,
     PositionActionRepository,
     StrategyAlertRepository,
+    OperatorAttentionRepository,
     Protocol,
 ):
     """Everything ApprovalBot needs from durable storage."""

@@ -11,6 +11,7 @@ from aiogram import (
     F,
     Router,
 )
+from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import (
     CallbackData,
 )
@@ -28,6 +29,7 @@ from .approval_presenter import (
     render,
     render_account_state,
     render_action_outcome,
+    render_operator_attention,
     render_position_action,
 )
 from .domain import (
@@ -50,6 +52,8 @@ from .ports import (
 )
 
 logger = logging.getLogger(__name__)
+
+ATTENTION_PAGE_SIZE = 5
 
 POLLING_BACKOFF = BackoffConfig(
     min_delay=5.0,
@@ -95,6 +99,7 @@ class ApprovalBot:
         self._approver_user_id = approver_user_id
         self._store = store
         self._executor = executor
+        self._router.message(Command("attention"))(self._attention)
 
         self._router.callback_query(IntentAction.filter(F.action == "execute"))(
             self._execute
@@ -108,6 +113,43 @@ class ApprovalBot:
 
         self._router.callback_query(PositionActionCallback.filter(F.action == "skip"))(
             self._skip_position_action
+        )
+
+    async def _attention(self, message: Message, command: CommandObject) -> None:
+        if (
+            message.chat.id != self._approval_chat_id
+            or message.from_user is None
+            or message.from_user.id != self._approver_user_id
+        ):
+            return
+        argument = (command.args or "1").strip()
+        if (
+            not argument.isascii()
+            or not argument.isdecimal()
+            or len(argument) > 6
+            or int(argument) < 1
+        ):
+            await self._send_html("Usage: /attention [page number from 1 to 999999]")
+            return
+        page = int(argument)
+        try:
+            items = await self._store.get_operator_attention(
+                limit=ATTENTION_PAGE_SIZE + 1,
+                offset=(page - 1) * ATTENTION_PAGE_SIZE,
+            )
+        except Exception:
+            logger.exception("Failed to read operator attention records")
+            await self._send_html(
+                "Operator review unavailable: local storage could not be read. "
+                "Try again; this does not mean there are no quarantined records."
+            )
+            return
+        await self._send_html(
+            render_operator_attention(
+                items[:ATTENTION_PAGE_SIZE],
+                page=page,
+                has_more=len(items) > ATTENTION_PAGE_SIZE,
+            )
         )
 
     async def start(self) -> None:

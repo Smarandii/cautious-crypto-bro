@@ -13,6 +13,13 @@ what remains unproven.
 
 Refactoring, correctness and repository hardening since `v2.0.0`.
 
+### Added
+
+- Authorized `/attention [page]` shows durable paused strategies and uncertain
+  entry/action executions with IDs and reasons. The read-only paginated view
+  retains acknowledged and legacy pauses and distinguishes storage failures from
+  an empty list, without querying or changing the exchange.
+
 ### Changed
 
 - Extracted strategy supervision into phased builders and split execution,
