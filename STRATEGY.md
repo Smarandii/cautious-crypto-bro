@@ -187,8 +187,9 @@ UNCERTAIN. Intent status is separate: EXECUTED can mean accepted pending limits.
 - Startup reconciles before AUTO recovery and again before ingestion.
 - Exit installation persists its revision before mutations; recovery reuses
   matching open/filled orders. Fill detection uses executed quantity.
-- Manual approval delivery retries durably. A crash after sending but before
-  acknowledgement may duplicate a card; execution claims prevent duplicate trades.
+- Manual cards and AUTO terminal notices retry durably. A crash after sending but
+  before acknowledgement can duplicate a notification; execution claims prevent
+  duplicate trades, and notification retries never invoke execution.
 
 Fixed-exit quantities and prices are saved before each revision is submitted.
 Canceled, missing/unconfirmed, amended, or unexpected owned exits pause automation

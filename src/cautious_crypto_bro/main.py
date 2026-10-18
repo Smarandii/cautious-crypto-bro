@@ -242,7 +242,7 @@ async def _run_application(
         tg.create_task(runtime.bot.run())
         tg.create_task(runtime.bot.run_strategy_alert_delivery())
         tg.create_task(runtime.supervisor.run())
-        tg.create_task(runtime.service.run_manual_delivery_recovery())
+        tg.create_task(runtime.service.run_delivery_recovery())
         tg.create_task(runtime.service.run_periodic_account_pnl_sync())
 
         await runtime.source.start()
