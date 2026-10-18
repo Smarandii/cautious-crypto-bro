@@ -28,6 +28,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Ignore private `.env` variants in Git and Docker, including nested Docker
+  paths, while retaining public `.env.example` templates. Verify the boundary
+  with an isolated Git repository and an exported scratch-image build in CI.
 - Close acquired runtime clients after partial startup failure and continue cleanup
   after a close fails, retaining exception chains and shared-state ownership until
   cleanup finishes. Close Redis's owned pool even when its client close fails.

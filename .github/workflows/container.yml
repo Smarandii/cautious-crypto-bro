@@ -8,6 +8,7 @@ on:
       - "docker-compose.yaml"
       - "docker-compose.dev.yaml"
       - ".dockerignore"
+      - ".gitignore"
       - "src/**"
       - "scripts/**"
       - "pyproject.toml"
@@ -20,6 +21,7 @@ on:
       - "docker-compose.yaml"
       - "docker-compose.dev.yaml"
       - ".dockerignore"
+      - ".gitignore"
       - "src/**"
       - "scripts/**"
       - "pyproject.toml"
@@ -58,6 +60,35 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify private environment boundaries
+        run: |
+          context="$RUNNER_TEMP/private-env-context"
+          output="$RUNNER_TEMP/private-env-output"
+          mkdir -p "$context/nested"
+          cp .gitignore .dockerignore "$context/"
+          for directory in "$context" "$context/nested"; do
+            for file in .env .env.production .env.backup .env.example; do
+              printf 'synthetic canary only\n' > "$directory/$file"
+            done
+          done
+          git -C "$context" init -q
+          for prefix in "" "nested/"; do
+            for file in .env .env.production .env.backup; do
+              git -C "$context" check-ignore --quiet --no-index "${prefix}${file}"
+            done
+            if git -C "$context" check-ignore --quiet --no-index "${prefix}.env.example"; then
+              echo 'Public environment example must remain available'
+              exit 1
+            fi
+          done
+          printf 'FROM scratch\nCOPY . /context/\n' > "$context/Dockerfile"
+          docker build --output "type=local,dest=$output" "$context"
+          for prefix in "" "nested/"; do
+            for file in .env .env.production .env.backup; do
+              test ! -e "$output/context/${prefix}${file}"
+            done
+            test -f "$output/context/${prefix}.env.example"
+          done
       - name: Validate Compose configuration
         run: |
           cp .env.example .env
