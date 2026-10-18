@@ -46,16 +46,15 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
-- Classify failed initial close/reduce reads as preflight failures, keeping the
-  existing strategy active when no mutation began. Retain durable uncertainty
-  after cancellation or submission begins, including failures on later reads.
-
 - Reject missing or malformed exchange list pages and cyclic page cursors before
   account safety checks can mistake unavailable exposure for an empty account.
 - Remove closed-P&L history fetches from signal processing and AUTO result
   previews. The existing periodic worker owns history sync; previews use the
   stored ledger with its successful-sync timestamp and explicit mixed-age total.
   Keep persistence, execution and approval delivery independent of history outages.
+- Classify failed initial close/reduce reads as preflight failures, keeping the
+  existing strategy active when no mutation began. Retain durable uncertainty
+  after cancellation or submission begins, including failures on later reads.
 - Treat unavailable exchange quantities as errors instead of zero exposure. Reject
   invalid active symbols, position average/mark prices and stops, and inconsistent
   order quantities. Retain explicit zero positions and partial protective stops.
