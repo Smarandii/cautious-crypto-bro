@@ -169,6 +169,7 @@ class BybitClient:
     ) -> list[dict]:
         params = dict(params)
         items: list[dict] = []
+        seen_cursors = {str(params["cursor"])} if params.get("cursor") else set()
 
         while True:
             response = self.private_get(
@@ -176,27 +177,30 @@ class BybitClient:
                 params,
             )
 
-            result = response.get("result", {})
-
-            page = result.get(
-                "list",
-                [],
-            )
-
-            items.extend(
-                item
-                for item in page
-                if isinstance(
-                    item,
-                    dict,
+            result = response.get("result")
+            if not isinstance(result, dict):
+                raise TradeExecutionError(
+                    f"Bybit {path} returned an invalid page result"
                 )
-            )
+            page = result.get("list")
+            if not isinstance(page, list) or any(
+                not isinstance(item, dict) for item in page
+            ):
+                raise TradeExecutionError(f"Bybit {path} returned an invalid page list")
+            cursor = result.get("nextPageCursor", "")
+            if not isinstance(cursor, str):
+                raise TradeExecutionError(
+                    f"Bybit {path} returned an invalid page cursor"
+                )
+            if cursor and cursor in seen_cursors:
+                raise TradeExecutionError(f"Bybit {path} page cursor repeated")
 
-            cursor = str(result.get("nextPageCursor") or "")
+            items.extend(page)
 
             if not cursor:
                 break
 
+            seen_cursors.add(cursor)
             params["cursor"] = cursor
 
         return items
