@@ -138,6 +138,8 @@ async def owned(settings):
 
 app.get_settings = lambda: SimpleNamespace(log_level="INFO", database_path=database)
 app._run_owned_application = owned
+# Bound application startup and shutdown, independently of cold dependency imports.
+signal.alarm(5)
 app.main()
 assert not supervision_health_path(database).exists()
 with app.state_ownership(database):
