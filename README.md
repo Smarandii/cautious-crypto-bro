@@ -30,6 +30,13 @@ leave the small lock file in place. Stop older versions before upgrading because
 they do not acquire this lock. Separate databases/hosts and standalone operator
 scripts are outside this guard: never run competing writers for the same account.
 
+Once a locked execution step begins, task cancellation waits for the exchange work
+and its durable result or quarantine to finish before releasing the account lock.
+The caller still receives cancellation afterward; cancellation does not withdraw
+orders. Direct Bybit calls also drain their synchronous worker before unwinding.
+This can delay shutdown by the duration of an in-flight request/workflow. Hard
+process termination still relies on startup quarantine for unknown outcomes.
+
 The source reconciles each channel against history every
 `TELEGRAM_CATCHUP_INTERVAL_SECONDS` to recover posts absent from live processing.
 Only history scans advance the recovery cursor; newer live messages cannot hide

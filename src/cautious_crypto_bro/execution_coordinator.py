@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
+from .cancellation import finish_before_cancellation
 from .domain import (
     AccountStateSummary,
     ApprovalMode,
@@ -248,77 +249,84 @@ class ExecutionCoordinator:
             return prepared
         intent, plan = prepared
 
-        effective_plan = plan
-
         async with self._execution_lock:
-            current = await self._store.get_intent(intent_id)
-            if current is not None and current.status is IntentStatus.SKIPPED:
-                return IntentExecutionOutcome(
-                    status=current.status,
-                    message="Entry withdrawn by source",
-                    intent=current,
-                    plan=plan,
-                )
-            strategy_created = False
-            primary_filled = False
-            try:
-                await self._assert_open_preflight(intent, plan, approval_mode)
+            return await finish_before_cancellation(
+                self._execute_claimed_intent(intent, plan, approval_mode)
+            )
 
-                await self._store.ensure_position_strategy(plan)
-                strategy_created = True
+    async def _execute_claimed_intent(
+        self, intent: TradingIntent, plan: ExecutionPlan, approval_mode: ApprovalMode
+    ) -> IntentExecutionOutcome:
+        intent_id = intent.intent_id
+        effective_plan = plan
+        current = await self._store.get_intent(intent_id)
+        if current is not None and current.status is IntentStatus.SKIPPED:
+            return IntentExecutionOutcome(
+                status=current.status,
+                message="Entry withdrawn by source",
+                intent=current,
+                plan=plan,
+            )
+        strategy_created = False
+        primary_filled = False
+        try:
+            await self._assert_open_preflight(intent, plan, approval_mode)
 
-                staged_market = plan.orders[0].order_type is ExecutionOrderType.MARKET
+            await self._store.ensure_position_strategy(plan)
+            strategy_created = True
 
-                if staged_market:
-                    primary = await self._executor.execute_market_primary(plan)
-                    primary_filled = True
+            staged_market = plan.orders[0].order_type is ExecutionOrderType.MARKET
 
-                    context = await self._executor.market_context(plan.symbol)
+            if staged_market:
+                primary = await self._executor.execute_market_primary(plan)
+                primary_filled = True
 
-                    effective_plan = self._planner.rebase_market_plan(
-                        plan,
-                        fill_price=(primary.average_fill_price),
-                        filled_quantity=(primary.filled_quantity),
-                        context=context,
-                    )
+                context = await self._executor.market_context(plan.symbol)
 
-                    # Persist the fill-derived geometry
-                    # before E2/E3 are submitted. The
-                    # supervisor shares this mutation lock,
-                    # so it can never observe the new orders
-                    # against the old snapshot plan.
-                    await self._store.update_execution_plan(effective_plan)
-
-                    remaining_ids = await self._executor.execute_remaining_entries(
-                        effective_plan
-                    )
-
-                    order_ids = (
-                        primary.order_id,
-                        *remaining_ids,
-                    )
-
-                else:
-                    order_ids = await self._executor.execute(plan)
-
-                await self._store.mark_executed(
-                    intent_id,
-                    order_ids,
+                effective_plan = self._planner.rebase_market_plan(
+                    plan,
+                    fill_price=(primary.average_fill_price),
+                    filled_quantity=(primary.filled_quantity),
+                    context=context,
                 )
 
-            except Exception as exc:
-                logger.exception(
-                    "Execution failed for %s",
-                    intent_id,
+                # Persist the fill-derived geometry
+                # before E2/E3 are submitted. The
+                # supervisor shares this mutation lock,
+                # so it can never observe the new orders
+                # against the old snapshot plan.
+                await self._store.update_execution_plan(effective_plan)
+
+                remaining_ids = await self._executor.execute_remaining_entries(
+                    effective_plan
                 )
-                return await self._execution_failure_outcome(
-                    intent_id,
-                    exc,
-                    strategy_created=strategy_created,
-                    primary_filled=primary_filled,
-                    intent=intent,
-                    effective_plan=effective_plan,
+
+                order_ids = (
+                    primary.order_id,
+                    *remaining_ids,
                 )
+
+            else:
+                order_ids = await self._executor.execute(plan)
+
+            await self._store.mark_executed(
+                intent_id,
+                order_ids,
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "Execution failed for %s",
+                intent_id,
+            )
+            return await self._execution_failure_outcome(
+                intent_id,
+                exc,
+                strategy_created=strategy_created,
+                primary_filled=primary_filled,
+                intent=intent,
+                effective_plan=effective_plan,
+            )
 
         return IntentExecutionOutcome(
             status=IntentStatus.EXECUTED,
@@ -497,34 +505,41 @@ class ExecutionCoordinator:
         if terminal is not None:
             return terminal
 
-        result: PositionActionExecutionResult | None = None
-
         async with self._execution_lock:
-            if action.action is PositionActionType.CANCEL_ENTRIES:
-                return await self._cancel_entries(action)
-            try:
-                result = await self._executor.execute_position_action(action)
-                await self._confirm_position_action(action, result)
-
-            except PositionActionPreflightError as exc:
-                return await self._preflight_failure_outcome(action_id, action, exc)
-
-            except Exception as exc:
-                # The exchange may have accepted a market reduction even
-                # when its response or the later confirmation timed out.
-                logger.exception(
-                    "Position action %s has an uncertain exchange outcome",
-                    action_id,
-                )
-                return await self._uncertain_outcome(action_id, action, result, exc)
-
-            assert result is not None
-            # Status and resulting strategy rebalance/close must be durable
-            # before releasing the lock to the position supervisor.
-            await self._store.complete_position_action(
-                action,
-                result.order_id,
+            return await finish_before_cancellation(
+                self._execute_claimed_position_action(action)
             )
+
+    async def _execute_claimed_position_action(
+        self, action: PositionActionIntent
+    ) -> PositionActionExecutionOutcome:
+        action_id = action.action_id
+        result: PositionActionExecutionResult | None = None
+        if action.action is PositionActionType.CANCEL_ENTRIES:
+            return await self._cancel_entries(action)
+        try:
+            result = await self._executor.execute_position_action(action)
+            await self._confirm_position_action(action, result)
+
+        except PositionActionPreflightError as exc:
+            return await self._preflight_failure_outcome(action_id, action, exc)
+
+        except Exception as exc:
+            # The exchange may have accepted a market reduction even
+            # when its response or the later confirmation timed out.
+            logger.exception(
+                "Position action %s has an uncertain exchange outcome",
+                action_id,
+            )
+            return await self._uncertain_outcome(action_id, action, result, exc)
+
+        assert result is not None
+        # Status and resulting strategy rebalance/close must be durable
+        # before releasing the lock to the position supervisor.
+        await self._store.complete_position_action(
+            action,
+            result.order_id,
+        )
 
         return PositionActionExecutionOutcome(
             status=IntentStatus.EXECUTED,

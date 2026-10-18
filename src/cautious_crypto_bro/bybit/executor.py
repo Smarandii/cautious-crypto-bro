@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from datetime import (
     UTC,
     datetime,
@@ -10,6 +11,7 @@ from datetime import (
 )
 from decimal import ROUND_DOWN, Decimal
 
+from ..cancellation import finish_before_cancellation
 from ..domain import (
     AccountOrder,
     AccountStateSummary,
@@ -45,6 +47,10 @@ from .normalize import (
 logger = logging.getLogger(__name__)
 
 
+async def _run_sync[Result](function: Callable[..., Result], *args: object) -> Result:
+    return await finish_before_cancellation(asyncio.to_thread(function, *args))
+
+
 class BybitDemoExecutor:
     def __init__(
         self,
@@ -64,7 +70,7 @@ class BybitDemoExecutor:
         self,
         symbol: str,
     ) -> InstrumentContext:
-        return await asyncio.to_thread(
+        return await _run_sync(
             self._market_context_sync,
             symbol,
         )
@@ -72,17 +78,17 @@ class BybitDemoExecutor:
     async def account_state(
         self,
     ) -> AccountStateSummary:
-        return await asyncio.to_thread(self._account_state_sync)
+        return await _run_sync(self._account_state_sync)
 
     async def wallet_balance_usdt(self) -> Decimal:
-        return await asyncio.to_thread(self._wallet_balance_usdt_sync)
+        return await _run_sync(self._wallet_balance_usdt_sync)
 
     async def closed_pnl_history(
         self,
         start: datetime,
         end: datetime,
     ) -> tuple[ClosedPnlRecord, ...]:
-        return await asyncio.to_thread(
+        return await _run_sync(
             self._closed_pnl_history_sync,
             start,
             end,
@@ -92,7 +98,7 @@ class BybitDemoExecutor:
         self,
         plan: ExecutionPlan,
     ) -> tuple[str, ...]:
-        return await asyncio.to_thread(
+        return await _run_sync(
             self._execute_sync,
             plan,
         )
@@ -101,7 +107,7 @@ class BybitDemoExecutor:
         self,
         plan: ExecutionPlan,
     ) -> MarketPrimaryExecutionResult:
-        return await asyncio.to_thread(
+        return await _run_sync(
             self._execute_market_primary_sync,
             plan,
         )
@@ -110,7 +116,7 @@ class BybitDemoExecutor:
         self,
         plan: ExecutionPlan,
     ) -> tuple[str, ...]:
-        return await asyncio.to_thread(
+        return await _run_sync(
             self._execute_remaining_entries_sync,
             plan,
         )
@@ -119,7 +125,7 @@ class BybitDemoExecutor:
         self,
         action: PositionActionIntent,
     ) -> PositionActionExecutionResult:
-        return await asyncio.to_thread(
+        return await _run_sync(
             self._execute_position_action_sync,
             action,
         )
@@ -128,7 +134,7 @@ class BybitDemoExecutor:
         self,
         symbol: str,
     ) -> int:
-        return await asyncio.to_thread(
+        return await _run_sync(
             self._cancel_ccb_entry_orders_sync,
             symbol,
         )
@@ -137,7 +143,7 @@ class BybitDemoExecutor:
         self,
         symbol: str,
     ) -> int:
-        return await asyncio.to_thread(
+        return await _run_sync(
             self._cancel_ccb_exit_orders_sync,
             symbol,
         )
@@ -147,7 +153,7 @@ class BybitDemoExecutor:
         symbol: str,
         order_id: str,
     ) -> None:
-        await asyncio.to_thread(
+        await _run_sync(
             self._cancel_order_sync,
             symbol,
             order_id,
@@ -160,7 +166,7 @@ class BybitDemoExecutor:
         *,
         trailing_distance: Decimal | None = None,
     ) -> None:
-        await asyncio.to_thread(
+        await _run_sync(
             self._set_position_protection_sync,
             symbol,
             stop_loss,
@@ -176,7 +182,7 @@ class BybitDemoExecutor:
         price: Decimal,
         order_link_id: str,
     ) -> str:
-        return await asyncio.to_thread(
+        return await _run_sync(
             self._place_reduce_only_exit_sync,
             symbol,
             position_side,
@@ -418,7 +424,7 @@ class BybitDemoExecutor:
 
     async def strategy_order(self, symbol: str, link_id: str) -> AccountOrder | None:
         """Read open or completed orders; absence from open orders is not a fill."""
-        return await asyncio.to_thread(self._strategy_order_sync, symbol, link_id)
+        return await _run_sync(self._strategy_order_sync, symbol, link_id)
 
     def _strategy_order_sync(self, symbol: str, link_id: str) -> AccountOrder | None:
         for endpoint in ("/v5/order/realtime", "/v5/order/history"):
