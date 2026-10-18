@@ -29,6 +29,7 @@ from .domain import (
 )
 
 logger = logging.getLogger(__name__)
+MAX_CONCURRENT_POSTS = 2
 
 MessageHandler = Callable[
     [IncomingPost],
@@ -337,6 +338,7 @@ class TelegramSource:
 
         self._channels = channels
         self._on_message = on_message
+        self._post_slots = asyncio.Semaphore(MAX_CONCURRENT_POSTS)
 
         self._startup_lookback_hours = startup_lookback_hours
         self._catchup_interval_seconds = catchup_interval_seconds
@@ -548,22 +550,26 @@ class TelegramSource:
         *,
         chat: object | None = None,
     ) -> None:
-        messages = await telegram_message_group(
-            self._client, chat if chat is not None else messages[0].chat_id, messages
-        )
-        post = await telegram_messages_to_post(
-            messages,
-            chat=chat,
-        )
-
-        if post is not None:
-            logger.info(
-                "Delivering Telegram post %s/%s (%d image(s))",
-                post.source.channel_id,
-                post.source.message_id,
-                len(post.images),
+        # Bound buffered media as well as model calls, across live and replay paths.
+        async with self._post_slots:
+            messages = await telegram_message_group(
+                self._client,
+                chat if chat is not None else messages[0].chat_id,
+                messages,
             )
-            await self._on_message(post)
+            post = await telegram_messages_to_post(
+                messages,
+                chat=chat,
+            )
+
+            if post is not None:
+                logger.info(
+                    "Delivering Telegram post %s/%s (%d image(s))",
+                    post.source.channel_id,
+                    post.source.message_id,
+                    len(post.images),
+                )
+                await self._on_message(post)
 
     async def run_until_disconnected(
         self,
