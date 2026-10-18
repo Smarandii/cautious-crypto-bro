@@ -42,9 +42,13 @@ def test_auto_preview_precedes_outcome_and_failures_do_not_hide_result(kind, fai
                 else None,
             )
         )
-        service._sync_account_pnl = AsyncMock(
-            return_value=pnl,
-            side_effect=RuntimeError("PnL unavailable") if failure == "pnl" else None,
+        service._store = SimpleNamespace(
+            get_account_pnl_summary=AsyncMock(
+                return_value=pnl,
+                side_effect=RuntimeError("PnL unavailable")
+                if failure == "pnl"
+                else None,
+            )
         )
         service._approval_bot = SimpleNamespace(
             send_account_snapshot=AsyncMock(side_effect=preview),

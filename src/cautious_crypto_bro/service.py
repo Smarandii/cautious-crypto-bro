@@ -378,17 +378,14 @@ class SignalService:
         return ApprovalMode.AUTO
 
     async def _send_auto_preview(self) -> None:
-        # Fetch after execution so the preview includes the resulting account state.
-        state = pnl = None
-        state_error = pnl_error = None
+        # Refresh exposure after execution; accounting uses the periodic ledger.
+        state = None
+        state_error = None
         try:
             state = await self._executor.account_state()
         except Exception as exc:
             state_error = f"{type(exc).__name__}: {exc}"
-        try:
-            pnl = await self._sync_account_pnl()
-        except Exception as exc:
-            pnl_error = f"{type(exc).__name__}: {exc}"
+        pnl, pnl_error = await self._stored_account_pnl_safe()
         try:
             await self._approval_bot.send_account_snapshot(
                 state, state_error=state_error, pnl=pnl, pnl_error=pnl_error
@@ -543,8 +540,6 @@ class SignalService:
                 len(batch.planning_errors),
             )
 
-        account_pnl, account_pnl_error = await self._sync_account_pnl_safe(source)
-
         finalized = await self._persist_batch(
             source,
             claim_token,
@@ -554,6 +549,7 @@ class SignalService:
         if not finalized:
             return
 
+        account_pnl, account_pnl_error = await self._stored_account_pnl_safe()
         snapshot = AccountSnapshotDelivery(
             state=batch.account_state,
             state_error=batch.account_state_error,
@@ -1000,19 +996,14 @@ class SignalService:
                 claim_token,
             )
 
-    async def _sync_account_pnl_safe(
+    async def _stored_account_pnl_safe(
         self,
-        source: SourceMessage,
     ) -> tuple[AccountPnlSummary | None, str | None]:
         try:
-            return await self._sync_account_pnl(), None
+            return await self._store.get_account_pnl_summary(), None
 
         except Exception as exc:
-            logger.exception(
-                "Account P&L sync failed for %s/%s",
-                source.channel_id,
-                source.message_id,
-            )
+            logger.exception("Stored account P&L preview unavailable")
             return None, f"{type(exc).__name__}: {exc}"
 
     async def _persist_batch(

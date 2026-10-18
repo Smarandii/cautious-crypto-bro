@@ -39,6 +39,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Fixed
 
+- Remove closed-P&L history fetches from signal processing and AUTO result
+  previews. The existing periodic worker owns history sync; previews use the
+  stored ledger with its successful-sync timestamp and explicit mixed-age total.
+  Keep persistence, execution and approval delivery independent of history outages.
 - Own SIGTERM at application scope instead of stopping only Telegram polling.
   Stop polling and drain active update handlers before closing clients; preserve
   state ownership through cleanup, including repeated termination and startup.

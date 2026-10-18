@@ -99,6 +99,15 @@ an acknowledgement failure can duplicate a notice, never its trade. Manual card
 and AUTO notice recovery failures are isolated. Pre-upgrade pending/interrupted
 work is covered; already-terminal history is not bulk-replayed.
 
+Account previews combine live exposure with stored realized P&L. Only the
+background accounting worker fetches closed-P&L history: it starts immediately
+and waits 15 minutes between attempts. Signal processing and result previews
+never fetch that history. They read the existing ledger and display its last
+successful sync time in UTC; the combined figure is labeled `stored + live`.
+Before the first successful sync, tracked realized P&L is `not synced`. A failed
+history request can leave an older timestamp; a ledger read failure displays
+`unavailable`. Neither accounting condition blocks execution or manual cards.
+
 ## Behavior
 
 - OPEN needs symbol, direction and explicit MARKET/LIMIT/RANGE semantics.
