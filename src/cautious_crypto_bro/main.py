@@ -20,6 +20,7 @@ from .service import SignalService
 from .signal_context import SignalContextProvider
 from .state_ownership import state_ownership
 from .storage import IntentStore
+from .supervision_health import supervision_health_lifecycle, supervision_health_path
 from .telegram_source import TelegramSource
 
 
@@ -49,7 +50,12 @@ async def async_main() -> None:
 
     previous_handler = signal.signal(signal.SIGTERM, request_shutdown)
     try:
-        with state_ownership(settings.database_path):
+        with (
+            state_ownership(settings.database_path),
+            supervision_health_lifecycle(
+                supervision_health_path(settings.database_path)
+            ),
+        ):
             await _run_owned_application(settings)
     except asyncio.CancelledError:
         if not shutdown_requested:
@@ -151,6 +157,7 @@ async def _build_runtime(
         store=store,
         executor=executor,
         mutation_lock=(account_mutation_lock),
+        progress_path=supervision_health_path(settings.database_path),
     )
 
     bot = ApprovalBot(

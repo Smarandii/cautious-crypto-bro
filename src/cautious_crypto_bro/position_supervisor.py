@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 from .domain import (
@@ -25,6 +26,7 @@ from .ports import AccountGateway, PositionSupervisorStore
 from .position_management.exit_installer import ExitInstaller
 from .position_management.fill_detector import FillDetector
 from .position_management.trailing_stop_manager import TrailingStopManager
+from .supervision_health import publish_success
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ class PositionSupervisor:
         executor: AccountGateway,
         mutation_lock: asyncio.Lock,
         poll_interval_seconds: float = 2.0,
+        progress_path: Path | None = None,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("Supervisor poll interval must be positive")
@@ -45,6 +48,7 @@ class PositionSupervisor:
         self._executor = executor
         self._mutation_lock = mutation_lock
         self._poll_interval_seconds = poll_interval_seconds
+        self._progress_path = progress_path
         self._reported_uncertain: set[UUID] = set()
         self._trailing_stop_manager = TrailingStopManager(executor=executor)
         self._fill_detector = FillDetector(executor=executor)
@@ -59,6 +63,7 @@ class PositionSupervisor:
         while True:
             try:
                 await self.reconcile_once()
+                self._publish_progress()
 
             except asyncio.CancelledError:
                 raise
@@ -67,6 +72,15 @@ class PositionSupervisor:
                 logger.exception("Position supervisor reconciliation failed")
 
             await asyncio.sleep(self._poll_interval_seconds)
+
+    def _publish_progress(self) -> None:
+        if self._progress_path is None:
+            return
+        try:
+            publish_success(self._progress_path)
+        except OSError:
+            # Visibility failure must not interrupt exchange protection work.
+            logger.exception("Failed to publish successful supervision progress")
 
     async def reconcile_once(self) -> None:
         # The durable strategy snapshot must be loaded while holding the

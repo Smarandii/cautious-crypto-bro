@@ -15,6 +15,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Added
 
+- Read-only Compose supervision-progress healthcheck, based on successful passes
+  rather than a running process. Expire progress after five minutes, clear stale
+  markers under state ownership, and keep observability write failures separate
+  from protection work. This does not auto-restart or certify other components.
 - Authorized `/attention [page]` shows durable paused strategies and uncertain
   entry/action executions with IDs and reasons. The read-only paginated view
   retains acknowledged and legacy pauses and distinguishes storage failures from

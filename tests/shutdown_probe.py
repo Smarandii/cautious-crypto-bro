@@ -18,6 +18,10 @@ from aiogram.types import Chat, Message, Update, User
 
 from cautious_crypto_bro.approval_bot import ApprovalBot
 from cautious_crypto_bro.cancellation import finish_before_cancellation
+from cautious_crypto_bro.supervision_health import (
+    publish_success,
+    supervision_health_path,
+)
 
 app = import_module("cautious_crypto_bro.main")
 events = []
@@ -39,6 +43,7 @@ def send_signals():
 
 
 async def owned(settings):
+    publish_success(supervision_health_path(database))
     bot = ApprovalBot(
         token="123456:synthetic-offline-token",
         approval_chat_id=1,
@@ -103,6 +108,7 @@ async def owned(settings):
     bot._bot.session.close = close
 
     def cleanup():
+        assert supervision_health_path(database).exists()
         try:
             with app.state_ownership(database):
                 raise AssertionError("State owner released before cleanup")
@@ -133,6 +139,7 @@ async def owned(settings):
 app.get_settings = lambda: SimpleNamespace(log_level="INFO", database_path=database)
 app._run_owned_application = owned
 app.main()
+assert not supervision_health_path(database).exists()
 with app.state_ownership(database):
     events.append("owner.released")
 print(json.dumps(events), flush=True)
