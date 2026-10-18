@@ -19,6 +19,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
   entry/action executions with IDs and reasons. The read-only paginated view
   retains acknowledged and legacy pauses and distinguishes storage failures from
   an empty list, without querying or changing the exchange.
+- Offline state-backup CLI snapshots the application database and Telegram session
+  under the existing owner lock, includes committed WAL data, refuses overwrites
+  and verifies an isolated restore before success. Add a Docker backup/restore
+  drill with saved hashes, image identity and explicit cutover checks.
 
 ### Changed
 
