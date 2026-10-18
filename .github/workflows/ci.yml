@@ -50,8 +50,36 @@ jobs:
       - name: Type check
         run: uv run pyright
 
-      - name: Build package
-        run: uv build
+      - name: Build and verify distributions
+        run: |
+          mkdir .release-check-cache
+          printf 'synthetic local-only canary\n' > .release-check-cache/private-canary.txt
+          printf 'synthetic local-only canary\n' > .env.production
+          uv build
+          uv run python - <<'PY'
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          archive, = Path("dist").glob("*.tar.gz")
+          with tarfile.open(archive) as source:
+              names = {name.split("/", 1)[1] for name in source.getnames() if "/" in name}
+          assert ".env.production" not in names
+          assert not any(name.startswith(".release-check-cache/") for name in names)
+          assert {
+              "src/cautious_crypto_bro/main.py", "scripts/list_telegram_dialogs.py",
+              "tests/test_main.py", "docs/index.html", ".env.example",
+              "pyproject.toml", "uv.lock", "README.md", "LICENSE",
+          } <= names
+          wheel, = Path("dist").glob("*.whl")
+          with zipfile.ZipFile(wheel) as built:
+              assert "cautious_crypto_bro/main.py" in built.namelist()
+              assert not any("private-canary" in name or name.endswith(".env.production") for name in built.namelist())
+          PY
+          uv venv "$RUNNER_TEMP/package-install"
+          uv pip install --python "$RUNNER_TEMP/package-install/bin/python" dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/package-install/bin/python" -c "import cautious_crypto_bro.main; print('Installed wheel imports successfully')"
 
       - name: Unit tests
         run: uv run pytest -q

@@ -151,5 +151,11 @@ uv run pre-commit install
 uv run pytest -q
 ```
 
+Source distributions use explicit public paths in `pyproject.toml`; add new
+top-level distribution files there deliberately. Private state and credentials
+must stay outside the included source, scripts, tests and docs directories.
+CI builds with synthetic local-file canaries, checks archive contents and imports
+the installed wheel from an isolated environment outside the checkout.
+
 SQLite and Telegram sessions persist in Docker volume `app_state`; Redis uses
 `redis_state`. Audit exports and backups stay local and outside build context.
