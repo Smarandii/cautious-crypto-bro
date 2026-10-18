@@ -1,5 +1,7 @@
 import asyncio
+from unittest.mock import AsyncMock
 
+import pytest
 from fakeredis.aioredis import (
     FakeRedis,
 )
@@ -34,5 +36,20 @@ def test_evaluation_cache_preserves_openrouter_namespace() -> None:
         assert 0 < ttl <= 3600
 
         await store.close()
+
+    asyncio.run(run())
+
+
+def test_client_close_failure_still_closes_owned_pool(monkeypatch):
+    async def run():
+        store = RedisRuntimeStore("redis://unused")
+        failure = RuntimeError("client close failed")
+        monkeypatch.setattr(store._redis, "aclose", AsyncMock(side_effect=failure))
+        close_pool = AsyncMock(wraps=store._pool.aclose)
+        monkeypatch.setattr(store._pool, "aclose", close_pool)
+        with pytest.raises(RuntimeError) as caught:
+            await store.close()
+        assert caught.value is failure
+        close_pool.assert_awaited_once()
 
     asyncio.run(run())

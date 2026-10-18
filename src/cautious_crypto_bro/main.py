@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -11,7 +12,6 @@ from .config import Settings, get_settings
 from .execution import ExecutionPlanner
 from .execution_coordinator import ExecutionCoordinator
 from .llm_factory import build_intent_extractor
-from .ports import IntentExtractor
 from .position_supervisor import PositionSupervisor
 from .runtime_store import RedisRuntimeStore
 from .service import SignalService
@@ -54,43 +54,40 @@ async def _run_owned_application(settings: Settings) -> None:
             stale_sources,
         )
 
-    runtime_store = await _build_runtime_store(settings)
-
-    runtime = await _build_runtime(
-        settings,
-        store=store,
-        runtime_store=runtime_store,
-    )
-
-    try:
+    async with AsyncExitStack() as cleanup:
+        runtime_store = await _build_runtime_store(settings, cleanup=cleanup)
+        runtime = await _build_runtime(
+            settings,
+            store=store,
+            runtime_store=runtime_store,
+            cleanup=cleanup,
+        )
         await _run_application(
             runtime,
             interrupted_intents=interrupted_intents,
             interrupted_actions=interrupted_actions,
         )
-    finally:
-        await _close_runtime(runtime)
 
 
 @dataclass(frozen=True, slots=True)
 class _Runtime:
     """Every collaborator the process needs, wired once at startup."""
 
-    runtime_store: RedisRuntimeStore
-    extractor: IntentExtractor
-    executor: BybitDemoExecutor
     bot: ApprovalBot
     supervisor: PositionSupervisor
     service: SignalService
     source: TelegramSource
 
 
-async def _build_runtime_store(settings: Settings) -> RedisRuntimeStore:
+async def _build_runtime_store(
+    settings: Settings, *, cleanup: AsyncExitStack
+) -> RedisRuntimeStore:
     runtime_store = RedisRuntimeStore(
         settings.redis_url,
         max_connections=(settings.redis_max_connections),
         pool_timeout_seconds=(settings.redis_pool_timeout_seconds),
     )
+    cleanup.push_async_callback(runtime_store.close)
     await runtime_store.initialize()
     return runtime_store
 
@@ -100,12 +97,14 @@ async def _build_runtime(
     *,
     store: IntentStore,
     runtime_store: RedisRuntimeStore,
+    cleanup: AsyncExitStack,
 ) -> _Runtime:
     extractor = build_intent_extractor(
         settings,
         evaluation_cache=runtime_store,
         provider_cooldown_store=runtime_store,
     )
+    cleanup.push_async_callback(extractor.close)
 
     planner = ExecutionPlanner()
 
@@ -114,6 +113,7 @@ async def _build_runtime(
         api_secret=(settings.bybit_api_secret),
         planner=planner,
     )
+    cleanup.callback(executor.close)
 
     account_mutation_lock = asyncio.Lock()
 
@@ -139,6 +139,7 @@ async def _build_runtime(
         store=store,
         executor=coordinator,
     )
+    cleanup.push_async_callback(bot.close)
 
     context_provider = SignalContextProvider(
         store=store,
@@ -180,11 +181,9 @@ async def _build_runtime(
         catchup_interval_seconds=(settings.telegram_catchup_interval_seconds),
         retry_message_ids=retry_message_ids,
     )
+    cleanup.push_async_callback(source.disconnect)
 
     return _Runtime(
-        runtime_store=runtime_store,
-        extractor=extractor,
-        executor=executor,
         bot=bot,
         supervisor=supervisor,
         service=service,
@@ -229,14 +228,6 @@ async def _run_application(
 
         tg.create_task(runtime.source.run_until_disconnected())
         tg.create_task(runtime.source.run_catchup())
-
-
-async def _close_runtime(runtime: _Runtime) -> None:
-    await runtime.source.disconnect()
-    await runtime.bot.close()
-    await runtime.extractor.close()
-    await runtime.runtime_store.close()
-    runtime.executor.close()
 
 
 def main() -> None:

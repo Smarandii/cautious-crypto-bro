@@ -58,10 +58,11 @@ class RedisRuntimeStore(ProviderCooldownStore, EvaluationCache):
     async def close(
         self,
     ) -> None:
-        await self._redis.aclose()
-
-        if self._pool is not None:
-            await self._pool.aclose()
+        try:
+            await self._redis.aclose()
+        finally:
+            if self._pool is not None:
+                await self._pool.aclose()
 
     async def get_openrouter_provider_cooldowns(
         self,

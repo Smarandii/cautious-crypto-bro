@@ -5,13 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+pytestmark = pytest.mark.integration
 
-@pytest.mark.parametrize("failed_reconciliation", [None, 1, 2])
-def test_initial_reconciliation_precedes_any_execution(
-    monkeypatch: pytest.MonkeyPatch,
-    failed_reconciliation: int | None,
-    tmp_path,
-) -> None:
+
+def _fake_application(monkeypatch, tmp_path, failed_reconciliation=None):
     app = import_module("cautious_crypto_bro.main")
     events: list[str] = []
 
@@ -118,6 +115,26 @@ def test_initial_reconciliation_precedes_any_execution(
     monkeypatch.setattr(app, "SignalContextProvider", lambda **_: object())
     monkeypatch.setattr(app, "SignalService", lambda **_: service)
     monkeypatch.setattr(app, "TelegramSource", lambda **_: source)
+    return SimpleNamespace(
+        app=app,
+        events=events,
+        settings=settings,
+        runtime_store=runtime_store,
+        extractor=extractor,
+        executor=executor,
+        bot=bot,
+        source=source,
+    )
+
+
+@pytest.mark.parametrize("failed_reconciliation", [None, 1, 2])
+def test_initial_reconciliation_precedes_any_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    failed_reconciliation: int | None,
+    tmp_path,
+) -> None:
+    fake = _fake_application(monkeypatch, tmp_path, failed_reconciliation)
+    app, events, settings = fake.app, fake.events, fake.settings
 
     if failed_reconciliation is not None:
         with pytest.raises(RuntimeError, match="Initial account state"):
@@ -154,10 +171,84 @@ def test_initial_reconciliation_precedes_any_execution(
     assert events[-5:] == [
         "source.disconnect",
         "bot.close",
+        "executor.close",
         "extractor.close",
         "runtime.close",
-        "executor.close",
     ]
     # Startup failures and normal shutdown both release ownership after cleanup.
     with app.state_ownership(settings.database_path):
+        pass
+
+
+@pytest.mark.parametrize(
+    ("failed_at", "closed"),
+    [
+        ("redis_initialize", ["runtime.close"]),
+        ("extractor", ["runtime.close"]),
+        ("executor", ["extractor.close", "runtime.close"]),
+        ("source", ["bot.close", "executor.close", "extractor.close", "runtime.close"]),
+    ],
+)
+def test_partial_startup_closes_every_acquired_client(
+    monkeypatch, tmp_path, failed_at, closed
+):
+    fake = _fake_application(monkeypatch, tmp_path)
+    failure = RuntimeError("construction failed")
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    if failed_at == "redis_initialize":
+        fake.runtime_store.initialize = AsyncMock(side_effect=failure)
+    else:
+        constructor = {
+            "extractor": "build_intent_extractor",
+            "executor": "BybitDemoExecutor",
+            "source": "TelegramSource",
+        }[failed_at]
+        monkeypatch.setattr(fake.app, constructor, fail)
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(fake.app.async_main())
+    assert caught.value is failure
+    assert [item for item in fake.events if item.endswith(".close")] == closed
+    assert "bot.start" not in fake.events
+    with fake.app.state_ownership(fake.settings.database_path):
+        pass
+
+
+def test_cleanup_attempts_all_clients_and_preserves_failure_chain(
+    monkeypatch, tmp_path
+):
+    fake = _fake_application(monkeypatch, tmp_path, failed_reconciliation=1)
+
+    async def disconnect():
+        fake.events.append("source.disconnect")
+        raise RuntimeError("source close failed")
+
+    async def close_extractor():
+        fake.events.append("extractor.close")
+        raise RuntimeError("extractor close failed")
+
+    fake.source.disconnect = disconnect
+    fake.extractor.close = close_extractor
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(fake.app.async_main())
+    assert fake.events[-5:] == [
+        "source.disconnect",
+        "bot.close",
+        "executor.close",
+        "extractor.close",
+        "runtime.close",
+    ]
+    failures = []
+    error = caught.value
+    while error is not None:
+        failures.append(str(error))
+        error = error.__context__
+    assert failures == [
+        "extractor close failed",
+        "source close failed",
+        "Initial account state unavailable",
+    ]
+    with fake.app.state_ownership(fake.settings.database_path):
         pass
