@@ -21,7 +21,6 @@ from ..domain import (
     ExecutionPlan,
     InstrumentContext,
     MarketPrimaryExecutionResult,
-    OpenOrderExposure,
     PositionActionExecutionResult,
     PositionActionIntent,
     PositionActionPreflightError,
@@ -443,60 +442,31 @@ class BybitDemoExecutor:
     ) -> SymbolExposure:
         self._sync_clock()
 
-        position_response = self._client.private_get(
+        position_items = self._client.paginate_private_list(
             "/v5/position/list",
-            {
-                "category": "linear",
-                "symbol": symbol,
-            },
+            {"category": "linear", "symbol": symbol},
         )
-
-        position_items = position_response.get("result", {}).get("list", [])
-
         positions = [
             exposure
             for exposure in map(position_exposure_from_item, position_items)
             if exposure is not None
         ]
 
-        pending_orders: list[OpenOrderExposure] = []
-
-        order_params: dict[
-            str,
-            object,
-        ] = {
-            "category": "linear",
-            "symbol": symbol,
-            "openOnly": 0,
-            "orderFilter": "Order",
-            "limit": 50,
-        }
-
-        while True:
-            order_response = self._client.private_get(
-                "/v5/order/realtime",
-                order_params,
-            )
-
-            result = order_response.get("result", {})
-
-            order_items = result.get(
-                "list",
-                [],
-            )
-
-            pending_orders.extend(
-                order
-                for order in map(pending_entry_order_from_item, order_items)
-                if order is not None
-            )
-
-            cursor = str(result.get("nextPageCursor") or "")
-
-            if not cursor:
-                break
-
-            order_params["cursor"] = cursor
+        order_items = self._client.paginate_private_list(
+            "/v5/order/realtime",
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "openOnly": 0,
+                "orderFilter": "Order",
+                "limit": 50,
+            },
+        )
+        pending_orders = [
+            order
+            for order in map(pending_entry_order_from_item, order_items)
+            if order is not None
+        ]
 
         return SymbolExposure(
             symbol=symbol,
