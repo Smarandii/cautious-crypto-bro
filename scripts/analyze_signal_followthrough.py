@@ -5,12 +5,17 @@ from __future__ import annotations
 import json
 import random
 import statistics
+import sys
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-import analyze_forensic_pnl as forensic_pnl
-import replay_strategy_v2 as replay
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+import replay_strategy_v2 as replay  # noqa: E402
+
+from cautious_crypto_bro import forensic_pnl  # noqa: E402
 
 HORIZONS_MINUTES = (5, 15, 60, 240, 1440)
 BOOTSTRAP_ITERATIONS = 2_000

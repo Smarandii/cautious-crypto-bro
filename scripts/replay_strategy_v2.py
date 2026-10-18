@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import itertools
 import json
 import math
 import random
 import statistics
+import sys
 import zipfile
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import BinaryIO
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from cautious_crypto_bro.forensic_pnl import reconcile  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -1390,18 +1395,9 @@ def depth_exit_candidate() -> Candidate:
 
 def completed_position_starts(bundle_path: Path | BinaryIO) -> set[int]:
     """Load entry timestamps whose actual closed size reconciles in the bundle."""
-    analyzer_path = Path(__file__).with_name("analyze_forensic_pnl.py")
-    spec = importlib.util.spec_from_file_location(
-        "forensic_pnl_for_replay",
-        analyzer_path,
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load forensic P&L analyzer: {analyzer_path}")
-    analyzer = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(analyzer)
     return {
         int(position["start"])
-        for position in analyzer.reconcile(bundle_path)
+        for position in reconcile(bundle_path)
         if position["complete"]
     }
 
