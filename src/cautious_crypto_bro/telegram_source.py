@@ -607,6 +607,8 @@ class TelegramSource:
         self,
     ) -> None:
         await self._client.run_until_disconnected()  # pyright: ignore[reportGeneralTypeIssues]
+        # A normally returning TaskGroup child does not stop its siblings.
+        raise RuntimeError("Telegram source disconnected; ingestion stopped")
 
     async def disconnect(
         self,
