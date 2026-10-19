@@ -20,9 +20,12 @@ from telethon import (
     TelegramClient,
     events,
 )
+from telethon.errors import UnauthorizedError
 from telethon.tl.custom.message import (
     Message,
 )
+from telethon.tl.custom.qrlogin import QRLogin
+from telethon.tl.types import User
 
 from .domain import (
     ImageAttachment,
@@ -32,6 +35,16 @@ from .domain import (
 
 logger = logging.getLogger(__name__)
 MAX_CONCURRENT_POSTS = 2
+
+
+class SourceAuthorizationRequired(RuntimeError):
+    pass
+
+
+def _require_authorization() -> str:
+    raise SourceAuthorizationRequired("Telegram authorization required")
+
+
 MAX_POST_IMAGE_BYTES = 20 * 1024 * 1024
 
 
@@ -383,14 +396,31 @@ class TelegramSource:
         # A newer live delivery says nothing about earlier missed messages.
         self._watermarks: dict[int, int] = {}
         self._history_cutoff: datetime | None = None
+        self._handlers_registered = False
+        self._read_errors: dict[int, str] = {}
+
+    def read_warnings(self) -> tuple[str, ...]:
+        return tuple(
+            f"{channel}: {reason}"
+            for channel, reason in sorted(self._read_errors.items())
+        )
+
+    async def session_user_id(self) -> int | None:
+        await self._client.connect()
+        user = await self._client.get_me()
+        return user.id if isinstance(user, User) else None
+
+    async def login_qr(self) -> QRLogin:
+        return await self._client.qr_login()
 
     async def start(self) -> None:
         # Keep this boundary fixed through startup and failed seeding retries.
         # Telegram dates have second precision, so include the starting second.
-        self._history_cutoff = datetime.now(UTC).replace(microsecond=0) - timedelta(
-            hours=self._startup_lookback_hours
-        )
-        await self._client.start()  # pyright: ignore[reportGeneralTypeIssues]
+        if self._history_cutoff is None:
+            self._history_cutoff = datetime.now(UTC).replace(microsecond=0) - timedelta(
+                hours=self._startup_lookback_hours
+            )
+        await self._client.start(phone=_require_authorization)  # pyright: ignore[reportGeneralTypeIssues]
 
         entities: list[Any] = []
 
@@ -406,6 +436,16 @@ class TelegramSource:
 
         self._entities = entities
 
+        if not self._handlers_registered:
+            self._register_handlers(entities)
+            self._handlers_registered = True
+
+        await self.poll_once()
+
+        logger.info("Telegram startup complete; listening for live updates")
+
+    def _register_handlers(self, entities: list[Any]) -> None:
+        # Register once: reconnects must not duplicate post processing.
         # Albums are handled as one logical Telegram post.
         @self._client.on(events.Album(chats=entities))
         async def handle_album(
@@ -435,10 +475,6 @@ class TelegramSource:
 
             await self._handle_messages((event.message,))
 
-        await self.poll_once()
-
-        logger.info("Telegram startup complete; listening for live updates")
-
     async def _seed_watermarks(
         self,
         entities: list[Any],
@@ -463,7 +499,10 @@ class TelegramSource:
                         break
                     last_group = grouped_id
                 self._watermarks[chat_id] = watermark
-            except Exception:
+            except UnauthorizedError:
+                raise
+            except Exception as exc:
+                self._read_errors[chat_id] = type(exc).__name__
                 logger.exception(
                     "Failed to seed Telegram catch-up watermark for %s",
                     getattr(
@@ -481,6 +520,8 @@ class TelegramSource:
 
             try:
                 await self.poll_once()
+            except UnauthorizedError:
+                raise
             except Exception:
                 logger.exception("Telegram catch-up poll failed")
 
@@ -497,24 +538,16 @@ class TelegramSource:
                 # Retry seeding next time; zero is valid for an empty channel.
                 continue
 
-            messages: list[Message] = []
             try:
-                async for message in self._client.iter_messages(
-                    entity,
-                    min_id=watermark,
-                    reverse=True,
-                ):
-                    # Bound work per channel, but finish the boundary album.
-                    if len(messages) >= 200:
-                        last_group = getattr(messages[-1], "grouped_id", None)
-                        if last_group is None or last_group != getattr(
-                            message, "grouped_id", None
-                        ):
-                            break
-                    messages.append(message)
-            except Exception:
+                messages = await self._catchup_messages(entity, watermark)
+            except UnauthorizedError:
+                raise
+            except Exception as exc:
+                self._read_errors[chat_id] = type(exc).__name__
                 logger.exception("Failed to fetch Telegram catch-up for %s", chat_id)
                 continue
+
+            self._read_errors.pop(chat_id, None)
 
             if not messages:
                 continue
@@ -546,6 +579,21 @@ class TelegramSource:
                     # downloads. Other channels can still make progress.
                     break
 
+    async def _catchup_messages(self, entity: Any, watermark: int) -> list[Message]:
+        messages: list[Message] = []
+        async for message in self._client.iter_messages(
+            entity, min_id=watermark, reverse=True
+        ):
+            # Bound work per channel, but finish the boundary album.
+            if len(messages) >= 200:
+                last_group = getattr(messages[-1], "grouped_id", None)
+                if last_group is None or last_group != getattr(
+                    message, "grouped_id", None
+                ):
+                    break
+            messages.append(message)
+        return messages
+
     async def _retry_failed_messages(self, entity: Any, chat_id: int) -> None:
         if self._retry_message_ids is None:
             return
@@ -557,6 +605,8 @@ class TelegramSource:
                 Sequence[Message | None],
                 await self._client.get_messages(entity, ids=list(message_ids)),
             )
+        except UnauthorizedError:
+            raise
         except Exception:
             logger.exception("Failed to fetch retryable Telegram posts for %s", chat_id)
             return

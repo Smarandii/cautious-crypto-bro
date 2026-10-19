@@ -76,6 +76,19 @@ def _fake_application(monkeypatch, tmp_path, failed_reconciliation=None):
         run_catchup=step("source.catchup"),
         disconnect=step("source.disconnect"),
     )
+
+    async def source_worker():
+        await source.start()
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(source.run_catchup())
+            await source.run_until_disconnected()
+
+    monkeypatch.setattr(
+        app, "SourceRecovery", lambda *a, **kw: SimpleNamespace(run=source_worker)
+    )
+    bot.bind_source_recovery = lambda recovery: setattr(
+        bot, "_source_recovery", recovery
+    )
     settings = SimpleNamespace(
         log_level="INFO",
         database_path=tmp_path / "state.db",
@@ -125,6 +138,8 @@ def _fake_application(monkeypatch, tmp_path, failed_reconciliation=None):
         executor=executor,
         bot=bot,
         source=source,
+        service=service,
+        supervisor=supervisor,
     )
 
 
@@ -241,9 +256,10 @@ def test_partial_startup_closes_every_acquired_client(
 
 
 @pytest.mark.parametrize("listener_fails", [False, True])
-def test_terminal_telegram_disconnect_stops_siblings_and_releases_state(
+def test_reader_outage_keeps_operator_and_protection_alive_until_shutdown(
     monkeypatch, tmp_path, listener_fails
 ):
+    from cautious_crypto_bro.source_recovery import SourceRecovery
     from cautious_crypto_bro.supervision_health import (
         publish_success,
         supervision_health_path,
@@ -251,6 +267,16 @@ def test_terminal_telegram_disconnect_stops_siblings_and_releases_state(
     from cautious_crypto_bro.telegram_source import TelegramSource
 
     fake = _fake_application(monkeypatch, tmp_path)
+    monkeypatch.setattr(fake.app, "SourceRecovery", SourceRecovery)
+    fake.source.session_user_id = AsyncMock(return_value=1)
+    fake.source.read_warnings = lambda: ()
+    notified = asyncio.Event()
+
+    async def notice(text):
+        fake.events.append("source.alert")
+        notified.set()
+
+    fake.bot.send_source_notice = notice
     start = fake.source.start
 
     async def source_start():
@@ -280,28 +306,30 @@ def test_terminal_telegram_disconnect_stops_siblings_and_releases_state(
     fake.source.run_catchup = background
     fake.bot.run = background
     fake.bot.run_strategy_alert_delivery = background
-    fake.app.PositionSupervisor().run = background
-    service = fake.app.SignalService()
+    fake.supervisor.run = background
+    service = fake.service
     service.run_delivery_recovery = background
     service.run_periodic_account_pnl_sync = background
 
     async def run():
-        # A normal-returning listener previously left these six siblings alive.
-        with pytest.raises(ExceptionGroup) as caught:
-            await asyncio.wait_for(fake.app.async_main(), timeout=2)
-        errors = caught.value.exceptions
-        assert len(errors) == 1 and isinstance(errors[0], RuntimeError)
-        assert str(errors[0]) == (
-            "synthetic listener failure"
-            if listener_fails
-            else "Telegram source disconnected; ingestion stopped"
-        )
+        task = asyncio.create_task(fake.app.async_main())
+        try:
+            await asyncio.wait_for(notified.wait(), timeout=2)
+            assert not task.done()
+            assert fake.bot._source_recovery.state == "OFFLINE"
+            assert supervision_health_path(fake.settings.database_path).exists()
+            signal.raise_signal(signal.SIGTERM)
+            await asyncio.wait_for(task, timeout=2)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(run())
-    assert fake.events.count("background.stopped") == 6
+    assert fake.events.count("background.stopped") >= 5
     assert max(
         i for i, event in enumerate(fake.events) if event == "background.stopped"
-    ) < (fake.events.index("source.disconnect"))
+    ) < max(i for i, event in enumerate(fake.events) if event == "source.disconnect")
     assert fake.events[-5:] == [
         "source.disconnect",
         "bot.close",

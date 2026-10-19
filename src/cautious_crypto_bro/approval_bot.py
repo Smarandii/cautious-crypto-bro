@@ -4,9 +4,11 @@ import asyncio
 import html
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from io import BytesIO
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+import segno
 from aiogram import (
     Bot,
     Dispatcher,
@@ -18,6 +20,7 @@ from aiogram.filters.callback_data import (
     CallbackData,
 )
 from aiogram.types import (
+    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -56,6 +59,9 @@ from .ports import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from .source_recovery import SourceRecovery
 
 ATTENTION_PAGE_SIZE = 5
 RECOVERED_OUTCOME_NOTICE = (
@@ -109,7 +115,10 @@ class ApprovalBot:
         self._approver_user_id = approver_user_id
         self._store = store
         self._executor = executor
+        self._source_recovery: SourceRecovery | None = None
         self._router.message(Command("attention"))(self._attention)
+        self._router.message(Command("source"))(self._source_status)
+        self._router.message(Command("source_login"))(self._source_login)
 
         self._router.callback_query(IntentAction.filter(F.action == "execute"))(
             self._execute
@@ -124,6 +133,73 @@ class ApprovalBot:
         self._router.callback_query(PositionActionCallback.filter(F.action == "skip"))(
             self._skip_position_action
         )
+
+    def bind_source_recovery(self, recovery: SourceRecovery) -> None:
+        self._source_recovery = recovery
+
+    def _source_authorized(self, message: Message) -> bool:
+        return (
+            message.from_user is not None
+            and message.from_user.id == self._approver_user_id
+            and message.chat.id in {self._approval_chat_id, self._approver_user_id}
+        )
+
+    async def _source_status(self, message: Message) -> None:
+        if not self._source_authorized(message):
+            return
+        text = (
+            self._source_recovery.status()
+            if self._source_recovery
+            else "Reader recovery is not initialized."
+        )
+        await self._bot.send_message(
+            message.chat.id, html.escape(text), parse_mode="HTML"
+        )
+
+    async def _source_login(self, message: Message, command: CommandObject) -> None:
+        if not self._source_authorized(message):
+            return
+        if message.chat.id != self._approver_user_id or message.chat.type != "private":
+            await self._bot.send_message(
+                message.chat.id, "Use /source_login in this bot's private chat."
+            )
+            return
+        if command.args:
+            await self._bot.send_message(
+                message.chat.id,
+                "Use /source_login without arguments. Never send login codes or passwords here.",
+            )
+            return
+        if self._source_recovery is not None:
+            await self._source_recovery.login()
+
+    async def send_source_notice(self, text: str) -> None:
+        await self._send_html(
+            f'<a href="tg://user?id={self._approver_user_id}">Operator</a>\n'
+            + html.escape(text)
+        )
+
+    async def show_source_login(self, url: str) -> int:
+        image = BytesIO()
+        segno.make(url, micro=False).save(image, kind="png", scale=6)
+        message = await self._bot.send_photo(
+            self._approver_user_id,
+            BufferedInputFile(image.getvalue(), filename="telegram-login.png"),
+            caption=(
+                "Authorize the signal reader using your existing Telegram account: "
+                "Settings → Devices → Link Desktop Device. Scan and approve this QR. "
+                "It expires shortly and refreshes automatically up to three times. "
+                "Never send login codes or passwords to this bot."
+            ),
+            protect_content=True,
+        )
+        return message.message_id
+
+    async def delete_source_login(self, message_id: int) -> None:
+        try:
+            await self._bot.delete_message(self._approver_user_id, message_id)
+        except Exception as exc:
+            logger.warning("Could not remove expired login QR: %s", type(exc).__name__)
 
     async def _attention(self, message: Message, command: CommandObject) -> None:
         if (

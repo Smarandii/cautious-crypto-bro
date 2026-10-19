@@ -12,6 +12,8 @@ htmlcov/
 coverage.xml
 *.session
 *.session-journal
+*.session.before-authorization-*
+.telegram-authorization-*
 data/
 build/
 dist/

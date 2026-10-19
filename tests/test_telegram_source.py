@@ -60,7 +60,7 @@ class FakeTelegramClient:
 
         self.handlers = []
 
-    async def start(self) -> None:
+    async def start(self, **kwargs) -> None:
         pass
 
     async def get_entity(
