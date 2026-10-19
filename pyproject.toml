@@ -88,10 +88,10 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-# Ratchet, not a cliff. Measured 79.70% when the source-claiming and AUTO
-# gate suites landed; a failure here means coverage moved down. Raise this
-# every time coverage is improved, never lower it.
-fail_under = 79
+# Ratchet, not a cliff. The manual callback smoke flow brought the combined
+# suite to 85.01%; keep a point of margin for independent branch changes.
+# Raise this when coverage improves, never lower it.
+fail_under = 84
 # Literal strings so the regex reaches coverage unescaped by TOML. The ellipsis
 # pattern is anchored: an unanchored '...' matches almost every line.
 exclude_also = [
