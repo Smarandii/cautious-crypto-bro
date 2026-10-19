@@ -65,6 +65,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 - Share a two-post intake limit across Telegram live, album, catch-up and retry
   paths, before downloading images or claiming source work. Release admission on
   cancellation and preserve existing durable source recovery without adding tasks.
+- Prepare and claim queued entries only after acquiring the mutation lock, leaving
+  cancelled waiters pending instead of falsely quarantining them on restart.
+  Shield the claim through execution and durable outcome as one operation.
 - Claim close/reduce/cancel actions only after acquiring the mutation lock, so
   queue time counts toward expiry and cancelling a waiter leaves it pending.
   Shield the claim and execution together once the lock is held.

@@ -240,6 +240,16 @@ class ExecutionCoordinator:
         approval_mode: ApprovalMode,
         user_id: int | None = None,
     ) -> IntentExecutionOutcome:
+        async with self._execution_lock:
+            return await finish_before_cancellation(
+                self._execute_locked_intent(intent_id, approval_mode, user_id)
+            )
+
+    async def _execute_locked_intent(
+        self, intent_id: UUID, approval_mode: ApprovalMode, user_id: int | None
+    ) -> IntentExecutionOutcome:
+        # A cancelled waiter must not leave a durable execution claim. Once
+        # ownership is acquired, shield preparation through the terminal outcome.
         prepared = await self._prepare_execution(
             intent_id,
             approval_mode,
@@ -248,16 +258,6 @@ class ExecutionCoordinator:
         if isinstance(prepared, IntentExecutionOutcome):
             return prepared
         intent, plan = prepared
-
-        async with self._execution_lock:
-            return await finish_before_cancellation(
-                self._execute_claimed_intent(intent, plan, approval_mode)
-            )
-
-    async def _execute_claimed_intent(
-        self, intent: TradingIntent, plan: ExecutionPlan, approval_mode: ApprovalMode
-    ) -> IntentExecutionOutcome:
-        intent_id = intent.intent_id
         effective_plan = plan
         current = await self._store.get_intent(intent_id)
         if current is not None and current.status is IntentStatus.SKIPPED:

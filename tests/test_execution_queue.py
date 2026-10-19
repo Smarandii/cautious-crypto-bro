@@ -1,4 +1,4 @@
-"""Action age and durable ownership are checked at the mutation boundary."""
+"""Execution claims and action age are checked at the mutation boundary."""
 
 import asyncio
 from datetime import timedelta
@@ -11,6 +11,7 @@ from test_remaining_concerns import Exchange, executor_for, prepare, source, sta
 from cautious_crypto_bro.domain import (
     ApprovalMode,
     IntentStatus,
+    OpenRelation,
     PositionActionIntent,
     PositionActionType,
     Side,
@@ -30,6 +31,75 @@ class ObservedLock(asyncio.Lock):
     async def acquire(self):
         self.waiting.set()
         return await super().acquire()
+
+
+@pytest.mark.parametrize("mode", [ApprovalMode.MANUAL, ApprovalMode.AUTO])
+def test_cancelled_entry_waiter_remains_pending_and_executes_once_after_restart(
+    tmp_path, mode
+):
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = Exchange()
+        with executor_for(exchange) as executor:
+            store, intent, _, _, _ = await prepare(
+                database, exchange, executor, mode=mode, relation=OpenRelation.NEW
+            )
+            lock = ObservedLock()
+            coordinator = ExecutionCoordinator(
+                store=store,
+                executor=executor,
+                planner=ExecutionPlanner(),
+                max_age_seconds=3600,
+                execution_lock=lock,
+            )
+            await lock.acquire()
+            lock.waiting.clear()
+            task = asyncio.create_task(
+                coordinator.execute_intent(intent.intent_id, approval_mode=mode)
+            )
+            try:
+                await asyncio.wait_for(lock.waiting.wait(), timeout=5)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                reopened = IntentStore(database)
+                saved = await reopened.get_intent(intent.intent_id)
+                assert saved.status is IntentStatus.PENDING
+                assert not exchange.requests and not exchange.orders
+                assert await reopened.get_active_position_strategies() == ()
+                assert await reopened.quarantine_interrupted_executions() == ((), ())
+
+                # Retry through a new coordinator as on restart; it must wait too.
+                restarted = ExecutionCoordinator(
+                    store=reopened,
+                    executor=executor,
+                    planner=ExecutionPlanner(),
+                    max_age_seconds=3600,
+                    execution_lock=lock,
+                )
+                lock.waiting.clear()
+                task = asyncio.create_task(
+                    restarted.execute_intent(intent.intent_id, approval_mode=mode)
+                )
+                await asyncio.wait_for(lock.waiting.wait(), timeout=5)
+                assert not exchange.requests
+                lock.release()
+                outcome = await asyncio.wait_for(task, timeout=10)
+                assert outcome.status is IntentStatus.EXECUTED
+                assert len(exchange.orders) == 3
+                saved = await reopened.get_intent(intent.intent_id)
+                assert saved.status is IntentStatus.EXECUTED
+                before = len(exchange.requests)
+                await restarted.execute_intent(intent.intent_id, approval_mode=mode)
+                assert len(exchange.requests) == before
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                if lock.locked():
+                    lock.release()
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("scenario", ["expired", "fresh", "cancelled"])
