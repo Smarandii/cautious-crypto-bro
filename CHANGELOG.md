@@ -15,6 +15,11 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Added
 
+- Telegram reader recovery keeps operator control and position protection alive
+  during reader outages, retries connections with bounded frequency and escalates
+  to human review. Add authorized `/source`, private QR `/source_login`, pinned
+  account checks and a stopped-app local authorization helper for 2FA. Include
+  the optional account identity record in verified state backups.
 - Read-only Compose supervision-progress healthcheck, based on successful passes
   rather than a running process. Expire progress after five minutes, clear stale
   markers under state ownership, and keep observability write failures separate

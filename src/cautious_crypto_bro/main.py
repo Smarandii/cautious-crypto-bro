@@ -18,6 +18,7 @@ from .position_supervisor import PositionSupervisor
 from .runtime_store import RedisRuntimeStore
 from .service import SignalService
 from .signal_context import SignalContextProvider
+from .source_recovery import SourceRecovery
 from .state_ownership import state_ownership
 from .storage import IntentStore
 from .supervision_health import supervision_health_lifecycle, supervision_health_path
@@ -104,6 +105,7 @@ class _Runtime:
     supervisor: PositionSupervisor
     service: SignalService
     source: TelegramSource
+    source_recovery: SourceRecovery
 
 
 async def _build_runtime_store(
@@ -220,12 +222,20 @@ async def _build_runtime(
         defer_unavailable_messages=defer_unavailable_messages,
     )
     cleanup.push_async_callback(source.disconnect)
+    source_recovery = SourceRecovery(
+        source,
+        bot,
+        settings.database_path.with_suffix(".telegram-identity.json"),
+        settings.telegram_approver_user_id,
+    )
+    bot.bind_source_recovery(source_recovery)
 
     return _Runtime(
         bot=bot,
         supervisor=supervisor,
         service=service,
         source=source,
+        source_recovery=source_recovery,
     )
 
 
@@ -262,10 +272,7 @@ async def _run_application(
         tg.create_task(runtime.service.run_delivery_recovery())
         tg.create_task(runtime.service.run_periodic_account_pnl_sync())
 
-        await runtime.source.start()
-
-        tg.create_task(runtime.source.run_until_disconnected())
-        tg.create_task(runtime.source.run_catchup())
+        tg.create_task(runtime.source_recovery.run())
 
 
 def main() -> None:

@@ -13,12 +13,14 @@ import tempfile
 from contextlib import closing
 from pathlib import Path
 
+from cautious_crypto_bro.source_recovery import read_source_identity
 from cautious_crypto_bro.state_ownership import state_ownership
 
 CONTENTS = {
     "database.sqlite3": ("intents", "execution_plans"),
     "telegram.session": ("sessions",),
 }
+IDENTITY_NAME = "telegram-identity.json"
 
 
 def sha256(path: Path) -> str:
@@ -50,13 +52,14 @@ def verify_archive(archive_path: Path, expected_sha256: str) -> dict:
         restored = Path(directory)
         with tarfile.open(archive_path, "r:gz") as archive:
             members = archive.getmembers()
+            names = {member.name for member in members}
             if (
-                len(members) != len(CONTENTS)
-                or {member.name for member in members} != set(CONTENTS)
+                len(members) != len(names)
+                or names not in (set(CONTENTS), set(CONTENTS) | {IDENTITY_NAME})
                 or any(not member.isfile() for member in members)
             ):
                 raise ValueError(
-                    "Archive must contain exactly the two regular state files"
+                    "Archive must contain the two regular state files and optional reader identity"
                 )
             for member in members:
                 # Names are checked before writing; never follow archive links/paths.
@@ -64,13 +67,17 @@ def verify_archive(archive_path: Path, expected_sha256: str) -> dict:
                 assert source is not None
                 with source, (restored / member.name).open("xb") as target:
                     shutil.copyfileobj(source, target)
+        files = {
+            name: inspect_database(restored / name, tables)
+            for name, tables in CONTENTS.items()
+        }
+        if IDENTITY_NAME in names:
+            read_source_identity(restored / IDENTITY_NAME)
+            files[IDENTITY_NAME] = {"identity_pinned": True}
         return {
             "archive_sha256": digest,
             "isolated_restore_verified": True,
-            "files": {
-                name: inspect_database(restored / name, tables)
-                for name, tables in CONTENTS.items()
-            },
+            "files": files,
         }
 
 
@@ -85,6 +92,7 @@ def create_backup(database: Path, session: Path, output: Path) -> dict:
         try:
             with tempfile.TemporaryDirectory(prefix="ccb-backup-") as directory:
                 snapshots = Path(directory)
+                names = list(CONTENTS)
                 for name, source in {
                     "database.sqlite3": database,
                     "telegram.session": session,
@@ -96,6 +104,11 @@ def create_backup(database: Path, session: Path, output: Path) -> dict:
                         closing(sqlite3.connect(snapshots / name)) as snapshot,
                     ):
                         original.backup(snapshot)
+                identity = database.with_suffix(".telegram-identity.json")
+                if identity.exists():
+                    read_source_identity(identity)
+                    shutil.copyfile(identity, snapshots / IDENTITY_NAME)
+                    names.append(IDENTITY_NAME)
                 # Exclusive creation preserves existing archives; mode protects sessions.
                 descriptor = os.open(
                     output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
@@ -103,7 +116,7 @@ def create_backup(database: Path, session: Path, output: Path) -> dict:
                 created = True
                 with os.fdopen(descriptor, "wb") as handle:
                     with tarfile.open(fileobj=handle, mode="w:gz") as archive:
-                        for name in CONTENTS:
+                        for name in names:
                             archive.add(snapshots / name, arcname=name)
             return verify_archive(output, sha256(output))
         except BaseException:

@@ -79,6 +79,51 @@ has moved past them. Active processing claims remain untouched. Position actions
 expire from the earlier of extraction time and original publication time; retrying
 an old close/reduce instruction does not make it fresh.
 
+## Telegram reader recovery
+
+Reader outages leave the operator bot and position supervisor running. Network
+reconnects retry every 30 seconds; missing authorization is rechecked every five
+minutes. The approval chat receives an immediate human-review alert and reminders
+every 15 minutes while the outage continues. Failed alert delivery is retried.
+Channel history failures show `DEGRADED`; unaffected channels keep processing.
+
+The configured operator can use `/source` in the approval chat or privately for
+reader status. Use `/source_login` **in the bot's private chat** to receive a
+protected QR image. Scan it from Telegram **Settings → Devices → Link Desktop
+Device** using the original reader account. Expired codes refresh up to three
+times; the bot deletes each image after use or expiry. QR generation uses Segno,
+a small pure-Python dependency, without an image-processing service.
+
+The first valid existing session pins the reader account in
+`DATABASE_PATH` with suffix `.telegram-identity.json`. Recovery rejects other
+accounts before ingestion. If no account was pinned and no session is authorized,
+recovery requires the configured operator account. State backups preserve this
+identity record when present; older two-file backups remain verifiable.
+
+If Telegram requires 2FA, the bot escalates to a local procedure. **Never send
+phone numbers, login codes or passwords to the bot.** In a local interactive
+PowerShell terminal, stop the app and run the helper from its active image:
+
+```powershell
+$ccbImage = docker inspect cautious-crypto-bro-app-1 --format '{{.Config.Image}}'
+docker stop --timeout 120 cautious-crypto-bro-app-1
+docker run --rm -it --env-file .env `
+  --env TELEGRAM_SESSION_NAME=/state/cautious_crypto_bro `
+  --env DATABASE_PATH=/state/cautious_crypto_bro.sqlite3 `
+  --mount type=volume,source=cautious-crypto-bro_app_state,target=/state `
+  $ccbImage /app/.venv/bin/python /app/scripts/authorize_telegram.py
+docker start cautious-crypto-bro-app-1
+```
+
+Adjust container, volume and state paths if your deployment uses different names.
+The helper takes the application owner lock, collects credentials through hidden
+local prompts, authorizes a separate session and checks the pinned account. It
+backs up the original session before installing the validated replacement.
+Authentication or identity-check failures leave the original session in place.
+After restart, confirm `/source` reports `ONLINE` and inspect supervision health.
+
+## Trading behavior
+
 `AUTO_APPROVAL_MODE` defaults to `disabled`; `open_only` enables eligible OPEN
 signals, and `all` also enables eligible REDUCE/CLOSE/CANCEL_ENTRIES actions. Both manual and
 AUTO entries reject symbols already controlled by an active strategy or live

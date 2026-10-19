@@ -36,6 +36,12 @@ async def forever():
         events.append("background.stopped")
 
 
+async def source_worker():
+    async with asyncio.TaskGroup() as tasks:
+        tasks.create_task(forever())
+        await forever()
+
+
 def send_signals():
     loop = asyncio.get_running_loop()
     loop.call_later(0.02, os.kill, os.getpid(), signal.SIGTERM)
@@ -127,6 +133,7 @@ async def owned(settings):
         source=SimpleNamespace(
             start=AsyncMock(), run_until_disconnected=forever, run_catchup=forever
         ),
+        source_recovery=SimpleNamespace(run=source_worker),
     )
     async with AsyncExitStack() as stack:
         stack.callback(cleanup)

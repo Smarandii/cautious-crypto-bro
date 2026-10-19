@@ -6,8 +6,10 @@ committed WAL data is included. It takes the same state-owner lock as the app an
 refuses to proceed while a cooperating app owns that database. Stop all other
 writers too; older apps and unrelated operator scripts may not take this lock.
 
-The archive contains exactly `database.sqlite3` and `telegram.session`. Creation
-automatically restores them into disposable scratch space, checks SQLite
+The archive contains `database.sqlite3` and `telegram.session`, plus optional
+`telegram-identity.json` when the reader account has been pinned. Creation
+automatically restores them into disposable scratch space, validates the identity
+record when present, checks SQLite
 integrity/required tables and records SQLite `PRAGMA user_version` before success. It never
 migrates state, calls external APIs, prints database/session contents or replaces
 an existing archive. Failed creation removes only its own incomplete archive.
@@ -80,9 +82,12 @@ that disk does not lose the backup too.
 `verify` always restores into temporary space and removes that space afterward;
 it cannot overwrite live state. For an actual restore, stop all writers, preserve
 the current state first, and prepare a new empty state directory/volume. After
-checking the saved SHA-256, extract the two regular files there with a trusted
+checking the saved SHA-256, extract the verified regular files there with a trusted
 tar tool. Map `database.sqlite3` to the configured `DATABASE_PATH` basename and
-`telegram.session` to the configured Telethon `.session` filename. Do not copy
+`telegram.session` to the configured Telethon `.session` filename. Map optional
+`telegram-identity.json` to `DATABASE_PATH` with suffix `.telegram-identity.json`;
+preserve it to retain the expected reader account across restores. Legacy
+two-file backups remain verifiable. Do not copy
 old journals, WAL files or an owner-lock file over an existing database.
 
 Retain the matching image or a source revision that can rebuild it. Record and

@@ -12,6 +12,7 @@ dependencies = [
   "pydantic>=2.11,<3",
   "pydantic-settings>=2.10,<3",
   "redis>=8.1.0",
+  "segno>=1.6,<2",
   "telethon>=1.40,<2",
 ]
 

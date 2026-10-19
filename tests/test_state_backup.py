@@ -129,6 +129,32 @@ def test_active_owner_refuses_backup_before_creating_output(tmp_path):
     assert (digest(database), digest(session)) == before
 
 
+def test_backup_preserves_optional_reader_account_identity(tmp_path):
+    database, session, output = inputs(tmp_path)
+    identity = database.with_suffix(".telegram-identity.json")
+    identity.write_text('{"user_id": 77}', encoding="utf-8")
+    result = create(tmp_path, database, session, output)
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(result.stdout)
+    assert receipt["files"]["telegram-identity.json"] == {"identity_pinned": True}
+    with tarfile.open(output, "r:gz") as archive:
+        assert (
+            archive.extractfile("telegram-identity.json").read()
+            == identity.read_bytes()
+        )
+    verification = invoke(
+        tmp_path, "verify", output, "--sha256", receipt["archive_sha256"]
+    )
+    assert verification.returncode == 0 and json.loads(verification.stdout) == receipt
+
+
+def test_invalid_reader_identity_refuses_backup(tmp_path):
+    database, session, output = inputs(tmp_path)
+    database.with_suffix(".telegram-identity.json").write_text('{"user_id": 0}')
+    result = create(tmp_path, database, session, output)
+    assert result.returncode != 0 and not output.exists()
+
+
 @pytest.mark.parametrize("damage", ["missing", "corrupt_session", "empty_database"])
 def test_invalid_input_never_leaves_a_successful_archive(tmp_path, damage):
     database, session, output = inputs(tmp_path)
