@@ -191,6 +191,29 @@ class PositionStrategyRepositoryImpl(_Store):
 
             await db.commit()
 
+    async def pause_conflicting_strategies(
+        self, strategy_ids: tuple[UUID, ...], reason: str
+    ) -> None:
+        if not strategy_ids or len(set(strategy_ids)) != len(strategy_ids):
+            raise ValueError("Conflicting strategy IDs must be nonempty and unique")
+        placeholders = ",".join("?" for _ in strategy_ids)
+        async with aiosqlite.connect(self._database_path) as db:
+            # One statement: a failed pause cannot leave one ambiguous owner active.
+            cursor = await db.execute(
+                f"UPDATE position_strategies SET status = ?, pause_reason = ?, "
+                f"pause_notified = 0, updated_at = CURRENT_TIMESTAMP "
+                f"WHERE strategy_id IN ({placeholders})",
+                (
+                    StrategyStatus.MANUAL_OVERRIDE.value,
+                    reason,
+                    *(str(strategy_id) for strategy_id in strategy_ids),
+                ),
+            )
+            if cursor.rowcount != len(strategy_ids):
+                await db.rollback()
+                raise RuntimeError("Conflicting strategy no longer exists")
+            await db.commit()
+
     async def get_pending_strategy_alerts(self) -> tuple[PositionStrategy, ...]:
         rows = await self._fetch(
             """

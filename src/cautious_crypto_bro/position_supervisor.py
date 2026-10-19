@@ -177,19 +177,10 @@ class PositionSupervisor:
                 symbol,
             )
 
-            for state, _ in strategies:
-                await self._save(
-                    state.model_copy(
-                        update={
-                            "status": StrategyStatus.MANUAL_OVERRIDE,
-                            "pause_reason": (
-                                f"Multiple active strategies own {symbol}; "
-                                "manual ownership review required"
-                            ),
-                            "pause_notified": False,
-                        }
-                    )
-                )
+            await self._store.pause_conflicting_strategies(
+                tuple(state.strategy_id for state, _ in strategies),
+                f"Multiple active strategies own {symbol}; manual ownership review required",
+            )
 
             return account, None
 

@@ -17,7 +17,8 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 - Ambiguous strategy owners now retain a durable pause reason and queue the
   existing retryable Telegram alert for every affected strategy, without exchange
-  requests or automatic ownership selection.
+  requests or automatic ownership selection. Quarantine all conflicting owners
+  atomically so a failed write cannot leave one owner eligible for automation.
 - Telegram reader recovery keeps operator control and position protection alive
   during reader outages, retries connections with bounded frequency and escalates
   to human review. Add authorized `/source`, private QR `/source_login`, pinned
