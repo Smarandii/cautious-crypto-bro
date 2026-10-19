@@ -73,6 +73,7 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 markers = [
   "integration: workflows using real application components and temporary SQLite",
+  "smoke: small offline signal-to-execution lifecycle suite",
 ]
 # Coverage is part of the default invocation rather than a CI-only extra, so a
 # local `pytest -q` and the pull request gate measure exactly the same thing.
