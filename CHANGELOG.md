@@ -15,6 +15,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Added
 
+- Entry failure now commits its intent result and strategy disposition together.
+  Restart quarantine also marks interrupted entries' managed strategies uncertain
+  in the same transaction, preventing supervision of unknown entry outcomes.
 - Telegram reader recovery keeps operator control and position protection alive
   during reader outages, retries connections with bounded frequency and escalates
   to human review. Add authorized `/source`, private QR `/source_login`, pinned

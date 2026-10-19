@@ -447,6 +447,15 @@ class FakePositionSupervisorStore:
     ) -> None:
         pass
 
+    async def record_entry_failure(
+        self,
+        intent_id: UUID,
+        error: str,
+        *,
+        strategy_status: StrategyStatus | None,
+    ) -> None:
+        pass
+
     async def get_recent_source_intents(
         self,
         channel_id: int,

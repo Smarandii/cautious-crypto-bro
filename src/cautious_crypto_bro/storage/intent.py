@@ -5,7 +5,13 @@ from uuid import UUID
 
 import aiosqlite
 
-from ..domain import ApprovalMode, ExecutionPlan, IntentStatus, TradingIntent
+from ..domain import (
+    ApprovalMode,
+    ExecutionPlan,
+    IntentStatus,
+    StrategyStatus,
+    TradingIntent,
+)
 from ._connection import _Store
 from ._shared import SharedRepositoryMixin
 
@@ -155,6 +161,41 @@ class IntentRepositoryImpl(SharedRepositoryMixin, _Store):
             record_id=intent_id,
             error=error,
         )
+
+    async def record_entry_failure(
+        self,
+        intent_id: UUID,
+        error: str,
+        *,
+        strategy_status: StrategyStatus | None,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "UPDATE intents SET status = ?, error = ?, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE intent_id = ? AND status = ?",
+                    (
+                        IntentStatus.FAILED.value,
+                        error[:2000],
+                        str(intent_id),
+                        IntentStatus.EXECUTING.value,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("Entry execution claim no longer exists")
+                if strategy_status is not None:
+                    cursor = await db.execute(
+                        "UPDATE position_strategies SET status = ?, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE strategy_id = ?",
+                        (strategy_status.value, str(intent_id)),
+                    )
+                    if cursor.rowcount != 1:
+                        raise RuntimeError("Entry strategy no longer exists")
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
 
     async def get_recent_source_intents(
         self,

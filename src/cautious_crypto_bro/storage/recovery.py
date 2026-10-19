@@ -18,7 +18,7 @@ class RecoveryRepositoryImpl(SharedRepositoryMixin, _Store):
     async def quarantine_interrupted_executions(
         self,
     ) -> tuple[tuple[UUID, ...], tuple[UUID, ...]]:
-        """Quarantine interrupted records; lifecycle actions also quarantine strategy."""
+        """Quarantine interrupted records and their managed strategies atomically."""
         error = (
             "Process restarted during execution; exchange outcome is unknown; "
             "not retried automatically"
@@ -59,6 +59,21 @@ class RecoveryRepositoryImpl(SharedRepositoryMixin, _Store):
                     id_column="action_id",
                     error=error,
                 )
+
+                if intent_ids:
+                    await db.executemany(
+                        "UPDATE position_strategies SET status = ?, "
+                        "updated_at = CURRENT_TIMESTAMP "
+                        "WHERE strategy_id = ? AND status IN (?, ?, ?, ?)",
+                        [
+                            (
+                                StrategyStatus.UNCERTAIN.value,
+                                str(intent_id),
+                                *managed_statuses,
+                            )
+                            for intent_id in intent_ids
+                        ],
+                    )
 
                 if action_symbols:
                     await db.executemany(
