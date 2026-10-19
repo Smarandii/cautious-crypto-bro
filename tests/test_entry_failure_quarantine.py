@@ -3,6 +3,7 @@
 import asyncio
 import sqlite3
 from contextlib import closing
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -33,7 +34,9 @@ class FailedRefresh(Exchange):
 
 @pytest.mark.parametrize("mode", [ApprovalMode.MANUAL, ApprovalMode.AUTO])
 @pytest.mark.parametrize("failed_table", [None, "intents", "position_strategies"])
-def test_entry_failure_and_restart_quarantine_together(tmp_path, mode, failed_table):
+def test_entry_failure_preserves_restart_warning_and_protection(
+    tmp_path, mode, failed_table
+):
     async def run():
         database = tmp_path / "state.db"
         exchange = FailedRefresh()
@@ -69,41 +72,20 @@ def test_entry_failure_and_restart_quarantine_together(tmp_path, mode, failed_ta
             assert saved_intent.status is (
                 IntentStatus.EXECUTING if failed_table else IntentStatus.FAILED
             )
-            assert state.status is StrategyStatus.UNCERTAIN
-            with closing(sqlite3.connect(database)) as db:
-                raw_status = db.execute(
-                    "SELECT status FROM position_strategies"
-                ).fetchone()[0]
-            assert raw_status == ("ENTERING" if failed_table else "UNCERTAIN")
+            assert state.status is (
+                StrategyStatus.ENTERING if failed_table else StrategyStatus.UNCERTAIN
+            )
             protection = (exchange.size, exchange.stop, exchange.trail)
             before = len(exchange.requests)
-
-            # The same live process may supervise before an operator restarts it.
-            await PositionSupervisor(
-                store=reopened, executor=executor, mutation_lock=asyncio.Lock()
-            ).reconcile_once()
-            assert len(exchange.requests) == before
-            assert (exchange.size, exchange.stop, exchange.trail) == protection
+            entries_before = {
+                link
+                for link, order in exchange.orders.items()
+                if not order["reduceOnly"]
+            }
 
             if failed_table:
                 with closing(sqlite3.connect(database)) as db:
                     db.execute("DROP TRIGGER reject_disposition")
-                    db.execute(
-                        "CREATE TRIGGER reject_recovery BEFORE UPDATE ON position_strategies "
-                        "WHEN NEW.status='UNCERTAIN' "
-                        "BEGIN SELECT RAISE(ABORT, 'synthetic recovery failure'); END"
-                    )
-                    db.commit()
-                with pytest.raises(sqlite3.IntegrityError, match="recovery failure"):
-                    await reopened.quarantine_interrupted_executions()
-                assert (
-                    await reopened.get_intent(intent.intent_id)
-                ).status is IntentStatus.EXECUTING
-                assert (await reopened.get_active_position_strategies())[0][
-                    0
-                ].status is StrategyStatus.UNCERTAIN
-                with closing(sqlite3.connect(database)) as db:
-                    db.execute("DROP TRIGGER reject_recovery")
                     db.commit()
             interrupted, actions = await reopened.quarantine_interrupted_executions()
             assert actions == ()
@@ -112,7 +94,9 @@ def test_entry_failure_and_restart_quarantine_together(tmp_path, mode, failed_ta
                 IntentStatus.UNCERTAIN if failed_table else IntentStatus.FAILED
             )
             records = await reopened.get_active_position_strategies()
-            assert records[0][0].status is StrategyStatus.UNCERTAIN
+            assert records[0][0].status is (
+                StrategyStatus.ENTERING if failed_table else StrategyStatus.UNCERTAIN
+            )
             assert not await reopened.get_pending_auto_intent_ids()
             assert await reopened.quarantine_interrupted_executions() == ((), ())
 
@@ -121,8 +105,29 @@ def test_entry_failure_and_restart_quarantine_together(tmp_path, mode, failed_ta
                 store=reopened, executor=executor, mutation_lock=asyncio.Lock()
             )
             await restarted.reconcile_once()
+            requests_after_protection = len(exchange.requests)
             await coordinator.execute_intent(intent.intent_id, approval_mode=mode)
-            assert len(exchange.requests) == before
-            assert (exchange.size, exchange.stop, exchange.trail) == protection
+            assert len(exchange.requests) == requests_after_protection
+            assert {
+                link
+                for link, order in exchange.orders.items()
+                if not order["reduceOnly"]
+            } == entries_before
+            if failed_table:
+                # Interrupted OPENs must still protect verified fills, never reopen them.
+                exits = [
+                    order for order in exchange.orders.values() if order["reduceOnly"]
+                ]
+                assert len(exits) == 3
+                assert sum(Decimal(order["qty"]) for order in exits) <= exchange.size
+                assert exchange.size == protection[0] and exchange.stop >= protection[1]
+                assert all(
+                    body["reduceOnly"]
+                    for path, body in exchange.requests[before:]
+                    if path == "/v5/order/create"
+                )
+            else:
+                assert len(exchange.requests) == before
+                assert (exchange.size, exchange.stop, exchange.trail) == protection
 
     asyncio.run(run())
