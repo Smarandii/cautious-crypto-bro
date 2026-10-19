@@ -178,9 +178,17 @@ class PositionSupervisor:
             )
 
             for state, _ in strategies:
-                await self._store.set_position_strategy_status(
-                    state.strategy_id,
-                    StrategyStatus.MANUAL_OVERRIDE,
+                await self._save(
+                    state.model_copy(
+                        update={
+                            "status": StrategyStatus.MANUAL_OVERRIDE,
+                            "pause_reason": (
+                                f"Multiple active strategies own {symbol}; "
+                                "manual ownership review required"
+                            ),
+                            "pause_notified": False,
+                        }
+                    )
                 )
 
             return account, None
