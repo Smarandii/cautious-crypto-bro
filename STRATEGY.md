@@ -183,6 +183,9 @@ UNCERTAIN. Intent status is separate: EXECUTED can mean accepted pending limits.
 - Proven pre-submit failures close their empty strategy.
 - Potentially accepted or partially completed submissions stay UNCERTAIN.
 - MANUAL_OVERRIDE and UNCERTAIN prevent automatic strategy mutations.
+- An active strategy whose entry still holds an EXECUTING claim retains ownership
+  but is read as UNCERTAIN for supervision until its result commits. This also
+  blocks mutations after a failed quarantine write, before any process restart.
 - Multiple active owners of a symbol pause supervision rather than guess ownership.
 - Startup reconciles before AUTO recovery and again before ingestion.
 - Exit installation persists its revision before mutations; recovery reuses

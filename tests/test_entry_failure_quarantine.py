@@ -69,11 +69,21 @@ def test_entry_failure_and_restart_quarantine_together(tmp_path, mode, failed_ta
             assert saved_intent.status is (
                 IntentStatus.EXECUTING if failed_table else IntentStatus.FAILED
             )
-            assert state.status is (
-                StrategyStatus.ENTERING if failed_table else StrategyStatus.UNCERTAIN
-            )
+            assert state.status is StrategyStatus.UNCERTAIN
+            with closing(sqlite3.connect(database)) as db:
+                raw_status = db.execute(
+                    "SELECT status FROM position_strategies"
+                ).fetchone()[0]
+            assert raw_status == ("ENTERING" if failed_table else "UNCERTAIN")
             protection = (exchange.size, exchange.stop, exchange.trail)
             before = len(exchange.requests)
+
+            # The same live process may supervise before an operator restarts it.
+            await PositionSupervisor(
+                store=reopened, executor=executor, mutation_lock=asyncio.Lock()
+            ).reconcile_once()
+            assert len(exchange.requests) == before
+            assert (exchange.size, exchange.stop, exchange.trail) == protection
 
             if failed_table:
                 with closing(sqlite3.connect(database)) as db:
@@ -91,7 +101,7 @@ def test_entry_failure_and_restart_quarantine_together(tmp_path, mode, failed_ta
                 ).status is IntentStatus.EXECUTING
                 assert (await reopened.get_active_position_strategies())[0][
                     0
-                ].status is StrategyStatus.ENTERING
+                ].status is StrategyStatus.UNCERTAIN
                 with closing(sqlite3.connect(database)) as db:
                     db.execute("DROP TRIGGER reject_recovery")
                     db.commit()

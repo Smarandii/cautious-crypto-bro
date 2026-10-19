@@ -7,7 +7,7 @@ from uuid import UUID
 
 import aiosqlite
 
-from ..domain import ExecutionPlan, PositionStrategy, StrategyStatus
+from ..domain import ExecutionPlan, IntentStatus, PositionStrategy, StrategyStatus
 from ._connection import _Store
 from ._plan_payload import load_strategy_plan
 
@@ -80,7 +80,8 @@ class PositionStrategyRepositoryImpl(_Store):
             SELECT
                 s.*,
                 p.payload_json AS plan_json,
-                i.payload_json AS intent_json
+                i.payload_json AS intent_json,
+                i.status AS intent_status
             FROM position_strategies AS s
             JOIN execution_plans AS p
               ON p.intent_id = s.strategy_id
@@ -99,13 +100,16 @@ class PositionStrategyRepositoryImpl(_Store):
             row_factory=True,
         )
 
-        return tuple(
-            (
-                self._position_strategy_from_row(row),
-                load_strategy_plan(row["plan_json"], row["intent_json"]),
-            )
-            for row in rows
-        )
+        records: list[tuple[PositionStrategy, ExecutionPlan]] = []
+        for row in rows:
+            state = self._position_strategy_from_row(row)
+            # Retain ownership but stop mutations while an execution claim
+            # survives a failed quarantine write, even before restart.
+            if row["intent_status"] == IntentStatus.EXECUTING.value:
+                state = state.model_copy(update={"status": StrategyStatus.UNCERTAIN})
+            plan = load_strategy_plan(row["plan_json"], row["intent_json"])
+            records.append((state, plan))
+        return tuple(records)
 
     async def save_position_strategy(
         self,
