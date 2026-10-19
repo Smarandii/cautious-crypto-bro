@@ -124,6 +124,12 @@ history request can leave an older timestamp; a ledger read failure displays
   with the rejection reason in `last_error`, and logs a warning. Later posts keep
   progressing; oversized posts are not retried automatically. Repost smaller
   images as a new post. Transient and empty downloads retain normal retry behavior.
+- A retry lookup that finds no Telegram post records `UNAVAILABLE` and defers
+  that post for 24 hours, including across restarts. The original payload remains
+  in SQLite. Daily checks can recover it if access returns; a verified live
+  reappearance can process immediately. Available posts continue normally, and
+  transport failures retain ordinary retry behavior. Older application images
+  ignore `UNAVAILABLE` rows rather than resuming their one-minute retry loop.
 - OPEN needs symbol, direction and explicit MARKET/LIMIT/RANGE semantics.
   Missing stops use a deterministic 2% fallback; missing targets use policy exits.
 - Entries copy explicit trader leverage from text/images, with a 10x fallback.

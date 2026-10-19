@@ -243,6 +243,10 @@ class EvaluationCache(Protocol):
 
 
 class SourceRepository(Protocol):
+    async def defer_unavailable_source_messages(
+        self, channel_id: int, message_ids: tuple[int, ...], *, lease_seconds: int
+    ) -> None: ...
+
     async def initialize(self) -> None: ...
 
     async def claim_source(

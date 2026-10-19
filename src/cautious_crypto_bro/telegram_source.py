@@ -355,6 +355,8 @@ class TelegramSource:
         startup_lookback_hours: int = 0,
         catchup_interval_seconds: int = 60,
         retry_message_ids: Callable[[int], Awaitable[tuple[int, ...]]] | None = None,
+        defer_unavailable_messages: Callable[[int, tuple[int, ...]], Awaitable[None]]
+        | None = None,
     ) -> None:
         if startup_lookback_hours < 0:
             raise ValueError("startup_lookback_hours must not be negative")
@@ -375,6 +377,7 @@ class TelegramSource:
         self._startup_lookback_hours = startup_lookback_hours
         self._catchup_interval_seconds = catchup_interval_seconds
         self._retry_message_ids = retry_message_ids
+        self._defer_unavailable_messages = defer_unavailable_messages
         self._entities: list[Any] = []
         # Only chronological history reconciliation may advance this cursor.
         # A newer live delivery says nothing about earlier missed messages.
@@ -565,6 +568,8 @@ class TelegramSource:
         ]
         missing = set(message_ids) - {message.id for message in available}
         if missing:
+            if self._defer_unavailable_messages is not None:
+                await self._defer_unavailable_messages(chat_id, tuple(sorted(missing)))
             logger.warning(
                 "Retryable Telegram posts unavailable in %s: %s", chat_id, missing
             )
