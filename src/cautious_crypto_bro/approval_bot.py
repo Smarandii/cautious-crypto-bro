@@ -5,6 +5,7 @@ import html
 import logging
 from collections.abc import Awaitable, Callable
 from io import BytesIO
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -117,6 +118,11 @@ class ApprovalBot:
         self._executor = executor
         self._source_recovery: SourceRecovery | None = None
         self._startup_blocked: str | None = None
+        self._supervision_warning: str | None = None
+        self._supervision_recovery_pending = False
+        self._next_supervision_notice = 0.0
+        self._next_supervision_send = 0.0
+        self._supervision_notice_changed = asyncio.Event()
         self._router.callback_query.outer_middleware(self._startup_gate)
         self._router.message(Command("status"))(self._status)
         self._router.message(Command("attention"))(self._attention)
@@ -145,10 +151,57 @@ class ApprovalBot:
 
     async def _status(self, message: Message) -> None:
         if self._source_authorized(message):
+            text = self._startup_blocked or "Startup reconciliation complete."
+            if self._supervision_warning is not None:
+                text += "\nSupervision unavailable: " + self._supervision_warning
+                text += ". Application protection is not verified."
             await self._bot.send_message(
                 message.chat.id,
-                self._startup_blocked or "Startup reconciliation complete.",
+                text,
             )
+
+    async def report_supervision_state(self, reason: str | None) -> None:
+        # Record state only: slow Telegram delivery must never delay protection.
+        previous = self._supervision_warning
+        self._supervision_warning = reason
+        if reason is not None:
+            self._supervision_recovery_pending = False
+            if previous is None:
+                self._next_supervision_notice = 0
+                self._supervision_notice_changed.set()
+        elif previous is not None:
+            self._supervision_recovery_pending = True
+            self._next_supervision_notice = 0
+            self._supervision_notice_changed.set()
+
+    async def _deliver_supervision_notice(self) -> None:
+        reason = self._supervision_warning
+        if reason is None and not self._supervision_recovery_pending:
+            return
+        if monotonic() < max(
+            self._next_supervision_notice, self._next_supervision_send
+        ):
+            return
+        self._next_supervision_notice = monotonic() + 30
+        self._next_supervision_send = self._next_supervision_notice
+        text = (
+            "HUMAN REVIEW REQUIRED: position supervision is unavailable. "
+            "Application protection is not verified. Check exchange access and "
+            "review existing positions/protection in Bybit. Use /status for details."
+            if reason is not None
+            else "Position supervision recovered: a reconciliation pass completed successfully."
+        )
+        try:
+            await self.send_source_notice(text)
+        except Exception as exc:
+            logger.warning("Supervision notice delivery failed: %s", type(exc).__name__)
+        else:
+            if self._supervision_warning != reason:
+                return  # State changed while the network request was pending.
+            if reason is not None:
+                self._next_supervision_notice = monotonic() + 900
+            else:
+                self._supervision_recovery_pending = False
 
     async def _startup_gate(
         self,
@@ -322,11 +375,18 @@ class ApprovalBot:
 
     async def run_strategy_alert_delivery(self) -> None:
         while True:
+            self._supervision_notice_changed.clear()
             try:
+                await self._deliver_supervision_notice()
                 await self.deliver_strategy_alerts()
             except Exception:
                 logger.exception("Failed to read pending strategy alerts")
-            await asyncio.sleep(30)
+            try:
+                await asyncio.wait_for(
+                    self._supervision_notice_changed.wait(), timeout=30
+                )
+            except TimeoutError:
+                pass
 
     async def deliver_strategy_alerts(self) -> None:
         for state in await self._store.get_pending_strategy_alerts():

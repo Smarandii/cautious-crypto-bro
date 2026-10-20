@@ -157,13 +157,6 @@ async def _build_runtime(
         portfolio_stop_risk_cap_usdt=(settings.demo_portfolio_stop_risk_cap_usdt),
     )
 
-    supervisor = PositionSupervisor(
-        store=store,
-        executor=executor,
-        mutation_lock=(account_mutation_lock),
-        progress_path=supervision_health_path(settings.database_path),
-    )
-
     bot = ApprovalBot(
         token=settings.telegram_bot_token,
         approval_chat_id=(settings.telegram_approval_chat_id),
@@ -172,6 +165,14 @@ async def _build_runtime(
         executor=coordinator,
     )
     cleanup.push_async_callback(bot.close)
+
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=(account_mutation_lock),
+        progress_path=supervision_health_path(settings.database_path),
+        report_state=bot.report_supervision_state,
+    )
 
     context_provider = SignalContextProvider(
         store=store,

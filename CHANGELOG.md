@@ -15,6 +15,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Added
 
+- Report post-startup supervision failures through authorized `/status` and
+  rate-limited human alerts, independently of position protection. Back off missing
+  shared exchange account snapshots without slowing healthy-symbol reconciliation;
+  retry failed notifications and announce recovery after a successful pass.
 - Keep operator polling and authorized `/status` available during Bybit startup
   outages. Block trading callbacks and ingestion until existing reconciliation
   gates complete; retry exchange failures with capped backoff and rate-limited

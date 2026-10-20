@@ -58,6 +58,7 @@ def _fake_application(monkeypatch, tmp_path, failed_reconciliation=None):
         events.append("bot.recovery_warning")
 
     bot = SimpleNamespace(
+        report_supervision_state=AsyncMock(),
         set_startup_blocked=lambda reason: events.append(
             "bot.ready" if reason is None else "bot.blocked"
         ),

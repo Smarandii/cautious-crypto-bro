@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -21,6 +21,7 @@ from .domain import (
     StoreError,
     StrategyStatus,
     StrategyV2Policy,
+    TradeExecutionError,
 )
 from .ports import AccountGateway, PositionSupervisorStore
 from .position_management.exit_installer import ExitInstaller
@@ -29,6 +30,10 @@ from .position_management.trailing_stop_manager import TrailingStopManager
 from .supervision_health import publish_success
 
 logger = logging.getLogger(__name__)
+
+
+class _AccountStateUnavailable(TradeExecutionError):
+    """No trustworthy shared account snapshot is available for this pass."""
 
 
 class PositionSupervisor:
@@ -40,15 +45,21 @@ class PositionSupervisor:
         mutation_lock: asyncio.Lock,
         poll_interval_seconds: float = 2.0,
         progress_path: Path | None = None,
+        failure_retry_seconds: float = 30,
+        report_state: Callable[[str | None], Awaitable[None]] | None = None,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("Supervisor poll interval must be positive")
+        if failure_retry_seconds <= 0:
+            raise ValueError("Supervisor failure retry interval must be positive")
 
         self._store = store
         self._executor = executor
         self._mutation_lock = mutation_lock
         self._poll_interval_seconds = poll_interval_seconds
         self._progress_path = progress_path
+        self._failure_retry_seconds = failure_retry_seconds
+        self._report_state = report_state
         self._reported_uncertain: set[UUID] = set()
         self._trailing_stop_manager = TrailingStopManager(executor=executor)
         self._fill_detector = FillDetector(executor=executor)
@@ -60,18 +71,39 @@ class PositionSupervisor:
         )
 
     async def run(self) -> None:
+        retry = self._failure_retry_seconds
         while True:
+            delay = self._poll_interval_seconds
             try:
                 await self.reconcile_once()
                 self._publish_progress()
+                retry = self._failure_retry_seconds
+                await self._notify_state(None)
 
             except asyncio.CancelledError:
                 raise
 
-            except Exception:
+            except _AccountStateUnavailable:
+                delay = retry
+                retry = min(retry * 2, 300)
+                logger.warning(
+                    "Supervision account unavailable; retry in %s seconds", delay
+                )
+                await self._notify_state("Exchange account state unavailable")
+            except Exception as exc:
                 logger.exception("Position supervisor reconciliation failed")
+                await self._notify_state(type(exc).__name__)
 
-            await asyncio.sleep(self._poll_interval_seconds)
+            await asyncio.sleep(delay)
+
+    async def _notify_state(self, reason: str | None) -> None:
+        if self._report_state is not None:
+            try:
+                await self._report_state(reason)
+            except Exception as exc:
+                logger.warning(
+                    "Supervision notification failed: %s", type(exc).__name__
+                )
 
     def _publish_progress(self) -> None:
         if self._progress_path is None:
@@ -197,7 +229,14 @@ class PositionSupervisor:
             return account, None
 
         if account is None:
-            account = await self._executor.account_state()
+            try:
+                account = await self._executor.account_state()
+            except TradeExecutionError as exc:
+                # Grug, Chesterton's Fence (faithful paraphrase): retain fast
+                # healthy-symbol protection; back off only a missing shared snapshot.
+                raise _AccountStateUnavailable(
+                    "Exchange account state unavailable"
+                ) from exc
 
         try:
             return await self._reconcile(state, plan, account), None
