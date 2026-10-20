@@ -419,6 +419,10 @@ class PositionStrategyRepository(Protocol):
 
     async def save_position_strategy(self, state: PositionStrategy) -> None: ...
 
+    async def pause_conflicting_strategies(
+        self, strategy_ids: tuple[UUID, ...], reason: str
+    ) -> None: ...
+
     async def set_position_strategy_status(
         self,
         strategy_id: UUID,
