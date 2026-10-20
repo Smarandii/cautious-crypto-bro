@@ -58,6 +58,9 @@ def _fake_application(monkeypatch, tmp_path, failed_reconciliation=None):
         events.append("bot.recovery_warning")
 
     bot = SimpleNamespace(
+        set_startup_blocked=lambda reason: events.append(
+            "bot.ready" if reason is None else "bot.blocked"
+        ),
         start=step("bot.start"),
         send_recovery_warning=warning,
         run=step("bot.run"),
@@ -175,8 +178,10 @@ def test_initial_reconciliation_precedes_any_execution(
     fake.source.start = source_start_with_progress
 
     if failed_reconciliation is not None:
-        with pytest.raises(RuntimeError, match="Initial account state"):
+        with pytest.raises(ExceptionGroup) as caught:
             asyncio.run(app.async_main())
+        assert len(caught.value.exceptions) == 1
+        assert str(caught.value.exceptions[0]) == "Initial account state unavailable"
 
         assert events.count("supervisor.reconcile") == failed_reconciliation
         assert events.index("store.quarantine") < events.index("store.reset_stale")
@@ -198,7 +203,8 @@ def test_initial_reconciliation_precedes_any_execution(
         assert events.index(
             "supervisor.reconcile", events.index("service.recover")
         ) < events.index("source.start")
-        assert events.index("service.recover") < events.index("bot.run")
+        assert events.index("bot.blocked") < events.index("bot.ready")
+        assert events.index("service.recover") < events.index("bot.ready")
         assert events.index("service.recover") < events.index("supervisor.run")
         assert "pnl.sync" in events
         # The catch-up poll must run alongside the live listener, or
@@ -374,8 +380,11 @@ def test_cleanup_attempts_all_clients_and_preserves_failure_chain(
     assert failures == [
         "extractor close failed",
         "source close failed",
+        "unhandled errors in a TaskGroup (1 sub-exception)",
         "Initial account state unavailable",
     ]
+    assert isinstance(error := caught.value.__context__.__context__, ExceptionGroup)
+    assert str(error.exceptions[0]) == "Initial account state unavailable"
     with fake.app.state_ownership(fake.settings.database_path):
         pass
 

@@ -262,7 +262,28 @@ do not run an independent competing project against the same Bybit account.
 Return to the default file and chosen `CCB_IMAGE` to deploy packaged code again.
 The test profile retains its existing explicit test mounts.
 
-For native development:
+### Exchange startup outages
+
+The bot polls while startup reconciliation is pending. Authorized operators can
+use `/status`, `/attention` and `/source`; entry/action approval and skip buttons
+remain blocked until both reconciliation passes and AUTO recovery finish.
+Signal ingestion starts only after that gate succeeds.
+
+Bybit reconciliation errors retry after 30 seconds, increasing to at most five
+minutes between attempts. The operator receives an outage notice (repeated at
+most every 15 minutes after successful delivery) and one recovery notice. Failed
+notice delivery retries with the next reconciliation attempt. Unavailable
+exchange access means application protection is **not verified**; inspect existing
+positions and exchange protection through Bybit when possible. `/status` reports
+startup readiness, not ongoing exchange health. Storage and unexpected programming
+errors still fail startup; they are not retried as exchange outages.
+
+For Bybit `10010 Unmatched IP`, correct the Demo key's IP binding or use an
+authorized connection matching it. Mobile connections may change public IP;
+restarting the app cannot repair an exchange-side IP allowlist. Never send API
+keys or secrets to the bot.
+
+### Native development
 
 ```sh
 uv sync --python 3.12 --group dev

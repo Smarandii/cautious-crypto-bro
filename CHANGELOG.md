@@ -15,6 +15,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Added
 
+- Keep operator polling and authorized `/status` available during Bybit startup
+  outages. Block trading callbacks and ingestion until existing reconciliation
+  gates complete; retry exchange failures with capped backoff and rate-limited
+  human escalation, preserving AUTO recovery order and cancellation cleanup.
 - Ambiguous strategy owners now retain a durable pause reason and queue the
   existing retryable Telegram alert for every affected strategy, without exchange
   requests or automatic ownership selection. Quarantine all conflicting owners
