@@ -145,6 +145,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Security
 
+- Update the pinned certifi bundle to 2026.10.19 for GHSA-6q48-6c7w-9gw2.
+  Remove the affected emSign ECC Root CA - G3 while retaining unaffected roots
+  and normal TLS certificate/hostname verification.
 - A submission that may have reached the exchange is quarantined instead of
   resent, and a restart never retries an ambiguous operation automatically.
 
