@@ -5,12 +5,14 @@ import logging
 import signal
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from time import monotonic
 from types import FrameType
 from uuid import UUID
 
 from .approval_bot import ApprovalBot
 from .bybit import BybitDemoExecutor
 from .config import Settings, get_settings
+from .domain import TradeExecutionError
 from .execution import ExecutionPlanner
 from .execution_coordinator import ExecutionCoordinator
 from .llm_factory import build_intent_extractor
@@ -245,6 +247,9 @@ async def _run_application(
     interrupted_intents: tuple[UUID, ...],
     interrupted_actions: tuple[UUID, ...],
 ) -> None:
+    runtime.bot.set_startup_blocked(
+        "Startup reconciliation pending. Trading callbacks and signal ingestion are paused."
+    )
     await runtime.bot.start()
     try:
         await runtime.bot.send_recovery_warning(
@@ -256,23 +261,73 @@ async def _run_application(
             "Failed to send interrupted-execution recovery warning"
         )
 
-    # Quarantine is durable before the first supervisor reconciliation.
-    # Fail startup if the resulting account-state reconciliation fails.
-    await runtime.supervisor.reconcile_once()
-    await runtime.service.recover_auto_execution()
-    # AUTO recovery may open new positions; protect them before ingestion.
-    await runtime.supervisor.reconcile_once()
-
     async with asyncio.TaskGroup() as tg:
-        # Approval callbacks must already be active
-        # while startup lookback is creating cards.
         tg.create_task(runtime.bot.run())
+        # Operator polling is live, but every trading callback remains gated.
+        # Grug, Chesterton's Fence (faithful paraphrase): preserve the existing
+        # reconciliation-before-ingestion boundary while restoring operator access.
+        # Quarantine is durable before the first supervisor reconciliation.
+        outage, next_alert = await _reconcile_before_ingestion(runtime)
+        await runtime.service.recover_auto_execution()
+        # AUTO recovery may open new positions; protect them before ingestion.
+        second_outage, _ = await _reconcile_before_ingestion(
+            runtime, next_alert=next_alert
+        )
+        runtime.bot.set_startup_blocked(None)
+        if outage or second_outage:
+            await _startup_notice(
+                runtime,
+                "Exchange startup reconciliation recovered. Trading and signal ingestion may resume.",
+            )
         tg.create_task(runtime.bot.run_strategy_alert_delivery())
         tg.create_task(runtime.supervisor.run())
         tg.create_task(runtime.service.run_delivery_recovery())
         tg.create_task(runtime.service.run_periodic_account_pnl_sync())
 
         tg.create_task(runtime.source_recovery.run())
+
+
+async def _startup_notice(runtime: _Runtime, text: str) -> bool:
+    try:
+        await runtime.bot.send_source_notice(text)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Failed to send exchange startup notice: %s", type(exc).__name__
+        )
+        return False
+    return True
+
+
+async def _reconcile_before_ingestion(
+    runtime: _Runtime,
+    *,
+    retry_seconds: float = 30,
+    alert_seconds: float = 900,
+    next_alert: float = 0,
+) -> tuple[bool, float]:
+    delay = retry_seconds
+    outage = False
+    while True:
+        try:
+            await runtime.supervisor.reconcile_once()
+            return outage, next_alert
+        except TradeExecutionError:
+            outage = True
+            notice = (
+                "Exchange startup reconciliation unavailable. Trading callbacks and "
+                "signal ingestion are paused; application protection is not verified. "
+                "Check Bybit API key IP binding, permissions, and connectivity. "
+                "Account reconciliation will retry automatically, up to five minutes apart."
+            )
+            runtime.bot.set_startup_blocked(notice)
+            logging.getLogger(__name__).warning(
+                "Exchange startup reconciliation unavailable; retry in %s seconds",
+                delay,
+            )
+            if monotonic() >= next_alert and await _startup_notice(runtime, notice):
+                next_alert = monotonic() + alert_seconds
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 300)
 
 
 def main() -> None:

@@ -116,6 +116,9 @@ class ApprovalBot:
         self._store = store
         self._executor = executor
         self._source_recovery: SourceRecovery | None = None
+        self._startup_blocked: str | None = None
+        self._router.callback_query.outer_middleware(self._startup_gate)
+        self._router.message(Command("status"))(self._status)
         self._router.message(Command("attention"))(self._attention)
         self._router.message(Command("source"))(self._source_status)
         self._router.message(Command("source_login"))(self._source_login)
@@ -136,6 +139,31 @@ class ApprovalBot:
 
     def bind_source_recovery(self, recovery: SourceRecovery) -> None:
         self._source_recovery = recovery
+
+    def set_startup_blocked(self, reason: str | None) -> None:
+        self._startup_blocked = reason
+
+    async def _status(self, message: Message) -> None:
+        if self._source_authorized(message):
+            await self._bot.send_message(
+                message.chat.id,
+                self._startup_blocked or "Startup reconciliation complete.",
+            )
+
+    async def _startup_gate(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        if self._startup_blocked is not None:
+            if isinstance(event, CallbackQuery):
+                await event.answer(
+                    "Startup reconciliation incomplete. Use /status; try again later.",
+                    show_alert=True,
+                )
+            return None
+        return await handler(event, data)
 
     def _source_authorized(self, message: Message) -> bool:
         return (
