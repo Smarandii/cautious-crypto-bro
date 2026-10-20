@@ -167,6 +167,7 @@ def test_running_supervision_escalates_and_recovers_without_notification_spam(
                             "Freezing entries must preserve protective exits"
                         )
                 exchange.unavailable = False
+                clock = 1031
                 await until(lambda: bot._supervision_warning is None)
                 await until(lambda: transport.recovery_calls >= 1)
                 assert path.read_bytes() != previous_progress
@@ -175,7 +176,7 @@ def test_running_supervision_escalates_and_recovers_without_notification_spam(
                     # Telegram failure must not hold up real protective mutations.
                     exchange.mark = Decimal("106")
                     await until(lambda: exchange.stop == Decimal("100.5"))
-                    clock = 1031
+                    clock = 1062
                     bot._supervision_notice_changed.set()
                     await until(lambda: transport.recovery_calls == 2)
                 else:
@@ -210,5 +211,15 @@ def test_running_supervision_escalates_and_recovers_without_notification_spam(
                 await stop(task)
                 await stop(alerts)
                 await bot.close()
+            # Exercise transition coalescing without waking another SQLite read
+            # at the same instant as the fixture shuts down its worker tasks.
+            outage_calls = transport.outage_calls
+            recovery_calls = transport.recovery_calls
+            for _ in range(3):
+                await bot.report_supervision_state("Exchange account state unavailable")
+                await bot.report_supervision_state(None)
+            await bot._deliver_supervision_notice()
+            assert transport.outage_calls == outage_calls
+            assert transport.recovery_calls == recovery_calls
 
     asyncio.run(run())

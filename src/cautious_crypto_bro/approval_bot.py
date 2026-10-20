@@ -121,6 +121,7 @@ class ApprovalBot:
         self._supervision_warning: str | None = None
         self._supervision_recovery_pending = False
         self._next_supervision_notice = 0.0
+        self._next_supervision_send = 0.0
         self._supervision_notice_changed = asyncio.Event()
         self._router.callback_query.outer_middleware(self._startup_gate)
         self._router.message(Command("status"))(self._status)
@@ -177,9 +178,12 @@ class ApprovalBot:
         reason = self._supervision_warning
         if reason is None and not self._supervision_recovery_pending:
             return
-        if monotonic() < self._next_supervision_notice:
+        if monotonic() < max(
+            self._next_supervision_notice, self._next_supervision_send
+        ):
             return
         self._next_supervision_notice = monotonic() + 30
+        self._next_supervision_send = self._next_supervision_notice
         text = (
             "HUMAN REVIEW REQUIRED: position supervision is unavailable. "
             "Application protection is not verified. Check exchange access and "

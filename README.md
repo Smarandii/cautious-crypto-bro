@@ -284,6 +284,7 @@ protection cadence so healthy symbols continue receiving supervision. Runtime
 failures appear in `/status` and queue a human-review notice, repeated at most
 every 15 minutes after successful delivery. Failed notice delivery retries every
 30 seconds; recovery queues one notice after a successful reconciliation pass.
+All supervision sends are at least 30 seconds apart, coalescing rapid state changes.
 The existing bot alert worker sends these notifications independently of position
 protection, including when Telegram delivery is slow. Existing execution preflights
 continue to decide entry/action admissibility during runtime outages.
