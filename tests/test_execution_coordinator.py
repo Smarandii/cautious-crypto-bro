@@ -281,12 +281,11 @@ def test_old_entry_executes_and_persists_under_mutation_lock(approval_mode) -> N
                 assert lock.locked()
                 assert order_ids == ("order-1",)
 
-            async def mark_failed(self, intent_id, error):
+            async def record_entry_failure(
+                self, intent_id, message, *, strategy_status
+            ):
                 assert lock.locked()
-
-            async def set_position_strategy_status(self, intent_id, status):
-                assert lock.locked()
-                assert status is (
+                assert strategy_status is (
                     StrategyStatus.CLOSED
                     if isinstance(error, EntryPreflightError)
                     else StrategyStatus.UNCERTAIN

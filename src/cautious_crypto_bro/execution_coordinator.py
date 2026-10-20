@@ -453,18 +453,16 @@ class ExecutionCoordinator:
     ) -> IntentExecutionOutcome:
         message = f"{type(exc).__name__}: {exc}"
 
-        await self._store.mark_failed(
-            intent_id,
-            message,
-        )
-
+        strategy_status = None
         if strategy_created:
-            await self._store.set_position_strategy_status(
-                intent_id,
+            strategy_status = (
                 StrategyStatus.CLOSED
                 if isinstance(exc, EntryPreflightError) and not primary_filled
-                else StrategyStatus.UNCERTAIN,
+                else StrategyStatus.UNCERTAIN
             )
+        await self._store.record_entry_failure(
+            intent_id, message, strategy_status=strategy_status
+        )
 
         return IntentExecutionOutcome(
             status=IntentStatus.FAILED,

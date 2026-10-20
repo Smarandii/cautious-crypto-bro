@@ -340,6 +340,14 @@ class IntentRepository(Protocol):
         error: str,
     ) -> None: ...
 
+    async def record_entry_failure(
+        self,
+        intent_id: UUID,
+        error: str,
+        *,
+        strategy_status: StrategyStatus | None,
+    ) -> None: ...
+
     async def get_recent_source_intents(
         self,
         channel_id: int,
