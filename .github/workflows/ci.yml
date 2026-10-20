@@ -81,5 +81,5 @@ jobs:
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/package-install/bin/python" -c "import cautious_crypto_bro.main; print('Installed wheel imports successfully')"
 
-      - name: Unit tests
+      - name: Tests (unit, integration and smoke)
         run: uv run pytest -q

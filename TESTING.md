@@ -52,6 +52,20 @@ actual-fill rebasing, interrupted submission, and conflicting strategy ownership
 Existing unmarked tests also include integration coverage; marker adoption is
 incremental, not a claim that everything else is a unit test.
 
+Run the small offline lifecycle smoke suite before a broader test pass:
+
+```sh
+uv run pytest -q -m smoke --no-cov
+```
+
+The manual smoke flow takes a Telegram source post through the real extraction
+parser, SQLite, approval-card callback router, execution adapter and protection,
+then rebuilds components against the same state and approves a close. It checks
+unauthorized clicks and duplicate posts/callbacks without additional exchange
+mutations. Only the model, Telegram and exchange transports are fake. This tests
+the application workflow, not external authentication, model accuracy or real
+Telegram delivery. Default pytest and CI include this marked case automatically.
+
 Keep live E2E small and explicit: the existing `scripts/run_bybit_demo_e2e.py`
 runner exercises Demo execution and fresh-process recovery in disposable state.
 It can pause the normal app and places Demo orders; it is not part of ordinary
