@@ -202,6 +202,7 @@ def test_exchange_failures_cannot_publish_successful_progress(tmp_path):
                 executor=executor,
                 mutation_lock=asyncio.Lock(),
                 poll_interval_seconds=0.05,
+                failure_retry_seconds=0.05,
                 progress_path=path,
             )
             task = asyncio.create_task(supervisor.run())

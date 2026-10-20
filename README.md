@@ -275,8 +275,18 @@ most every 15 minutes after successful delivery) and one recovery notice. Failed
 notice delivery retries with the next reconciliation attempt. Unavailable
 exchange access means application protection is **not verified**; inspect existing
 positions and exchange protection through Bybit when possible. `/status` reports
-startup readiness, not ongoing exchange health. Storage and unexpected programming
-errors still fail startup; they are not retried as exchange outages.
+startup readiness and observed runtime supervision failures. Storage and unexpected
+programming errors still fail startup; they are not retried as exchange outages.
+
+After startup, unavailable shared account snapshots retry from 30 seconds up to
+five minutes between attempts. Isolated strategy failures retain the normal
+protection cadence so healthy symbols continue receiving supervision. Runtime
+failures appear in `/status` and queue a human-review notice, repeated at most
+every 15 minutes after successful delivery. Failed notice delivery retries every
+30 seconds; recovery queues one notice after a successful reconciliation pass.
+The existing bot alert worker sends these notifications independently of position
+protection, including when Telegram delivery is slow. Existing execution preflights
+continue to decide entry/action admissibility during runtime outages.
 
 For Bybit `10010 Unmatched IP`, correct the Demo key's IP binding or use an
 authorized connection matching it. Mobile connections may change public IP;
