@@ -153,6 +153,11 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Security
 
+- Update development-only virtualenv to 21.14.12 to fix shell activation command
+  injection advisories GHSA-5vjq-rrrf-7h2q, GHSA-8rjx-v5ww-45pp,
+  GHSA-c947-3pg5-gm8q and GHSA-vxj4-q4g9-crj7. Refresh its python-discovery
+  dependency; production runtime dependencies are unchanged.
+
 - Update the pinned certifi bundle to 2026.10.19 for GHSA-6q48-6c7w-9gw2.
   Remove the affected emSign ECC Root CA - G3 while retaining unaffected roots
   and normal TLS certificate/hostname verification.
