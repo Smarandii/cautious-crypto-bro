@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 import aiosqlite
 
+from cautious_crypto_bro.cancellation import finish_before_cancellation
 from cautious_crypto_bro.domain import StoreError
 
 
@@ -38,13 +39,18 @@ class SQLiteConnectionMixin(_Store):
         many: bool = False,
         row_factory: bool = False,
     ) -> Any:
-        try:
-            async with aiosqlite.connect(self._database_path) as db:
-                if row_factory:
-                    db.row_factory = aiosqlite.Row
+        async def read() -> Any:
+            try:
+                async with aiosqlite.connect(self._database_path) as db:
+                    if row_factory:
+                        db.row_factory = aiosqlite.Row
 
-                cursor = await db.execute(query, parameters)
+                    cursor = await db.execute(query, parameters)
 
-                return await (cursor.fetchall() if many else cursor.fetchone())
-        except (sqlite3.Error, aiosqlite.Error) as exc:
-            raise StoreError(f"SQLite operation failed: {exc}") from exc
+                    return await (cursor.fetchall() if many else cursor.fetchone())
+            except (sqlite3.Error, aiosqlite.Error) as exc:
+                raise StoreError(f"SQLite operation failed: {exc}") from exc
+
+        # Keep the connector thread and connection inside the caller's ownership
+        # scope, including cancellation while the connection is still opening.
+        return await finish_before_cancellation(read())
