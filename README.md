@@ -306,6 +306,10 @@ uv run pre-commit install
 uv run pytest -q
 ```
 
+The local Docker lint hook requires Docker and streams only the selected
+Dockerfiles to a container with no network or host mounts. CI also checks the
+repository's Docker build context and builds the runtime image.
+
 Source distributions use explicit public paths in `pyproject.toml`; add new
 top-level distribution files there deliberately. Private state and credentials
 must stay outside the included source, scripts, tests and docs directories.
