@@ -283,7 +283,9 @@ most every 15 minutes after successful delivery) and one recovery notice. Failed
 notice delivery retries with the next reconciliation attempt. Unavailable
 exchange access means application protection is **not verified**; inspect existing
 positions and exchange protection through Bybit when possible. `/status` reports
-startup readiness and observed runtime supervision failures. Storage and unexpected
+startup readiness, observed runtime supervision failures, and whether local records
+require human review. Use `/attention` in the approval chat for stored reasons;
+an empty local review queue does not verify live exchange protection. Storage and unexpected
 programming errors still fail startup; they are not retried as exchange outages.
 
 After startup, unavailable shared account snapshots retry from 30 seconds up to

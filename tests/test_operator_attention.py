@@ -10,6 +10,7 @@ from uuid import UUID
 
 import pytest
 from aiogram.types import Chat, Message, Update, User
+from test_manual_lifecycle_smoke import TelegramTransport
 
 from cautious_crypto_bro.approval_bot import ApprovalBot
 from cautious_crypto_bro.storage import IntentStore
@@ -112,6 +113,75 @@ def seed(database, count=1):
 def snapshot(database):
     with sqlite3.connect(database) as db:
         return tuple(db.iterdump())
+
+
+@pytest.mark.parametrize("state", ["empty", "quarantined", "unreadable"])
+def test_status_reports_durable_review_state_without_mutation(tmp_path, state):
+    async def run():
+        database = tmp_path / "state.db"
+        store = IntentStore(database)
+        await store.initialize()
+        if state == "quarantined":
+            seed(database, 4)
+        before = snapshot(database)
+        if state == "unreadable":
+            store = IntentStore(tmp_path / "missing" / "state.db")
+        bot = bot_for(store)
+        transport = TelegramTransport()
+        bot._bot.session = transport
+        bot.set_startup_blocked("Exchange startup reconciliation unavailable.")
+        try:
+            for user, chat in [
+                (43, -100123),
+                (42, -100999),
+                (None, -100123),
+                (42, 42),
+                (42, -100123),
+            ]:
+                authorized = user == 42 and chat in {42, -100123}
+                count = len(transport.messages)
+                await bot._dispatcher.feed_update(
+                    bot._bot,
+                    Update(
+                        update_id=count + 1,
+                        message=Message(
+                            message_id=1,
+                            date=datetime.now(UTC),
+                            chat=Chat(
+                                id=chat, type="private" if chat > 0 else "supergroup"
+                            ),
+                            from_user=User(id=user, is_bot=False, first_name="Operator")
+                            if user is not None
+                            else None,
+                            text="/status",
+                        ),
+                    ),
+                )
+                if not authorized:
+                    assert len(transport.messages) == count
+                    continue
+                response = list(transport.messages.values())[-1]
+                assert response.chat.id == chat
+                assert "Exchange startup reconciliation unavailable" in response.text
+                if state == "quarantined":
+                    assert "HUMAN REVIEW REQUIRED" in response.text
+                    assert "/attention in the approval chat" in response.text
+                    assert "Changed <exit>" not in response.text
+                elif state == "empty":
+                    assert (
+                        "No paused or uncertain records in local storage"
+                        in response.text
+                    )
+                else:
+                    assert "local storage could not be read" in response.text
+                    assert "No paused or uncertain records" not in response.text
+                if state != "unreadable":
+                    assert "not a live exchange protection check" in response.text
+            assert snapshot(database) == before
+        finally:
+            await bot.close()
+
+    asyncio.run(run())
 
 
 def test_attention_paginates_all_quarantine_types_without_mutation(tmp_path):
