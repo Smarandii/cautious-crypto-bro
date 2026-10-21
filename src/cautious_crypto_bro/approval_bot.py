@@ -155,6 +155,23 @@ class ApprovalBot:
             if self._supervision_warning is not None:
                 text += "\nSupervision unavailable: " + self._supervision_warning
                 text += ". Application protection is not verified."
+            try:
+                attention = await self._store.get_operator_attention(limit=1, offset=0)
+            except Exception:
+                logger.exception("Failed to read operator attention for status")
+                text += (
+                    "\nOperator review unavailable: local storage could not be read. "
+                    "Paused or uncertain records may exist."
+                )
+            else:
+                if attention:
+                    text += (
+                        "\nHUMAN REVIEW REQUIRED: paused or uncertain records exist. "
+                        "Use /attention in the approval chat for stored reasons."
+                    )
+                else:
+                    text += "\nNo paused or uncertain records in local storage."
+                text += " This is not a live exchange protection check."
             await self._bot.send_message(
                 message.chat.id,
                 text,

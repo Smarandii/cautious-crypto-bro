@@ -15,6 +15,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Added
 
+- Flag durable paused or uncertain records in authorized `/status`, linking to
+  `/attention` for reasons. Distinguish storage failures from an empty review queue;
+  stored status does not claim live exchange protection.
+
 - Block container CI on fixable high or critical runtime vulnerabilities after
   uploading the existing vulnerability report and SBOM for diagnosis.
 
