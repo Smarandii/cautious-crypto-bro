@@ -5,7 +5,7 @@ from uuid import UUID
 import aiosqlite
 
 from ..domain import ApprovalMode, IntentStatus
-from ._connection import _Store
+from ._connection import _Store, sqlite_connection
 
 
 class SharedRepositoryMixin(_Store):
@@ -31,7 +31,7 @@ class SharedRepositoryMixin(_Store):
             approval_filter = " AND approval_mode = ?"
             parameters.append(expected_approval_mode.value)
 
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             cursor = await db.execute(
                 f"""
                 UPDATE {table}
@@ -57,7 +57,7 @@ class SharedRepositoryMixin(_Store):
         record_id: UUID,
         error: str,
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute(
                 f"""
                 UPDATE {table}

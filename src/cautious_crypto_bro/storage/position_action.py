@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from uuid import UUID
 
-import aiosqlite
-
 from ..domain import (
     ApprovalMode,
     IntentStatus,
@@ -12,7 +10,7 @@ from ..domain import (
     StrategyStatus,
     TradingIntent,
 )
-from ._connection import _Store
+from ._connection import _Store, sqlite_connection
 from ._shared import SharedRepositoryMixin
 
 
@@ -78,7 +76,7 @@ class PositionActionRepositoryImpl(SharedRepositoryMixin, _Store):
         order_id: str,
     ) -> None:
         """Commit a confirmed action and its strategy transition atomically."""
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 await db.execute(
@@ -150,7 +148,7 @@ class PositionActionRepositoryImpl(SharedRepositoryMixin, _Store):
         error: str,
     ) -> None:
         """Persist ambiguous execution and quarantine exposure in one commit."""
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 await db.execute(
@@ -255,7 +253,7 @@ class PositionActionRepositoryImpl(SharedRepositoryMixin, _Store):
         flat: bool = False,
         error: str | None = None,
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
             for ident in targets:
                 await db.execute(

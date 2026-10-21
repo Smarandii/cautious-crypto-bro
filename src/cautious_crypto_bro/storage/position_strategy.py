@@ -8,7 +8,7 @@ from uuid import UUID
 import aiosqlite
 
 from ..domain import ExecutionPlan, PositionStrategy, StrategyStatus
-from ._connection import _Store
+from ._connection import _Store, sqlite_connection
 from ._plan_payload import load_strategy_plan
 
 
@@ -26,7 +26,7 @@ class PositionStrategyRepositoryImpl(_Store):
             side=plan.side,
         )
 
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute(
                 """
                 INSERT OR IGNORE INTO position_strategies(
@@ -111,7 +111,7 @@ class PositionStrategyRepositoryImpl(_Store):
         self,
         state: PositionStrategy,
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             cursor = await db.execute(
                 """
                 UPDATE position_strategies
@@ -197,7 +197,7 @@ class PositionStrategyRepositoryImpl(_Store):
         if not strategy_ids or len(set(strategy_ids)) != len(strategy_ids):
             raise ValueError("Conflicting strategy IDs must be nonempty and unique")
         placeholders = ",".join("?" for _ in strategy_ids)
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             # One statement: a failed pause cannot leave one ambiguous owner active.
             cursor = await db.execute(
                 f"UPDATE position_strategies SET status = ?, pause_reason = ?, "
@@ -230,7 +230,7 @@ class PositionStrategyRepositoryImpl(_Store):
     async def mark_strategy_alert_delivered(
         self, strategy_id: UUID, reason: str
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute(
                 "UPDATE position_strategies SET pause_notified = 1 "
                 "WHERE strategy_id = ? AND pause_reason = ? AND status = ?",
@@ -243,7 +243,7 @@ class PositionStrategyRepositoryImpl(_Store):
         strategy_id: UUID,
         status: StrategyStatus,
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute(
                 """
                 UPDATE position_strategies
@@ -264,7 +264,7 @@ class PositionStrategyRepositoryImpl(_Store):
         self,
         symbol: str,
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute(
                 """
                 UPDATE position_strategies
@@ -289,7 +289,7 @@ class PositionStrategyRepositoryImpl(_Store):
         self,
         symbol: str,
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute(
                 """
                 UPDATE position_strategies

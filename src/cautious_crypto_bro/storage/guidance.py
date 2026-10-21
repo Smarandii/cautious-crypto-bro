@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import aiosqlite
-
-from ._connection import _Store
+from ._connection import _Store, sqlite_connection
 
 
 class GuidanceRepositoryImpl(_Store):
@@ -49,7 +47,7 @@ class GuidanceRepositoryImpl(_Store):
 
         scope = "global" if channel_id is None else "channel"
 
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             if scope == "global":
                 await db.execute(
                     """

@@ -12,7 +12,7 @@ from ..domain import (
     SourceMessage,
     TradingIntent,
 )
-from ._connection import _Store
+from ._connection import _Store, sqlite_connection
 
 
 class SourceRepositoryImpl(_Store):
@@ -54,7 +54,7 @@ class SourceRepositoryImpl(_Store):
         """Retain missing posts for a daily retry without stealing active claims."""
         if lease_seconds <= 0:
             raise ValueError("Retry lease must be positive")
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.executemany(
                 """
                 UPDATE source_messages
@@ -87,7 +87,7 @@ class SourceRepositoryImpl(_Store):
 
         claim_token = uuid4().hex
 
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             cursor = await db.execute(
                 """
                 INSERT INTO source_messages(
@@ -164,7 +164,7 @@ class SourceRepositoryImpl(_Store):
         *,
         reason: str | None = None,
     ) -> bool:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             finished = await self._finish_source(
                 db,
                 source,
@@ -183,7 +183,7 @@ class SourceRepositoryImpl(_Store):
     ) -> bool:
         error = (error.strip() or "unknown processing failure")[:2000]
 
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             finished = await self._finish_source(
                 db,
                 source,
@@ -207,7 +207,7 @@ class SourceRepositoryImpl(_Store):
     ) -> bool:
         source = self._validate_batch_inputs(items, position_actions)
 
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
 
             try:
@@ -340,7 +340,7 @@ class SourceRepositoryImpl(_Store):
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
 
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             cursor = await db.execute(
                 """
                 UPDATE source_messages

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import aiosqlite
-
 from ..domain import ExecutionPolicy
-from ._connection import _Store
+from ._connection import _Store, sqlite_connection
 
 
 class ExecutionPolicyRepositoryImpl(_Store):
@@ -29,7 +27,7 @@ class ExecutionPolicyRepositoryImpl(_Store):
         self,
         policy: ExecutionPolicy,
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute(
                 """
                 INSERT INTO execution_policy(

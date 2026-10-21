@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -9,6 +10,24 @@ import aiosqlite
 
 from cautious_crypto_bro.cancellation import finish_before_cancellation
 from cautious_crypto_bro.domain import StoreError
+
+
+@asynccontextmanager
+async def sqlite_connection(database_path: Path) -> AsyncIterator[aiosqlite.Connection]:
+    db = aiosqlite.connect(database_path)
+
+    async def open_connection() -> None:
+        await db
+
+    try:
+        # Drain opening even if cancelled before __aenter__ returns, so the
+        # connection can be closed before its caller releases state ownership.
+        await finish_before_cancellation(open_connection())
+        yield db
+    finally:
+        # Shield cleanup, not the transaction body: cancellation must still
+        # roll back uncommitted writes rather than carry on to a later commit.
+        await finish_before_cancellation(db.close())
 
 
 class _Store(Protocol):
@@ -39,18 +58,13 @@ class SQLiteConnectionMixin(_Store):
         many: bool = False,
         row_factory: bool = False,
     ) -> Any:
-        async def read() -> Any:
-            try:
-                async with aiosqlite.connect(self._database_path) as db:
-                    if row_factory:
-                        db.row_factory = aiosqlite.Row
+        try:
+            async with sqlite_connection(self._database_path) as db:
+                if row_factory:
+                    db.row_factory = aiosqlite.Row
 
-                    cursor = await db.execute(query, parameters)
+                cursor = await db.execute(query, parameters)
 
-                    return await (cursor.fetchall() if many else cursor.fetchone())
-            except (sqlite3.Error, aiosqlite.Error) as exc:
-                raise StoreError(f"SQLite operation failed: {exc}") from exc
-
-        # Keep the connector thread and connection inside the caller's ownership
-        # scope, including cancellation while the connection is still opening.
-        return await finish_before_cancellation(read())
+                return await (cursor.fetchall() if many else cursor.fetchone())
+        except (sqlite3.Error, aiosqlite.Error) as exc:
+            raise StoreError(f"SQLite operation failed: {exc}") from exc

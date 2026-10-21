@@ -3,10 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-import aiosqlite
-
 from ..domain import ApprovalMode, IntentStatus
-from ._connection import _Store
+from ._connection import _Store, sqlite_connection
 
 
 class ManualDeliveryRepositoryImpl(_Store):
@@ -28,7 +26,7 @@ class ManualDeliveryRepositoryImpl(_Store):
 
     async def claim_manual_delivery(self, record_id: UUID) -> str | None:
         token = str(uuid4())
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             cursor = await db.execute(
                 """UPDATE manual_deliveries SET claim_token = ?,
                    retry_after = datetime('now', '+5 minutes')
@@ -42,7 +40,7 @@ class ManualDeliveryRepositoryImpl(_Store):
     async def finish_manual_delivery(
         self, record_id: UUID, token: str, *, delivered: bool
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute(
                 """UPDATE manual_deliveries SET claim_token = NULL,
                    delivered_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END,
@@ -63,7 +61,7 @@ class ManualDeliveryRepositoryImpl(_Store):
 
         cutoff = datetime.now(UTC) - timedelta(seconds=stale_after_seconds)
 
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             cursor = await db.execute(
                 """
                 SELECT i.intent_id, 'OPEN', i.created_at
