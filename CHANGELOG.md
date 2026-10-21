@@ -15,6 +15,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Added
 
+- Block container CI on fixable high or critical runtime vulnerabilities after
+  uploading the existing vulnerability report and SBOM for diagnosis.
+
 - Report post-startup supervision failures through authorized `/status` and
   rate-limited human alerts, independently of position protection. Back off missing
   shared exchange account snapshots without slowing healthy-symbol reconciliation;
