@@ -153,6 +153,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Security
 
+- Stream selected Dockerfiles into the local lint container with networking
+  disabled and no host mounts. Keep ignored credentials and backups inaccessible
+  to the linter, and remove the Bash quoting dependency from the Windows hook.
+
 - Pin the official Python 3.12 base separately from uv to pick up Debian security
   fixes and Python 3.12.15. Preserve the existing uv binaries and frozen application
   dependencies; expose a public `os` stage for scanning before source is copied.
