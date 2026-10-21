@@ -26,6 +26,10 @@ Python and uv images are pinned independently so OS security updates can advance
 without waiting for uv's derived image. Dependabot tracks both. The public `os`
 build target contains the interpreter and uv, before application source is copied.
 
+Container CI uploads its vulnerability report and SBOM before rejecting runtime
+images with fixable high or critical vulnerabilities. Findings without an available
+fix do not block this gate.
+
 Git and Docker ignore `.env` and `.env.*` files, including nested locations;
 `.env.example` remains a public template. Keep real credentials out of examples.
 
