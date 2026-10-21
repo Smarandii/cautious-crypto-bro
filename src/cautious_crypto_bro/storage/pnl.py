@@ -4,10 +4,8 @@ from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
-import aiosqlite
-
 from ..domain import AccountPnlSummary, AccountPnlSyncState, ClosedPnlRecord
-from ._connection import _Store
+from ._connection import _Store, sqlite_connection
 
 
 class PnlRepositoryImpl(_Store):
@@ -18,7 +16,7 @@ class PnlRepositoryImpl(_Store):
         if not records:
             return
 
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.executemany(
                 """
                 INSERT INTO account_closed_pnl(
@@ -109,7 +107,7 @@ class PnlRepositoryImpl(_Store):
         history_start_at: datetime,
         last_synced_at: datetime,
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute(
                 """
                 INSERT INTO account_pnl_sync(

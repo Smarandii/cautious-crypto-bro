@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from uuid import UUID
 
-import aiosqlite
-
 from ..domain import (
     ApprovalMode,
     ExecutionPlan,
@@ -14,7 +12,7 @@ from ..domain import (
     PositionActionIntent,
     TradingIntent,
 )
-from ._connection import _Store
+from ._connection import _Store, sqlite_connection
 
 
 class AutoOutcomeRepositoryImpl(_Store):
@@ -22,7 +20,7 @@ class AutoOutcomeRepositoryImpl(_Store):
 
     async def ensure_auto_outcome_delivery(self, record_id: UUID, kind: str) -> None:
         table, column = self._outcome_table(kind)
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute(
                 f"""INSERT OR IGNORE INTO manual_deliveries(record_id, kind)
                     SELECT {column}, ? FROM {table}

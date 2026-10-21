@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from uuid import UUID
 
-import aiosqlite
-
 from ..domain import (
     ApprovalMode,
     ExecutionPlan,
@@ -12,7 +10,7 @@ from ..domain import (
     StrategyStatus,
     TradingIntent,
 )
-from ._connection import _Store
+from ._connection import _Store, sqlite_connection
 from ._shared import SharedRepositoryMixin
 
 
@@ -65,7 +63,7 @@ class IntentRepositoryImpl(SharedRepositoryMixin, _Store):
         self,
         plan: ExecutionPlan,
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             cursor = await db.execute(
                 """
                 UPDATE execution_plans
@@ -119,7 +117,7 @@ class IntentRepositoryImpl(SharedRepositoryMixin, _Store):
         intent_id: UUID,
         order_ids: tuple[str, ...],
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute(
                 """
                 UPDATE intents
@@ -169,7 +167,7 @@ class IntentRepositoryImpl(SharedRepositoryMixin, _Store):
         *,
         strategy_status: StrategyStatus | None,
     ) -> None:
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 cursor = await db.execute(

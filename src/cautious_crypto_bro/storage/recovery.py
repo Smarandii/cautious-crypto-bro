@@ -2,15 +2,13 @@ from __future__ import annotations
 
 from uuid import UUID
 
-import aiosqlite
-
 from ..domain import (
     IntentStatus,
     PositionActionIntent,
     PositionActionType,
     StrategyStatus,
 )
-from ._connection import _Store
+from ._connection import _Store, sqlite_connection
 from ._shared import SharedRepositoryMixin
 
 
@@ -30,7 +28,7 @@ class RecoveryRepositoryImpl(SharedRepositoryMixin, _Store):
             StrategyStatus.CLOSING.value,
         )
 
-        async with aiosqlite.connect(self._database_path) as db:
+        async with sqlite_connection(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 # Action symbols must be captured before status transitions,
