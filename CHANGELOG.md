@@ -153,6 +153,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Security
 
+- Pin the official Python 3.12 base separately from uv to pick up Debian security
+  fixes and Python 3.12.15. Preserve the existing uv binaries and frozen application
+  dependencies; expose a public `os` stage for scanning before source is copied.
+
 - Update development-only virtualenv to 21.14.12 to fix shell activation command
   injection advisories GHSA-5vjq-rrrf-7h2q, GHSA-8rjx-v5ww-45pp,
   GHSA-c947-3pg5-gm8q and GHSA-vxj4-q4g9-crj7. Refresh its python-discovery

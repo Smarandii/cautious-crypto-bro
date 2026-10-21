@@ -22,6 +22,10 @@ docker compose logs -f app
 Fill `.env` with credentials and account/channel IDs from [.env.example](.env.example).
 The dialog helper authorizes the Telegram session.
 
+Python and uv images are pinned independently so OS security updates can advance
+without waiting for uv's derived image. Dependabot tracks both. The public `os`
+build target contains the interpreter and uv, before application source is copied.
+
 Git and Docker ignore `.env` and `.env.*` files, including nested locations;
 `.env.example` remains a public template. Keep real credentials out of examples.
 
