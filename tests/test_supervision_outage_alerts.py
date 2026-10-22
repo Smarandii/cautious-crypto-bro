@@ -1,6 +1,7 @@
 """Post-startup outages through real SQLite, HTTP adapter and bot router."""
 
 import asyncio
+import html
 from decimal import Decimal
 
 import httpx
@@ -54,6 +55,15 @@ def test_running_supervision_escalates_and_recovers_without_notification_spam(
             async def make_request(self, bot, method, timeout=None):
                 if isinstance(method, SendMessage):
                     if "HUMAN REVIEW REQUIRED" in method.text:
+                        assert "10010 (Unmatched IP)" in method.text
+                        assert "runtime's current public IP" in html.unescape(
+                            method.text
+                        )
+                        assert (
+                            "https://www.bybit.com/en/app/user/api-management"
+                            in method.text
+                        )
+                        assert "synthetic-private-detail" not in method.text
                         self.outage_calls += 1
                         if fail_notice and self.outage_calls == 1:
                             raise OSError("Synthetic notification unavailable")

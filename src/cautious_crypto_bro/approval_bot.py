@@ -65,6 +65,12 @@ if TYPE_CHECKING:
     from .source_recovery import SourceRecovery
 
 ATTENTION_PAGE_SIZE = 5
+BYBIT_IP_BINDING_HELP = (
+    "For Bybit error 10010 (Unmatched IP), add the runtime's current public IP "
+    "to the Demo API key allowed IPs at "
+    "https://www.bybit.com/en/app/user/api-management . "
+    "Mobile IPs can change. Keep IP binding enabled; never send API keys or secrets here."
+)
 RECOVERED_OUTCOME_NOTICE = (
     "<b>RECOVERED EXECUTION RECORD</b>\n"
     "Stored outcome only; this is not a new trade or live confirmation.\n\n"
@@ -205,6 +211,7 @@ class ApprovalBot:
             "HUMAN REVIEW REQUIRED: position supervision is unavailable. "
             "Application protection is not verified. Check exchange access and "
             "review existing positions/protection in Bybit. Use /status for details."
+            "\n" + BYBIT_IP_BINDING_HELP
             if reason is not None
             else "Position supervision recovered: a reconciliation pass completed successfully."
         )
