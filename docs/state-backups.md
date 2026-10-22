@@ -10,7 +10,12 @@ The archive contains `database.sqlite3` and `telegram.session`, plus optional
 `telegram-identity.json` when the reader account has been pinned. Creation
 automatically restores them into disposable scratch space, validates the identity
 record when present, checks SQLite
-integrity/required tables and records SQLite `PRAGMA user_version` before success. It never
+integrity/required tables and records SQLite `PRAGMA user_version` before success.
+The restored Telegram session must have one authorization record with a nonempty
+binary key and valid data-center endpoint. The receipt records key presence without
+reading key bytes into the report. Offline verification cannot detect Telegram
+revocation or expiry; authenticated reader readiness must still be checked after restore.
+It never
 migrates state, calls external APIs, prints database/session contents or replaces
 an existing archive. Failed creation removes only its own incomplete archive.
 The receipt contains the archive SHA-256, schema/table counts and verification

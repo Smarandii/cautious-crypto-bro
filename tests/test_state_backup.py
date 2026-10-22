@@ -181,6 +181,31 @@ def test_existing_backup_is_never_overwritten(tmp_path):
     assert output.read_bytes() == previous
 
 
+@pytest.mark.parametrize(
+    "damage", ["missing_row", "empty_key", "text_key", "missing_endpoint"]
+)
+def test_backup_rejects_structurally_valid_but_unusable_session(tmp_path, damage):
+    database, session, output = inputs(tmp_path)
+    with sqlite3.connect(session) as db:
+        if damage == "missing_row":
+            db.execute("DELETE FROM sessions")
+        elif damage == "empty_key":
+            db.execute("UPDATE sessions SET auth_key = ?", (b"",))
+        elif damage == "text_key":
+            db.execute("UPDATE sessions SET auth_key = ?", ("SYNTHETIC_PRIVATE",))
+        else:
+            db.execute("UPDATE sessions SET server_address = NULL")
+        assert db.execute("PRAGMA quick_check").fetchone() == ("ok",)
+    before = digest(database), digest(session)
+    result = create(tmp_path, database, session, output)
+    assert result.returncode != 0
+    assert not output.exists()
+    assert "isolated_restore_verified" not in result.stdout
+    assert "SYNTHETIC_PRIVATE" not in result.stdout + result.stderr
+    assert (digest(database), digest(session)) == before
+    assert not list((tmp_path / "scratch").iterdir())
+
+
 def test_receipt_mismatch_is_not_reported_as_a_verified_restore(tmp_path):
     database, session, output = inputs(tmp_path)
     assert create(tmp_path, database, session, output).returncode == 0
