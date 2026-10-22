@@ -22,6 +22,88 @@ from cautious_crypto_bro.storage import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("change", ["trigger", "side"])
+def test_owned_partial_stop_drift_pauses_before_exchange_mutations(tmp_path, change):
+    class AttachedStopExchange(Exchange):
+        def handle(self, request):
+            response = super().handle(request)
+            if request.url.path == "/v5/order/realtime" and not any(
+                key in request.url.params for key in ("orderId", "orderLinkId")
+            ):
+                payload = response.json()
+                payload["result"]["list"].extend(
+                    order
+                    for order in self.orders.values()
+                    if order["orderStatus"] == "Untriggered"
+                )
+                return httpx.Response(200, json=payload)
+            return response
+
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = AttachedStopExchange()
+        with executor_for(exchange) as executor:
+            store, intent, plan, coordinator, supervisor = await prepare(
+                database, exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            exchange.mark = Decimal("102")
+            await supervisor.reconcile_once()
+            state = await state_for(store)
+            parent = (
+                f"ccb-v2-{state.strategy_id.hex[:20]}-{plan.orders[0].name.lower()}"
+            )
+            exchange.orders["attached-stop"] = {
+                "orderId": "attached-stop",
+                "orderLinkId": "",
+                "parentOrderLinkId": parent,
+                "symbol": state.symbol,
+                "side": "Buy" if change == "side" else "Sell",
+                "orderType": "Market",
+                "orderStatus": "Untriggered",
+                "qty": "1",
+                "leavesQty": "1",
+                "cumExecQty": "0",
+                "price": "0",
+                "avgPrice": "0",
+                "reduceOnly": True,
+                "stopOrderType": "PartialStopLoss",
+                "triggerPrice": str(
+                    plan.stop_loss + 1 if change == "trigger" else plan.stop_loss
+                ),
+                "updatedTime": "0",
+            }
+            before = len(exchange.requests)
+            restarted_store = IntentStore(database)
+            restarted = PositionSupervisor(
+                store=restarted_store, executor=executor, mutation_lock=asyncio.Lock()
+            )
+            await restarted.reconcile_once()
+            alerts = await restarted_store.get_pending_strategy_alerts()
+            assert len(alerts) == 1
+            assert alerts[0].status is StrategyStatus.MANUAL_OVERRIDE
+            assert "owned partial stop" in alerts[0].pause_reason
+            assert "attached-stop" in alerts[0].pause_reason
+            assert not any(
+                path
+                in {
+                    "/v5/order/create",
+                    "/v5/order/create-batch",
+                    "/v5/order/cancel",
+                    "/v5/position/trading-stop",
+                }
+                for path, _ in exchange.requests[before:]
+            )
+            assert exchange.orders["attached-stop"]["orderStatus"] == "Untriggered"
+            assert exchange.stop == plan.stop_loss
+            await restarted.reconcile_once()
+            assert len(await IntentStore(database).get_pending_strategy_alerts()) == 1
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "change",
     [

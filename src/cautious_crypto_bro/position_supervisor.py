@@ -889,6 +889,21 @@ class PositionSupervisor:
             self._fill_detector.entry_link_id(state, order.name)
             for order in plan.orders
         }
+        expected_side = Side.SHORT if state.side is Side.LONG else Side.LONG
+        for order in account.open_orders:
+            if (
+                order.symbol == state.symbol
+                and order.stop_order_type == "PartialStopLoss"
+                and order.parent_order_link_id in expected_parents
+                and (
+                    order.trigger_price != plan.stop_loss
+                    or order.side is not expected_side
+                )
+            ):
+                return (
+                    f"owned partial stop changed outside Strategy V2: {order.order_id}; "
+                    "manual review required"
+                )
         if any(
             order.symbol == state.symbol
             and order.stop_order_type == "PartialStopLoss"
