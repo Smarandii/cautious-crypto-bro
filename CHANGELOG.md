@@ -15,6 +15,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Added
 
+- Reject backup restore drills whose Telegram session has no authorization record,
+  binary key or valid endpoint, even when SQLite integrity passes. Report key
+  presence without exposing it; offline checks do not prove server-side authorization.
+
 - Pause Strategy V2 before exchange mutations when an attached stop with a verified
   entry parent changes trigger price or side; persist human-review alerts across
   restarts while leaving existing orders and protection untouched.

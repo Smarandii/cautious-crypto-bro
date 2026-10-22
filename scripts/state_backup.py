@@ -71,6 +71,30 @@ def verify_archive(archive_path: Path, expected_sha256: str) -> dict:
             name: inspect_database(restored / name, tables)
             for name, tables in CONTENTS.items()
         }
+        session_path = restored / "telegram.session"
+        with closing(
+            sqlite3.connect(session_path.as_uri() + "?mode=ro", uri=True)
+        ) as db:
+            rows = db.execute(
+                "SELECT dc_id, server_address, port, "
+                "typeof(auth_key) = 'blob' AND length(auth_key) > 0 FROM sessions"
+            ).fetchmany(2)
+        if len(rows) != 1:
+            raise ValueError("Telegram session must contain one authorization record")
+        dc_id, address, port, key_present = rows[0]
+        if (
+            not isinstance(dc_id, int)
+            or dc_id <= 0
+            or not isinstance(address, str)
+            or not address.strip()
+            or not isinstance(port, int)
+            or not 1 <= port <= 65535
+            or not key_present
+        ):
+            raise ValueError(
+                "Telegram session authorization or endpoint is missing or invalid"
+            )
+        files["telegram.session"]["authorization_key_present"] = True
         if IDENTITY_NAME in names:
             read_source_identity(restored / IDENTITY_NAME)
             files[IDENTITY_NAME] = {"identity_pinned": True}
