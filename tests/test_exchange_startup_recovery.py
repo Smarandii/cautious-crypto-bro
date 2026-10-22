@@ -156,6 +156,8 @@ def test_exchange_rejection_keeps_status_but_blocks_trading(
                 async with asyncio.timeout(5):
                     notice = await notices.get()
                     assert "synthetic-secret" not in notice
+                    assert "10010 (Unmatched IP)" in notice
+                    assert "https://www.bybit.com/en/app/user/api-management" in notice
                     assert notice_attempts == 2
                     assert not task.done() and not source_started.is_set()
                     assert recovery_calls == failed_gate - 1
@@ -168,7 +170,11 @@ def test_exchange_rejection_keeps_status_but_blocks_trading(
                         text="/status",
                     )
                     updates.put_nowait(Update(update_id=1, message=message))
-                    assert "protection is not verified" in await replies.get()
+                    status = await replies.get()
+                    assert "protection is not verified" in status
+                    assert "10010 (Unmatched IP)" in status
+                    assert "runtime's current public IP" in status
+                    assert "https://www.bybit.com/en/app/user/api-management" in status
                     for index, data in enumerate(
                         (
                             IntentAction(

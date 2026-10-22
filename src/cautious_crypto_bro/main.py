@@ -9,7 +9,7 @@ from time import monotonic
 from types import FrameType
 from uuid import UUID
 
-from .approval_bot import ApprovalBot
+from .approval_bot import BYBIT_IP_BINDING_HELP, ApprovalBot
 from .bybit import BybitDemoExecutor
 from .config import Settings, get_settings
 from .domain import TradeExecutionError
@@ -319,6 +319,7 @@ async def _reconcile_before_ingestion(
                 "signal ingestion are paused; application protection is not verified. "
                 "Check Bybit API key IP binding, permissions, and connectivity. "
                 "Account reconciliation will retry automatically, up to five minutes apart."
+                "\n" + BYBIT_IP_BINDING_HELP
             )
             runtime.bot.set_startup_blocked(notice)
             logging.getLogger(__name__).warning(

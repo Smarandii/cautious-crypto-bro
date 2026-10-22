@@ -19,6 +19,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
   entry parent changes trigger price or side; persist human-review alerts across
   restarts while leaving existing orders and protection untouched.
 
+- Include actionable Bybit `10010` IP-allowlist instructions and the API-management
+  link in startup and runtime supervision outage notices, retaining existing
+  escalation limits and secret-safe error handling.
+
 - Flag durable paused or uncertain records in authorized `/status`, linking to
   `/attention` for reasons. Distinguish storage failures from an empty review queue;
   stored status does not claim live exchange protection.
