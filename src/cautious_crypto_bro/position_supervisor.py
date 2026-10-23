@@ -287,6 +287,13 @@ class PositionSupervisor:
                 "position side mismatch",
             )
 
+        if not state.trailing_active and position.trailing_stop is not None:
+            return await self._manual_override(
+                state,
+                account,
+                "position trailing stop enabled outside Strategy V2; manual review required",
+            )
+
         if abs(position.avg_price - plan.stop_loss) <= 0:
             return await self._manual_override(
                 state,

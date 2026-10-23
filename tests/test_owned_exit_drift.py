@@ -23,6 +23,57 @@ from cautious_crypto_bro.storage import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("phase", ["initial", "managed", "installing"])
+def test_unexpected_trailing_stop_pauses_before_other_mutations(tmp_path, phase):
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = Exchange()
+        with executor_for(exchange) as executor:
+            store, intent, plan, coordinator, supervisor = await prepare(
+                database, exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            exchange.mark = Decimal("102")
+            if phase != "initial":
+                await supervisor.reconcile_once()
+            if phase == "installing":
+                await store.save_position_strategy(
+                    (await state_for(store)).model_copy(
+                        update={"installing_exits": True}
+                    )
+                )
+            assert not (await state_for(store)).trailing_active
+            exchange.trail = Decimal("1")
+            before = len(exchange.requests)
+            reopened = IntentStore(database)
+            restarted = PositionSupervisor(
+                store=reopened, executor=executor, mutation_lock=asyncio.Lock()
+            )
+            await restarted.reconcile_once()
+            alerts = await reopened.get_pending_strategy_alerts()
+            assert (
+                len(alerts) == 1 and alerts[0].status is StrategyStatus.MANUAL_OVERRIDE
+            )
+            assert "trailing" in alerts[0].pause_reason
+            assert exchange.trail == 1 and exchange.stop == plan.stop_loss
+            assert not any(
+                path
+                in {
+                    "/v5/order/cancel",
+                    "/v5/order/create",
+                    "/v5/order/create-batch",
+                    "/v5/position/trading-stop",
+                }
+                for path, _ in exchange.requests[before:]
+            )
+            await restarted.reconcile_once()
+            assert len(await IntentStore(database).get_pending_strategy_alerts()) == 1
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("change", [None, "cancel", "price"])
 def test_fixed_exit_drift_blocks_partial_stop_handoff(tmp_path, change):
     class HandoffExchange(Exchange):
