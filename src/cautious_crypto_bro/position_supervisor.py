@@ -433,13 +433,16 @@ class PositionSupervisor:
                         and order.order_link_id in pending_entries
                     ):
                         await self._executor.cancel_order(state.symbol, order.order_id)
-                # Cancellation acknowledgement is not proof of a flat account:
-                # an entry can fill while cancellation is in flight.
-                account = await self._executor.account_state()
-                if self._position(state, account) is not None or self._pending_entries(
-                    state, account
-                ):
-                    return account
+            return await self._close_if_flat(state)
+        return account
+
+    async def _close_if_flat(self, state: PositionStrategy) -> AccountStateSummary:
+        # Positions and orders come from separate requests. Even a snapshot
+        # with no pending entries can miss a fill between those requests.
+        account = await self._executor.account_state()
+        if self._position(state, account) is None and not self._pending_entries(
+            state, account
+        ):
             await self._save(
                 state.model_copy(
                     update={
@@ -584,8 +587,7 @@ class PositionSupervisor:
         account = await self._executor.account_state()
         updated_position = self._position(state, account)
         if updated_position is None:
-            await self._save(state.model_copy(update={"status": StrategyStatus.CLOSED}))
-            return account
+            return await self._close_if_flat(state)
         state = state.model_copy(
             update={
                 "entry_frozen": True,
@@ -638,14 +640,7 @@ class PositionSupervisor:
         updated_position = self._position(state, account)
 
         if updated_position is None:
-            await self._save(
-                state.model_copy(
-                    update={
-                        "status": (StrategyStatus.CLOSED),
-                    }
-                )
-            )
-            return account
+            return await self._close_if_flat(state)
 
         live_r = self._live_r(
             updated_position,
@@ -731,14 +726,7 @@ class PositionSupervisor:
         position = self._position(state, account)
 
         if position is None:
-            await self._save(
-                state.model_copy(
-                    update={
-                        "status": (StrategyStatus.CLOSED),
-                    }
-                )
-            )
-            return account
+            return await self._close_if_flat(state)
 
         live_r = self._live_r(
             position,
@@ -831,14 +819,7 @@ class PositionSupervisor:
             verified_position = self._position(state, account)
 
             if verified_position is None:
-                await self._save(
-                    state.model_copy(
-                        update={
-                            "status": (StrategyStatus.CLOSED),
-                        }
-                    )
-                )
-                return account
+                return await self._close_if_flat(state)
 
             self._trailing_stop_manager.verify_protection(
                 verified_position,
@@ -1136,8 +1117,7 @@ class PositionSupervisor:
         position = self._position(state, account)
         pending_entries = self._pending_entries(state, account)
         if position is None and not pending_entries:
-            await self._save(state.model_copy(update={"status": StrategyStatus.CLOSED}))
-            return account, True
+            return await self._close_if_flat(state), True
         if position is not None and not state.entry_frozen:
             account = await self._freeze_entries(
                 state,

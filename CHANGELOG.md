@@ -15,6 +15,10 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Added
 
+- Require a fresh account read before any supervisor transition to CLOSED,
+  including expiry and protection handoffs. Keep positions that appear during
+  mixed position/order snapshots under active supervision.
+
 - Cancel a strategy's remaining entries after its observed position disappears,
   including during CLOSE. Confirm account state before recording CLOSED so an
   entry fill during cancellation remains under supervision; leave foreign orders
