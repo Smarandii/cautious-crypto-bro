@@ -185,6 +185,16 @@ def pending_entry_order_from_item(item: object) -> OpenOrderExposure | None:
 
 
 def closed_pnl_record_from_item(item: dict) -> ClosedPnlRecord:
+    raw_pnl = item.get("closedPnl")
+    if raw_pnl is None or not str(raw_pnl).strip():
+        raise TradeExecutionError("Closed-PnL record has no realized P&L")
+    try:
+        closed_pnl = parse_decimal(raw_pnl)
+    except InvalidOperation:
+        raise TradeExecutionError(
+            "Closed-PnL record has invalid realized P&L"
+        ) from None
+
     symbol = str(item.get("symbol") or "").upper()
 
     order_id = str(item.get("orderId") or "")
@@ -240,7 +250,7 @@ def closed_pnl_record_from_item(item: dict) -> ClosedPnlRecord:
         order_id=order_id,
         symbol=symbol,
         position_side=position_side,
-        closed_pnl=parse_decimal(item.get("closedPnl")),
+        closed_pnl=closed_pnl,
         closed_size=parse_decimal(item.get("closedSize")),
         avg_entry_price=(parse_optional_decimal(item.get("avgEntryPrice"))),
         avg_exit_price=(parse_optional_decimal(item.get("avgExitPrice"))),
