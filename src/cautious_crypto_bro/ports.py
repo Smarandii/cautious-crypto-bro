@@ -437,10 +437,6 @@ class PositionStrategyRepository(Protocol):
         status: StrategyStatus,
     ) -> None: ...
 
-    async def request_strategy_rebalance(self, symbol: str) -> None: ...
-
-    async def request_strategy_close(self, symbol: str) -> None: ...
-
 
 class ManualDeliveryRepository(Protocol):
     async def pending_manual_deliveries(
