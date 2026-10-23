@@ -269,6 +269,11 @@ class PositionSupervisor:
             return await self._handle_closing(state, account, position)
 
         if position is None:
+            account, expiry_handled = await self._handle_expired_entries(
+                state, plan, account
+            )
+            if expiry_handled:
+                return account
             return await self._handle_missing_position(
                 state,
                 pending_entries,
@@ -297,14 +302,6 @@ class PositionSupervisor:
         plan: ExecutionPlan,
         account: AccountStateSummary,
     ) -> AccountStateSummary:
-        account, expiry_handled = await self._handle_expired_entries(
-            state,
-            plan,
-            account,
-        )
-        if expiry_handled:
-            return account
-
         position = self._position(state, account)
         pending_entries = self._pending_entries(state, account)
 
@@ -359,6 +356,15 @@ class PositionSupervisor:
         exit_drift = await self._fill_detector.drift_reason(state, account)
         if exit_drift is not None:
             return await self._manual_override(state, account, exit_drift)
+
+        # Live positions must pass drift validation before expiry can cancel
+        # entries or replace protection.
+        account, expiry_handled = await self._handle_expired_entries(
+            state, plan, account
+        )
+        position = self._position(state, account)
+        if expiry_handled or position is None:
+            return account
 
         live_r = self._live_r(
             position,
