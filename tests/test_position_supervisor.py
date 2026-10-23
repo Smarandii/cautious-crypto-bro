@@ -461,9 +461,14 @@ def test_supervisor_expires_remaining_entries_but_protects_partial_position() ->
         side=strategy_plan.side,
     )
     executor = Executor()
-    remaining_entries = (
-        _entry_order(strategy_plan, "E2"),
-        _entry_order(strategy_plan, "E3"),
+    remaining_entries = tuple(
+        replace(
+            _entry_order(strategy_plan, order.name),
+            quantity=order.quantity,
+            remaining_quantity=order.quantity,
+            price=order.price,
+        )
+        for order in strategy_plan.orders[1:]
     )
     protective_stop = _entry_stop_order(strategy_plan)
     executor.state = replace(

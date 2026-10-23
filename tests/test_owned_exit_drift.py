@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -23,7 +24,10 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.parametrize("change", ["trigger", "side"])
-def test_owned_partial_stop_drift_pauses_before_exchange_mutations(tmp_path, change):
+@pytest.mark.parametrize("expired", [False, True])
+def test_owned_partial_stop_drift_pauses_before_exchange_mutations(
+    tmp_path, change, expired
+):
     class AttachedStopExchange(Exchange):
         def handle(self, request):
             response = super().handle(request)
@@ -75,6 +79,22 @@ def test_owned_partial_stop_drift_pauses_before_exchange_mutations(tmp_path, cha
                 ),
                 "updatedTime": "0",
             }
+            if expired:
+                policy = plan.policy.model_copy(
+                    update={
+                        "strategy_v2": plan.policy.strategy_v2.model_copy(
+                            update={"entry_order_ttl_minutes": 1}
+                        )
+                    }
+                )
+                await store.update_execution_plan(
+                    plan.model_copy(
+                        update={
+                            "created_at": datetime.now(UTC) - timedelta(days=1),
+                            "policy": policy,
+                        }
+                    )
+                )
             before = len(exchange.requests)
             restarted_store = IntentStore(database)
             restarted = PositionSupervisor(
@@ -117,12 +137,15 @@ def test_owned_partial_stop_drift_pauses_before_exchange_mutations(tmp_path, cha
         "legacy",
     ],
 )
-def test_owned_exit_drift_survives_restart_and_alert_delivery_failure(tmp_path, change):
+@pytest.mark.parametrize("expired", [False, True])
+def test_owned_exit_drift_survives_restart_and_alert_delivery_failure(
+    tmp_path, change, expired
+):
     async def run():
         database = tmp_path / "state.db"
         exchange = Exchange()
         with executor_for(exchange) as executor:
-            store, intent, _, coordinator, supervisor = await prepare(
+            store, intent, plan, coordinator, supervisor = await prepare(
                 database, exchange, executor
             )
             outcome = await coordinator.execute_intent(
@@ -153,6 +176,22 @@ def test_owned_exit_drift_survives_restart_and_alert_delivery_failure(tmp_path, 
                 target["reduceOnly"] = False
             elif change == "missing":
                 del exchange.orders[link]
+            if expired:
+                policy = plan.policy.model_copy(
+                    update={
+                        "strategy_v2": plan.policy.strategy_v2.model_copy(
+                            update={"entry_order_ttl_minutes": 1}
+                        )
+                    }
+                )
+                await store.update_execution_plan(
+                    plan.model_copy(
+                        update={
+                            "created_at": datetime.now(UTC) - timedelta(days=1),
+                            "policy": policy,
+                        }
+                    )
+                )
             before = len(exchange.requests)
             restarted_store = IntentStore(database)
             restarted = PositionSupervisor(
