@@ -8,6 +8,7 @@ import httpx
 import pytest
 from aiogram.methods import SendMessage
 from test_manual_lifecycle_smoke import TelegramTransport, mutation_count
+from test_operator_public_ip import install_ip_transport
 from test_remaining_concerns import executor_for, prepare
 from test_source_recovery import command
 from test_supervision_health import stop, until
@@ -29,6 +30,8 @@ pytestmark = pytest.mark.integration
 def test_running_supervision_escalates_and_recovers_without_notification_spam(
     monkeypatch, tmp_path, caplog, failure, fail_notice
 ):
+    install_ip_transport(monkeypatch)
+
     async def run():
         class OutageExchange(ExchangeTransport):
             unavailable = False
