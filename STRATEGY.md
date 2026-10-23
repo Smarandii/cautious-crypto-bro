@@ -67,6 +67,9 @@ weakens established protection; unexplained changes pause automation.
 
 Any fixed-TP fill, profit-protection activation, REDUCE or CLOSE freezes remaining
 entries. At +0.50R, native trailing distance is 0.30R with a +0.05R minimum floor.
+When a previously observed position disappears, supervision cancels only that
+strategy's remaining entry legs and confirms the account again before recording
+CLOSED. A fill during cancellation keeps the strategy active for reconciliation.
 The anchor uses Bybit break-even price when available, otherwise average entry.
 This does not guarantee positive realized PnL after all costs.
 
