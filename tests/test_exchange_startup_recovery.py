@@ -28,10 +28,12 @@ app = import_module("cautious_crypto_bro.main")
 pytestmark = pytest.mark.integration
 
 
-@pytest.mark.parametrize("failed_gate", [1, 2])
+@pytest.mark.parametrize(
+    "failed_gate,response_kind", [(1, "code"), (2, "code"), (1, "json")]
+)
 @pytest.mark.parametrize("cancel_outage", [False, True])
 def test_exchange_rejection_keeps_status_but_blocks_trading(
-    monkeypatch, tmp_path, failed_gate, cancel_outage
+    monkeypatch, tmp_path, failed_gate, response_kind, cancel_outage
 ):
     ip_requests = install_ip_transport(monkeypatch)
 
@@ -45,6 +47,10 @@ def test_exchange_rejection_keeps_status_but_blocks_trading(
                 if self.armed and request.url.path == "/v5/position/list":
                     self.account_reads += 1
                     if self.account_reads >= failed_gate and not self.recovered:
+                        if response_kind == "json":
+                            return httpx.Response(
+                                200, text="<html>synthetic-secret-must-not-leak</html>"
+                            )
                         return httpx.Response(
                             200,
                             json={

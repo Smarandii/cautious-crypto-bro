@@ -173,7 +173,7 @@ def test_invalid_account_page_fails_before_entry(tmp_path, endpoint, bad_page):
                 intent.intent_id, approval_mode=ApprovalMode.AUTO
             )
             assert outcome.status is IntentStatus.FAILED
-            assert "Bybit" in outcome.message and "page" in outcome.message
+            assert "Bybit" in outcome.message and "invalid" in outcome.message
             assert (
                 await store.get_intent(intent.intent_id)
             ).status is IntentStatus.FAILED

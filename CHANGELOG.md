@@ -15,6 +15,11 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Added
 
+- Treat malformed Bybit JSON/envelopes as exchange failures so startup gates,
+  supervision backoff and operator escalation remain active. Reject missing
+  response codes and invalid successful result shapes without echoing bodies
+  or automatically replaying mutation requests.
+
 - Require a fresh account read before any supervisor transition to CLOSED,
   including expiry and protection handoffs. Keep positions that appear during
   mixed position/order snapshots under active supervision.
