@@ -6,6 +6,11 @@ manual approval or AUTO routing → Bybit Demo → durable position supervision.
 **Bybit Demo only.** The LLM interprets posts; code controls sizing, orders and risk.
 Use Demo credentials, never real-money API keys.
 
+This is the current operating mode, not a permanent architectural restriction.
+Future mainnet support is planned as an explicit opt-in after performance
+evaluation, with separate credentials and state. The shared Bybit client accepts
+an endpoint; the current executor selects Demo. See [TODO.md](TODO.md).
+
 ## Setup
 
 Requires Docker Compose, a Telegram account/bot, OpenRouter or OpenCode Go,
