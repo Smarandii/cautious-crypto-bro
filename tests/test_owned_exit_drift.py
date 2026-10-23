@@ -23,6 +23,95 @@ from cautious_crypto_bro.storage import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("change", [None, "cancel", "price"])
+def test_fixed_exit_drift_blocks_partial_stop_handoff(tmp_path, change):
+    class HandoffExchange(Exchange):
+        def handle(self, request):
+            response = super().handle(request)
+            if request.url.path == "/v5/order/realtime" and not any(
+                key in request.url.params for key in ("orderId", "orderLinkId")
+            ):
+                payload = response.json()
+                payload["result"]["list"].extend(
+                    order
+                    for order in self.orders.values()
+                    if order["orderStatus"] == "Untriggered"
+                )
+                return httpx.Response(200, json=payload)
+            return response
+
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = HandoffExchange()
+        with executor_for(exchange) as executor:
+            store, intent, plan, coordinator, supervisor = await prepare(
+                database, exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            exchange.mark = Decimal("102")
+            await supervisor.reconcile_once()
+            state = await state_for(store)
+            target = next(
+                order for order in exchange.exits() if "-t1r" in order["orderLinkId"]
+            )
+            if change == "cancel":
+                target["orderStatus"] = "Cancelled"
+            elif change == "price":
+                target["price"] = str(Decimal(target["price"]) + 1)
+            exchange.orders["attached-stop"] = {
+                "orderId": "attached-stop",
+                "orderLinkId": "",
+                "parentOrderLinkId": f"ccb-v2-{state.strategy_id.hex[:20]}-{plan.orders[0].name.lower()}",
+                "symbol": state.symbol,
+                "side": "Sell",
+                "orderType": "Market",
+                "orderStatus": "Untriggered",
+                "qty": str(exchange.size),
+                "leavesQty": str(exchange.size),
+                "cumExecQty": "0",
+                "price": "0",
+                "avgPrice": "0",
+                "reduceOnly": True,
+                "stopOrderType": "PartialStopLoss",
+                "triggerPrice": str(plan.stop_loss),
+                "updatedTime": "0",
+            }
+            before = len(exchange.requests)
+            reopened = IntentStore(database)
+            restarted = PositionSupervisor(
+                store=reopened, executor=executor, mutation_lock=asyncio.Lock()
+            )
+            await restarted.reconcile_once()
+            alerts = await reopened.get_pending_strategy_alerts()
+            if change is None:
+                assert not alerts
+                assert exchange.orders["attached-stop"]["orderStatus"] == "Cancelled"
+                assert (
+                    await state_for(reopened)
+                ).status is not StrategyStatus.MANUAL_OVERRIDE
+            else:
+                assert (
+                    len(alerts) == 1 and target["orderLinkId"] in alerts[0].pause_reason
+                )
+                assert alerts[0].status is StrategyStatus.MANUAL_OVERRIDE
+                assert exchange.orders["attached-stop"]["orderStatus"] == "Untriggered"
+                assert not any(
+                    path
+                    in {
+                        "/v5/order/cancel",
+                        "/v5/order/create",
+                        "/v5/order/create-batch",
+                        "/v5/position/trading-stop",
+                    }
+                    for path, _ in exchange.requests[before:]
+                )
+            assert exchange.stop == plan.stop_loss
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("change", ["trigger", "side"])
 @pytest.mark.parametrize("expired", [False, True])
 def test_owned_partial_stop_drift_pauses_before_exchange_mutations(

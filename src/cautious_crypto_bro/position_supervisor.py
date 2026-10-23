@@ -343,6 +343,9 @@ class PositionSupervisor:
         # Complete interrupted protection handoffs even when the exit
         # revision was persisted on a previous reconciliation.
         if self._exit_installer.partial_stops(state, plan, account):
+            exit_drift = await self._fill_detector.drift_reason(state, account)
+            if exit_drift is not None:
+                return await self._manual_override(state, account, exit_drift)
             account = await self._exit_installer.handoff_partial_stops(
                 state,
                 plan,
@@ -366,6 +369,15 @@ class PositionSupervisor:
         if expiry_handled or position is None:
             return account
 
+        return await self._reconcile_live_position(state, plan, account, position)
+
+    async def _reconcile_live_position(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+        position: AccountPosition,
+    ) -> AccountStateSummary:
         live_r = self._live_r(
             position,
             plan.stop_loss,
