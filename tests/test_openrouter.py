@@ -1019,7 +1019,21 @@ def test_current_caption_authorizes_close_when_model_omits_evidence() -> None:
     assert signals.position_actions[0].action is PositionActionType.CLOSE
 
 
-def test_negated_close_is_not_authorized() -> None:
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Пока не закрываем позицию",
+        "Не надо пока закрывать позицию ARK",
+        "Не нужно сейчас полностью закрывать ARK",
+        "Never close ARK now",
+        "Don't ever close ARK",
+        "Do not fully close ARK",
+        "Don't immediately close ARK",
+        "Remember not to close ARK",
+        "No need to close ARK",
+    ],
+)
+def test_negated_close_is_not_authorized(text) -> None:
     from cautious_crypto_bro.openrouter import (
         _signals_from_extraction,
     )
@@ -1031,7 +1045,7 @@ def test_negated_close_is_not_authorized() -> None:
     )
 
     signals = _signals_from_extraction(
-        source().model_copy(update={"text": ("Пока не закрываем позицию")}),
+        source().model_copy(update={"text": text}),
         extraction,
     )
 
@@ -1110,8 +1124,19 @@ def test_russian_explicit_reduce_percentage_is_preserved() -> None:
     assert result.position_actions[0].close_pct == 25
 
 
-def test_model_excerpt_cannot_bypass_negated_source_clause() -> None:
-    item = source().model_copy(update={"text": "Do not close BTC."})
+@pytest.mark.parametrize(
+    "text,action,evidence",
+    [
+        ("Do not close BTC.", "CLOSE", "close BTC"),
+        ("Never reduce BTC by 50%.", "REDUCE", "reduce BTC by 50%"),
+        ("Don't partially close BTC, 50%.", "REDUCE", "close BTC, 50%"),
+        ("No need to trim half of BTC.", "REDUCE", "trim half of BTC"),
+    ],
+)
+def test_model_excerpt_cannot_bypass_negated_source_clause(
+    text, action, evidence
+) -> None:
+    item = source().model_copy(update={"text": text})
     extraction = IntentExtraction.model_validate(
         {
             "actionable": True,
@@ -1120,8 +1145,9 @@ def test_model_excerpt_cannot_bypass_negated_source_clause() -> None:
             "position_actions": [
                 {
                     "symbol": "BTCUSDT",
-                    "action": "CLOSE",
-                    "evidence_text": "close BTC",
+                    "action": action,
+                    "close_pct": 50 if action == "REDUCE" else None,
+                    "evidence_text": evidence,
                     "summary": "Close BTC",
                     "confidence": 1,
                 }

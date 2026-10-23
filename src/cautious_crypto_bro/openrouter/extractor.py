@@ -377,7 +377,8 @@ _LIFECYCLE_NEGATION_PATTERNS: tuple[
         r")\b"
     ),
     re.compile(
-        r"\b(?:do\s+not|don['’]?t)\s+"
+        r"\b(?:do\s+not|don['’]?t|never|not\s+to|no\s+need\s+to)\s+"
+        r"(?:(?:fully|completely|partially|immediately|currently|ever|now|yet)\s+){0,3}"
         r"(?:close|exit|reduce|trim|take)\b"
     ),
     re.compile(
