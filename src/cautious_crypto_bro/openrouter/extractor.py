@@ -679,7 +679,7 @@ def _deterministic_action_evidence(
 
 def _action_clauses(text: str) -> tuple[str, ...]:
     """Return sentence-like source clauses while preserving commas and amounts."""
-    normalized = _normalize_evidence_text(text)
+    normalized = unicodedata.normalize("NFKC", text)
     if not normalized:
         return ()
 
@@ -699,7 +699,7 @@ def _clause_containing_evidence(
         return None
 
     for clause in _action_clauses(post_text):
-        if evidence in clause:
+        if evidence in _normalize_evidence_text(clause):
             return clause
 
     return None
@@ -725,7 +725,9 @@ def _current_post_action_evidence(
     ):
         return None
 
-    for scope in _action_scopes(post_text, model_evidence_text):
+    for scope in _action_scopes(source.text, model_evidence_text):
+        if not _lifecycle_symbol_matches(scope, symbol):
+            continue
         evidence = _deterministic_action_evidence(
             scope,
             action_type,
@@ -739,6 +741,26 @@ def _current_post_action_evidence(
             return scope
 
     return None
+
+
+def _lifecycle_symbol_matches(text: str, symbol: str) -> bool:
+    # Preserve explicit ticker evidence before case-folding the instruction.
+    # Bare uppercase prose is not a ticker; unknown uppercase tokens make the
+    # clause ambiguous and therefore require manual interpretation.
+    prose = set(
+        "I A AN THE WE YOU IT THIS NOW ALL FULL FULLY CLOSE CLOSING EXIT EXITING "
+        "REDUCE REDUCING TRIM TAKE TAKING PROFIT PROFITS POSITION POSITIONS TRADE "
+        "LONG SHORT PART PARTIAL HALF QUARTER TP SL USD USDT USDC "
+        "DO NOT DONT NEVER HOLD KEEP".split()
+    )
+    mentions = {
+        token.casefold()
+        for token in re.findall(r"\b[A-Z][A-Z0-9]{1,14}\b", text)
+        if token not in prose
+    }
+    mentions.update(re.findall(r"\$([a-z0-9]+)\b", text.casefold()))
+    mentions.update(re.findall(r"\b([a-z0-9]+(?:usdt|usdc|usd))\b", text.casefold()))
+    return not mentions or mentions.issubset(_symbol_close_variants(symbol))
 
 
 def _cancel_entries_evidence(

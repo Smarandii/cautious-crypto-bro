@@ -1185,6 +1185,51 @@ def test_unrelated_negation_does_not_block_other_symbol_close() -> None:
     assert result.position_actions[0].symbol == "BTCUSDT"
 
 
+@pytest.mark.parametrize(
+    "caption,action",
+    [
+        ("Закрываем BTCUSDT", "CLOSE"),
+        ("$BTC — close position now", "CLOSE"),
+        ("BTC close position now", "CLOSE"),
+        ("BTC/USDT close position now", "CLOSE"),
+        ("$btc close position now", "CLOSE"),
+        ("BTC close position now. ETH keep holding.", "CLOSE"),
+        ("Закрываем часть BTC, 30% позиции", "REDUCE"),
+    ],
+)
+@pytest.mark.parametrize("symbol,accepted", [("BTCUSDT", True), ("ETHUSDT", False)])
+def test_lifecycle_action_requires_matching_explicit_ticker(
+    caption, action, symbol, accepted
+):
+    extraction = _audit_position_action_extraction(
+        symbol=symbol, action=action, evidence_text=None
+    )
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": caption}), extraction
+    )
+    assert bool(signals.position_actions) is accepted
+
+
+@pytest.mark.parametrize(
+    "caption,symbol,accepted",
+    [
+        ("CLOSE THE POSITION NOW", "BTCUSDT", True),
+        ("BTC close position, ETH keep holding", "BTCUSDT", False),
+        ("BTC close position, ETH keep holding", "ETHUSDT", False),
+    ],
+)
+def test_lifecycle_symbol_ambiguity_preserves_generic_captions(
+    caption, symbol, accepted
+):
+    extraction = _audit_position_action_extraction(
+        symbol=symbol, action="CLOSE", evidence_text=None
+    )
+    signals = _signals_from_extraction(
+        source().model_copy(update={"text": caption}), extraction
+    )
+    assert bool(signals.position_actions) is accepted
+
+
 def test_reduce_percentage_is_read_from_action_clause_not_other_sentence() -> None:
     item = source().model_copy(
         update={"text": ("ETH is up 25% today. Закрываем часть BTC, 30% позиции.")}
