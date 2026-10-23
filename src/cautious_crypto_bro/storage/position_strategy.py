@@ -260,58 +260,6 @@ class PositionStrategyRepositoryImpl(_Store):
 
             await db.commit()
 
-    async def request_strategy_rebalance(
-        self,
-        symbol: str,
-    ) -> None:
-        async with sqlite_connection(self._database_path) as db:
-            await db.execute(
-                """
-                UPDATE position_strategies
-                SET
-                    entry_frozen = 1,
-                    rebalance_needed = 1,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE
-                    symbol = ?
-                    AND status NOT IN (?, ?)
-                """,
-                (
-                    symbol.upper(),
-                    StrategyStatus.CLOSED.value,
-                    StrategyStatus.MANUAL_OVERRIDE.value,
-                ),
-            )
-
-            await db.commit()
-
-    async def request_strategy_close(
-        self,
-        symbol: str,
-    ) -> None:
-        async with sqlite_connection(self._database_path) as db:
-            await db.execute(
-                """
-                UPDATE position_strategies
-                SET
-                    status = ?,
-                    entry_frozen = 1,
-                    rebalance_needed = 0,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE
-                    symbol = ?
-                    AND status NOT IN (?, ?)
-                """,
-                (
-                    StrategyStatus.CLOSING.value,
-                    symbol.upper(),
-                    StrategyStatus.CLOSED.value,
-                    StrategyStatus.MANUAL_OVERRIDE.value,
-                ),
-            )
-
-            await db.commit()
-
     @staticmethod
     def _position_strategy_from_row(
         row: aiosqlite.Row,

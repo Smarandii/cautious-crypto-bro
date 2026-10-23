@@ -326,12 +326,6 @@ class FakePositionSupervisorStore:
         assert strategy_id == self.state.strategy_id
         self.state = self.state.model_copy(update={"status": status})
 
-    async def request_strategy_rebalance(self, symbol: str) -> None:
-        pass
-
-    async def request_strategy_close(self, symbol: str) -> None:
-        pass
-
     # PositionActionRepository methods required by the combined protocol.
 
     async def get_position_action(
