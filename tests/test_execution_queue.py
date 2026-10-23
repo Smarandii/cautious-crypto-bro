@@ -6,7 +6,15 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
-from test_remaining_concerns import Exchange, executor_for, prepare, source, state_for
+from test_exchange_cancellation import DelayedExchange
+from test_remaining_concerns import (
+    Exchange,
+    executor_for,
+    make_intent,
+    prepare,
+    source,
+    state_for,
+)
 
 from cautious_crypto_bro.domain import (
     ApprovalMode,
@@ -31,6 +39,88 @@ class ObservedLock(asyncio.Lock):
     async def acquire(self):
         self.waiting.set()
         return await super().acquire()
+
+
+@pytest.mark.parametrize("mode", [ApprovalMode.MANUAL, ApprovalMode.AUTO])
+def test_queued_different_symbol_entries_share_portfolio_capacity(tmp_path, mode):
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = DelayedExchange("/v5/order/create")
+        with executor_for(exchange) as executor:
+            store, first, plan, _, _ = await prepare(
+                database, exchange, executor, mode=mode, relation=OpenRelation.NEW
+            )
+            second = make_intent(mode=mode).model_copy(
+                update={
+                    "symbol": "ETHUSDT",
+                    "source": source(message_id=2),
+                    "relation": OpenRelation.NEW,
+                }
+            )
+            second_plan = plan.model_copy(
+                update={
+                    "intent_id": second.intent_id,
+                    "symbol": second.symbol,
+                }
+            )
+            claim = await store.claim_source(second.source, lease_seconds=300)
+            await store.create_signal_batch_and_complete_source(
+                ((second, second_plan),), (), claim
+            )
+            lock = ObservedLock()
+            coordinator = ExecutionCoordinator(
+                store=store,
+                executor=executor,
+                planner=ExecutionPlanner(),
+                max_age_seconds=3600,
+                execution_lock=lock,
+                portfolio_stop_risk_cap_usdt=plan.planned_max_loss_usdt
+                * Decimal("1.5"),
+            )
+            first_task = asyncio.create_task(
+                coordinator.execute_intent(first.intent_id, approval_mode=mode)
+            )
+            second_task = None
+            try:
+                assert await asyncio.to_thread(exchange.started.wait, 3)
+                lock.waiting.clear()
+                second_task = asyncio.create_task(
+                    coordinator.execute_intent(second.intent_id, approval_mode=mode)
+                )
+                await asyncio.wait_for(lock.waiting.wait(), 3)
+                assert not second_task.done()
+                assert (
+                    await store.get_intent(second.intent_id)
+                ).status is IntentStatus.PENDING
+                exchange.release.set()
+                first_result, second_result = await asyncio.wait_for(
+                    asyncio.gather(first_task, second_task), 10
+                )
+                assert first_result.status is IntentStatus.EXECUTED
+                assert second_result.status is IntentStatus.FAILED
+                assert "Portfolio stop-risk cap exceeded" in second_result.message
+                assert {order["symbol"] for order in exchange.orders.values()} == {
+                    "BTCUSDT"
+                }
+                assert len(exchange.orders) == 3
+                reopened = IntentStore(database)
+                assert (
+                    await reopened.get_intent(second.intent_id)
+                ).status is IntentStatus.FAILED
+                active = await reopened.get_active_position_strategies()
+                assert len(active) == 1 and active[0][0].symbol == "BTCUSDT"
+                before = len(exchange.requests)
+                await coordinator.execute_intent(second.intent_id, approval_mode=mode)
+                assert len(exchange.requests) == before
+            finally:
+                exchange.release.set()
+                await asyncio.gather(
+                    first_task,
+                    *([second_task] if second_task else []),
+                    return_exceptions=True,
+                )
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("mode", [ApprovalMode.MANUAL, ApprovalMode.AUTO])
