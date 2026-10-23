@@ -401,14 +401,9 @@ class PositionSupervisor:
         position: AccountPosition | None,
     ) -> AccountStateSummary:
         if position is None:
-            await self._save(
-                state.model_copy(
-                    update={
-                        "status": (StrategyStatus.CLOSED),
-                    }
-                )
+            return await self._handle_missing_position(
+                state, self._pending_entries(state, account), account
             )
-            return account
 
         await self._save(
             state.model_copy(
@@ -426,7 +421,25 @@ class PositionSupervisor:
         pending_entries: tuple[str, ...],
         account: AccountStateSummary,
     ) -> AccountStateSummary:
-        if state.last_position_qty is not None and not pending_entries:
+        if (
+            state.last_position_qty is not None
+            or state.status is StrategyStatus.CLOSING
+        ):
+            if pending_entries:
+                for order in account.open_orders:
+                    if (
+                        order.symbol == state.symbol
+                        and order.kind == "ENTRY"
+                        and order.order_link_id in pending_entries
+                    ):
+                        await self._executor.cancel_order(state.symbol, order.order_id)
+                # Cancellation acknowledgement is not proof of a flat account:
+                # an entry can fill while cancellation is in flight.
+                account = await self._executor.account_state()
+                if self._position(state, account) is not None or self._pending_entries(
+                    state, account
+                ):
+                    return account
             await self._save(
                 state.model_copy(
                     update={
@@ -1087,7 +1100,7 @@ class PositionSupervisor:
             for order in account.open_orders
             if (
                 order.symbol == state.symbol
-                and not order.reduce_only
+                and order.kind == "ENTRY"
                 and order.order_link_id.startswith(
                     f"ccb-v2-{state.strategy_id.hex[:20]}-e"
                 )

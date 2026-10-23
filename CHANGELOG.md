@@ -15,6 +15,11 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
 
 ### Added
 
+- Cancel a strategy's remaining entries after its observed position disappears,
+  including during CLOSE. Confirm account state before recording CLOSED so an
+  entry fill during cancellation remains under supervision; leave foreign orders
+  and protective exits untouched.
+
 - Reject backup restore drills whose Telegram session has no authorization record,
   binary key or valid endpoint, even when SQLite integrity passes. Report key
   presence without exposing it; offline checks do not prove server-side authorization.
