@@ -1,6 +1,7 @@
 """Restarted supervision through real SQLite and the exchange HTTP adapter."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -108,5 +109,68 @@ def test_flat_position_cancels_only_its_entries_and_confirms_closure(
                 assert not any(
                     path == "/v5/order/cancel" for path, _ in exchange.requests[before:]
                 )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("phase", ["normal", "closing", "expired"])
+def test_last_entry_fill_between_snapshot_reads_stays_supervised(tmp_path, phase):
+    class MixedSnapshotExchange(Exchange):
+        fill_between_reads = False
+
+        def handle(self, request):
+            if request.url.path == "/v5/order/realtime" and self.fill_between_reads:
+                self.fill_between_reads = False
+                for order in self.open_entries():
+                    self.fill(order["orderLinkId"])
+            return super().handle(request)
+
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = MixedSnapshotExchange()
+        with executor_for(exchange) as executor:
+            store, intent, plan, coordinator, supervisor = await prepare(
+                database, exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            exchange.mark = Decimal("102")
+            await supervisor.reconcile_once()
+            state = await state_for(store)
+            assert state.last_position_qty > 0 and exchange.open_entries()
+            if phase == "closing":
+                await store.save_position_strategy(
+                    state.model_copy(update={"status": StrategyStatus.CLOSING})
+                )
+            elif phase == "expired":
+                await store.update_execution_plan(
+                    plan.model_copy(
+                        update={"created_at": datetime.now(UTC) - timedelta(days=1)}
+                    )
+                )
+            exchange.size = Decimal("0")
+            exchange.fill_between_reads = True
+            restarted_store = IntentStore(database)
+            restarted = PositionSupervisor(
+                store=restarted_store, executor=executor, mutation_lock=asyncio.Lock()
+            )
+            baseline = len(exchange.requests)
+            await restarted.reconcile_once()
+            assert exchange.size > 0 and not exchange.open_entries()
+            records = await IntentStore(database).get_active_position_strategies()
+            assert len(records) == 1, (
+                "A mixed snapshot must not orphan the reopened position"
+            )
+            assert all(
+                path
+                not in {
+                    "/v5/order/cancel",
+                    "/v5/order/create",
+                    "/v5/order/create-batch",
+                    "/v5/position/trading-stop",
+                }
+                for path, _ in exchange.requests[baseline:]
+            )
 
     asyncio.run(run())
