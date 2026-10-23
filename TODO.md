@@ -3,6 +3,11 @@
 Strategy V2 is implemented; package version and release tag are v2.0.0.
 Current behavior lives in [STRATEGY.md](STRATEGY.md).
 
+- Preserve a path to mainnet after performance evaluation: add an explicit
+  environment selection with Demo as the default, separate credentials/state,
+  environment-labelled operator messages and explicit activation. Keep the shared
+  exchange client reusable; current deployments and tests remain on Demo.
+
 - Account explicitly for fees, funding and slippage in performance attribution
   and protected-profit floors.
 - Detect manual edits/cancellations of every owned order type, especially fixed
