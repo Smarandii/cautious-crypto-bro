@@ -303,6 +303,11 @@ For Bybit `10010 Unmatched IP`, correct the Demo key's IP binding or use an
 authorized connection matching it. Mobile connections may change public IP;
 restarting the app cannot repair an exchange-side IP allowlist. Never send API
 keys or secrets to the bot.
+IP-binding outage alerts look up the running app's current public IP through
+`https://api.ipify.org` at delivery time and include it beside the API-management
+link. Lookup has a five-second timeout; failures or invalid/non-public responses
+are reported explicitly, and the outage alert still sends. Recovery and unrelated
+notices do not perform this lookup.
 
 ### Native development
 

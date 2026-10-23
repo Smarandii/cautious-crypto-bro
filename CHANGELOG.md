@@ -19,6 +19,9 @@ Refactoring, correctness and repository hardening since `v2.0.0`.
   including during CLOSE. Confirm account state before recording CLOSED so an
   entry fill during cancellation remains under supervision; leave foreign orders
   and protective exits untouched.
+- Include the current runtime public IP in Bybit IP-binding outage alerts. Look
+  it up only during throttled delivery, with a five-second timeout and public-IP
+  validation; lookup failure remains explicit and does not suppress the alert.
 
 - Reject backup restore drills whose Telegram session has no authorization record,
   binary key or valid endpoint, even when SQLite integrity passes. Report key

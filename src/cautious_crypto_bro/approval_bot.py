@@ -5,10 +5,12 @@ import html
 import logging
 from collections.abc import Awaitable, Callable
 from io import BytesIO
+from ipaddress import ip_address
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+import httpx
 import segno
 from aiogram import (
     Bot,
@@ -279,6 +281,19 @@ class ApprovalBot:
             await self._source_recovery.login()
 
     async def send_source_notice(self, text: str) -> None:
+        if BYBIT_IP_BINDING_HELP in text:
+            try:
+                async with asyncio.timeout(5), httpx.AsyncClient(timeout=5) as client:
+                    response = await client.get("https://api.ipify.org")
+                    response.raise_for_status()
+                address = ip_address(response.text.strip())
+                if not address.is_global:
+                    raise ValueError("Public IP lookup returned a non-public address")
+            except (httpx.HTTPError, TimeoutError, ValueError) as exc:
+                logger.warning("Public IP lookup unavailable: %s", type(exc).__name__)
+                text += "\nCurrent runtime public IP unavailable: lookup failed."
+            else:
+                text += f"\nCurrent runtime public IP (at alert time): {address}"
         await self._send_html(
             f'<a href="tg://user?id={self._approver_user_id}">Operator</a>\n'
             + html.escape(text)

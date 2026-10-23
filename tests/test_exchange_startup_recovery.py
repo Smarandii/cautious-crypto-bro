@@ -17,6 +17,7 @@ from aiogram.methods import (
     SendMessage,
 )
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
+from test_operator_public_ip import install_ip_transport
 from test_remaining_concerns import executor_for, prepare
 from test_workflow_integration import ExchangeTransport, ModelTransport, workflow
 
@@ -32,6 +33,8 @@ pytestmark = pytest.mark.integration
 def test_exchange_rejection_keeps_status_but_blocks_trading(
     monkeypatch, tmp_path, failed_gate, cancel_outage
 ):
+    ip_requests = install_ip_transport(monkeypatch)
+
     async def run():
         class UnavailableExchange(ExchangeTransport):
             armed = False
@@ -159,6 +162,7 @@ def test_exchange_rejection_keeps_status_but_blocks_trading(
                     assert "10010 (Unmatched IP)" in notice
                     assert "https://www.bybit.com/en/app/user/api-management" in notice
                     assert notice_attempts == 2
+                    assert len(ip_requests) == notice_attempts
                     assert not task.done() and not source_started.is_set()
                     assert recovery_calls == failed_gate - 1
                     baseline = list(exchange.requests)
