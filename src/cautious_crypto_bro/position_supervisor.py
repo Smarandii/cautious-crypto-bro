@@ -287,6 +287,13 @@ class PositionSupervisor:
                 "position side mismatch",
             )
 
+        if position.take_profit is not None:
+            return await self._manual_override(
+                state,
+                account,
+                "position take profit enabled outside Strategy V2; manual review required",
+            )
+
         if not state.trailing_active and position.trailing_stop is not None:
             return await self._manual_override(
                 state,
