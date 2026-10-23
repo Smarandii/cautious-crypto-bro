@@ -25,7 +25,13 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.parametrize(
     ("failure", "fail_notice"),
-    [("account", False), ("account", True), ("mutation", False)],
+    [
+        ("account", False),
+        ("account", True),
+        ("account_json", False),
+        ("account_array", False),
+        ("mutation", False),
+    ],
 )
 def test_running_supervision_escalates_and_recovers_without_notification_spam(
     monkeypatch, tmp_path, caplog, failure, fail_notice
@@ -40,11 +46,17 @@ def test_running_supervision_escalates_and_recovers_without_notification_spam(
             def handle(self, request):
                 target = (
                     "/v5/position/list"
-                    if failure == "account"
+                    if failure.startswith("account")
                     else "/v5/position/trading-stop"
                 )
                 if self.unavailable and request.url.path == target:
                     self.failures += 1
+                    if failure == "account_json":
+                        return httpx.Response(
+                            200, text="<html>synthetic-private-detail</html>"
+                        )
+                    if failure == "account_array":
+                        return httpx.Response(200, json=[])
                     return httpx.Response(
                         200,
                         json={"retCode": 10010, "retMsg": "synthetic-private-detail"},
@@ -109,7 +121,7 @@ def test_running_supervision_escalates_and_recovers_without_notification_spam(
                 executor=executor,
                 mutation_lock=initial._mutation_lock,
                 poll_interval_seconds=0.01,
-                failure_retry_seconds=0.05 if failure == "account" else 30,
+                failure_retry_seconds=0.05 if failure.startswith("account") else 30,
                 progress_path=path,
                 report_state=bot.report_supervision_state,
             )
@@ -144,7 +156,7 @@ def test_running_supervision_escalates_and_recovers_without_notification_spam(
                 bot._supervision_notice_changed.set()
                 calls = transport.outage_calls
                 await until(lambda: transport.outage_calls > calls)
-                if failure == "account":
+                if failure.startswith("account"):
                     await until(
                         lambda: (
                             "Supervision account unavailable; retry in 0.1 seconds"

@@ -44,6 +44,25 @@ class BybitClient:
     ) -> None:
         self._auth.sync_clock(force=force)
 
+    @staticmethod
+    def _response_data(response: httpx.Response) -> dict:
+        try:
+            data = response.json()
+        except ValueError:
+            raise TradeExecutionError("Bybit returned invalid JSON") from None
+        if not isinstance(data, dict):
+            raise TradeExecutionError("Bybit returned an invalid response envelope")
+        code = data.get("retCode")
+        if (
+            isinstance(code, bool)
+            or not isinstance(code, (int, str))
+            or (isinstance(code, str) and not code.removeprefix("-").isdecimal())
+        ):
+            raise TradeExecutionError("Bybit returned an invalid response envelope")
+        if str(code) == "0" and not isinstance(data.get("result", {}), dict):
+            raise TradeExecutionError("Bybit returned an invalid response result")
+        return data
+
     def public_get(
         self,
         path: str,
@@ -62,9 +81,9 @@ class BybitClient:
         except httpx.HTTPError as exc:
             raise TradeExecutionError(f"Bybit HTTP request failed: {exc}") from exc
 
-        data = response.json()
+        data = self._response_data(response)
 
-        if str(data.get("retCode", 0)) != "0":
+        if str(data["retCode"]) != "0":
             raise TradeExecutionError(
                 f"Bybit rejected request: {data.get('retCode')} {data.get('retMsg')}"
             )
@@ -113,8 +132,8 @@ class BybitClient:
             except httpx.HTTPError as exc:
                 raise TradeExecutionError(f"Bybit HTTP request failed: {exc}") from exc
 
-            data = response.json()
-            code = data.get("retCode")
+            data = self._response_data(response)
+            code = data["retCode"]
 
             if str(code) == "0":
                 return data
