@@ -1,19 +1,125 @@
 import asyncio
+import json
 from datetime import timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
-from test_remaining_concerns import Exchange, executor_for, prepare, source
+from test_remaining_concerns import Exchange, executor_for, make_intent, prepare, source
 
 from cautious_crypto_bro.domain import (
     ApprovalMode,
+    Entry,
+    EntryType,
+    ExecutionPolicy,
+    InstrumentContext,
     IntentStatus,
     PositionActionIntent,
     PositionActionType,
+    StrategyStatus,
 )
+from cautious_crypto_bro.execution import ExecutionPlanner
+from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.openrouter import _current_post_action_evidence
+from cautious_crypto_bro.position_supervisor import PositionSupervisor
+from cautious_crypto_bro.storage import IntentStore
+
+
+@pytest.mark.integration
+def test_entry_cancellation_confirms_flat_after_late_fill(tmp_path):
+    class LateFillExchange(Exchange):
+        cancellation_started = False
+        filled_late = False
+
+        def handle(self, request):
+            if request.url.path == "/v5/order/cancel":
+                # Cancellation acknowledgement is not final order-state proof.
+                self.cancellation_started = True
+                order = next(
+                    o
+                    for o in self.orders.values()
+                    if o["orderId"] == json.loads(request.content)["orderId"]
+                )
+                return httpx.Response(
+                    200, json={"retCode": 0, "result": {"orderId": order["orderId"]}}
+                )
+            if (
+                request.url.path == "/v5/order/realtime"
+                and self.cancellation_started
+                and not self.filled_late
+            ):
+                self.filled_late = True
+                for order in self.open_entries():
+                    self.fill(order["orderLinkId"])
+            return super().handle(request)
+
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = LateFillExchange()
+        with executor_for(exchange) as executor:
+            store = IntentStore(database)
+            await store.initialize()
+            intent = make_intent().model_copy(
+                update={"entry": Entry(type=EntryType.LIMIT, price=100)}
+            )
+            planner = ExecutionPlanner()
+            plan = planner.plan(
+                intent,
+                ExecutionPolicy(trading_capital_usdt=Decimal("6800")),
+                InstrumentContext(
+                    Decimal("100"),
+                    Decimal(".1"),
+                    Decimal(".001"),
+                    Decimal(".001"),
+                    Decimal("5"),
+                ),
+            )
+            claim = await store.claim_source(intent.source, lease_seconds=300)
+            await store.create_signal_batch_and_complete_source(
+                ((intent, plan),), (), claim
+            )
+            coordinator = ExecutionCoordinator(
+                store=store, executor=executor, planner=planner, max_age_seconds=3600
+            )
+            outcome = await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert outcome.status is IntentStatus.EXECUTED and exchange.size == 0
+            action = PositionActionIntent(
+                source=source("Cancel BTC orders", 20),
+                symbol="BTCUSDT",
+                action=PositionActionType.CANCEL_ENTRIES,
+                summary="Cancel",
+                confidence=1,
+            )
+            claim = await store.claim_source(action.source, lease_seconds=300)
+            await store.create_signal_batch_and_complete_source((), (action,), claim)
+            outcome = await coordinator.execute_position_action(
+                action.action_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert outcome.status is IntentStatus.EXECUTED
+            assert (
+                exchange.filled_late
+                and exchange.size > 0
+                and not exchange.open_entries()
+            )
+            active = await IntentStore(database).get_active_position_strategies()
+            assert len(active) == 1, "Cancellation orphaned a late-filled position"
+            assert active[0][0].status is not StrategyStatus.CLOSED
+            assert active[0][0].entry_frozen and active[0][0].rebalance_needed
+            supervisor = PositionSupervisor(
+                store=IntentStore(database),
+                executor=executor,
+                mutation_lock=coordinator._execution_lock,
+            )
+            await supervisor.reconcile_once()
+            assert exchange.stop == plan.stop_loss
+            assert exchange.exits()
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(
