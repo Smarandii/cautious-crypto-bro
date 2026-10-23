@@ -24,10 +24,19 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.parametrize("phase", ["initial", "managed", "installing"])
-def test_unexpected_trailing_stop_pauses_before_other_mutations(tmp_path, phase):
+@pytest.mark.parametrize("protection", ["trailing", "take profit"])
+def test_unexpected_position_protection_pauses_before_other_mutations(
+    tmp_path, phase, protection
+):
+    class ExternalProtectionExchange(Exchange):
+        manual_tp = Decimal("0")
+
+        def position(self):
+            return super().position() | {"takeProfit": str(self.manual_tp)}
+
     async def run():
         database = tmp_path / "state.db"
-        exchange = Exchange()
+        exchange = ExternalProtectionExchange()
         with executor_for(exchange) as executor:
             store, intent, plan, coordinator, supervisor = await prepare(
                 database, exchange, executor
@@ -45,7 +54,10 @@ def test_unexpected_trailing_stop_pauses_before_other_mutations(tmp_path, phase)
                     )
                 )
             assert not (await state_for(store)).trailing_active
-            exchange.trail = Decimal("1")
+            if protection == "trailing":
+                exchange.trail = Decimal("1")
+            else:
+                exchange.manual_tp = Decimal("110")
             before = len(exchange.requests)
             reopened = IntentStore(database)
             restarted = PositionSupervisor(
@@ -56,8 +68,10 @@ def test_unexpected_trailing_stop_pauses_before_other_mutations(tmp_path, phase)
             assert (
                 len(alerts) == 1 and alerts[0].status is StrategyStatus.MANUAL_OVERRIDE
             )
-            assert "trailing" in alerts[0].pause_reason
-            assert exchange.trail == 1 and exchange.stop == plan.stop_loss
+            assert protection in alerts[0].pause_reason
+            assert exchange.trail == (1 if protection == "trailing" else 0)
+            assert exchange.manual_tp == (110 if protection == "take profit" else 0)
+            assert exchange.stop == plan.stop_loss
             assert not any(
                 path
                 in {
