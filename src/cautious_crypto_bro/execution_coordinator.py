@@ -683,6 +683,11 @@ class ExecutionCoordinator:
                 if attempt == 19:
                     raise RuntimeError("Entry cancellation not confirmed")
                 await asyncio.sleep(0.25)
+            # Separate position/order reads can miss a fill between requests.
+            # Confirm again before making a flat strategy terminal.
+            state = await self._executor.account_state()
+            if any(owned(order) for order in state.open_orders):
+                raise RuntimeError("Entry cancellation not confirmed")
             await self._store.record_entry_cancellation(
                 action,
                 targets,
