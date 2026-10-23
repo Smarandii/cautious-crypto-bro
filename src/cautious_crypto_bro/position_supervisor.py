@@ -343,9 +343,12 @@ class PositionSupervisor:
         # Complete interrupted protection handoffs even when the exit
         # revision was persisted on a previous reconciliation.
         if self._exit_installer.partial_stops(state, plan, account):
-            exit_drift = await self._fill_detector.drift_reason(state, account)
-            if exit_drift is not None:
-                return await self._manual_override(state, account, exit_drift)
+            # Legacy plans have no fixed-exit snapshot. Preserve their existing
+            # verified stop handoff before the later manual-review pause.
+            if state.expected_exits is not None:
+                exit_drift = await self._fill_detector.drift_reason(state, account)
+                if exit_drift is not None:
+                    return await self._manual_override(state, account, exit_drift)
             account = await self._exit_installer.handoff_partial_stops(
                 state,
                 plan,
