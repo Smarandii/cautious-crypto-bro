@@ -1083,22 +1083,28 @@ class BybitDemoExecutor:
         requests: list[dict[str, object]],
         response: dict,
     ) -> tuple[str, ...]:
-        results = response.get("result", {}).get("list", [])
+        result = response.get("result")
+        extension = response.get("retExtInfo")
+        results = result.get("list") if isinstance(result, dict) else None
+        statuses = extension.get("list") if isinstance(extension, dict) else None
 
-        statuses = response.get("retExtInfo", {}).get("list", [])
-
-        if len(results) != len(requests) or len(statuses) != len(requests):
+        if (
+            not isinstance(results, list)
+            or not isinstance(statuses, list)
+            or any(not isinstance(item, dict) for item in results + statuses)
+            or len(results) != len(requests)
+            or len(statuses) != len(requests)
+        ):
             self._client.cancel_batch_best_effort(
                 symbol,
                 [str(request["orderLinkId"]) for request in requests],
             )
 
             raise TradeExecutionError(
-                "Bybit batch response did not match submitted order count"
+                "Bybit batch response is invalid or does not match submitted order count"
             )
 
         order_ids: list[str] = []
-        accepted_link_ids: list[str] = []
         failures: list[str] = []
 
         for index, (
@@ -1115,20 +1121,16 @@ class BybitDemoExecutor:
 
             order_id = result.get("orderId")
 
-            link_id = str(requests[index]["orderLinkId"])
-
             if str(code) == "0" and order_id:
                 order_ids.append(str(order_id))
-                accepted_link_ids.append(link_id)
             else:
                 failures.append(f"order {index + 1}: {code} {status.get('msg')}")
 
         if failures:
-            if accepted_link_ids:
-                self._client.cancel_batch_best_effort(
-                    symbol,
-                    accepted_link_ids,
-                )
+            self._client.cancel_batch_best_effort(
+                symbol,
+                [str(request["orderLinkId"]) for request in requests],
+            )
 
             raise TradeExecutionError(
                 "Bybit batch partially failed: " + "; ".join(failures)
