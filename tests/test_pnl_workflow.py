@@ -7,14 +7,80 @@ from decimal import Decimal
 from threading import Event
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from test_remaining_concerns import executor_for, source
 from test_workflow_integration import ExchangeTransport, ModelTransport, workflow
 
-from cautious_crypto_bro.domain import AutoApprovalMode, ImageAttachment, IncomingPost
+from cautious_crypto_bro.domain import (
+    AutoApprovalMode,
+    ImageAttachment,
+    IncomingPost,
+    TradeExecutionError,
+)
 from cautious_crypto_bro.storage import IntentStore
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize(
+    "bad_pnl", ["missing", None, "", " ", "invalid-private-value", "NaN", "Infinity"]
+)
+def test_incomplete_history_preserves_ledger_and_sync_watermark(tmp_path, bad_pnl):
+    class HistoryExchange(ExchangeTransport):
+        rows = []
+
+        def handle(self, request):
+            if request.url.path == "/v5/position/closed-pnl":
+                return httpx.Response(
+                    200,
+                    json={
+                        "retCode": 0,
+                        "result": {"list": self.rows, "nextPageCursor": ""},
+                    },
+                )
+            return super().handle(request)
+
+    async def run():
+        database = tmp_path / "state.db"
+        store = IntentStore(database)
+        await store.initialize()
+        exchange = HistoryExchange()
+        row = {
+            "symbol": "BTCUSDT",
+            "orderId": "close-one",
+            "side": "Sell",
+            "closedPnl": "12.5",
+            "closedSize": "1",
+            "updatedTime": str(int(datetime.now(UTC).timestamp() * 1000)),
+        }
+        exchange.rows = [row]
+        with executor_for(exchange) as executor:
+            service, bot, _ = workflow(store, executor, model())
+            try:
+                original = await service._sync_account_pnl()
+                watermark = await store.get_account_pnl_sync_state()
+                # A valid new row must not leak into storage before a bad row fails.
+                broken = dict(row)
+                if bad_pnl == "missing":
+                    del broken["closedPnl"]
+                else:
+                    broken["closedPnl"] = bad_pnl
+                exchange.rows = [dict(row, orderId="close-two"), broken]
+                with pytest.raises(TradeExecutionError) as error:
+                    await service._sync_account_pnl()
+                assert "invalid-private-value" not in str(error.value)
+                restarted = IntentStore(database)
+                assert await restarted.get_account_pnl_summary() == original
+                assert await restarted.get_account_pnl_sync_state() == watermark
+                exchange.rows = [dict(row, closedPnl="0")]
+                recovered = await service._sync_account_pnl()
+                assert recovered.realized_pnl == 0
+                assert recovered.record_count == 1
+            finally:
+                await bot.close()
+
+    asyncio.run(run())
 
 
 class AccountingExchange(ExchangeTransport):
