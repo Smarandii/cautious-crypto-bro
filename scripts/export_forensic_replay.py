@@ -61,8 +61,10 @@ def _private_rows(
         result = client.private_get(path, request).get("result", {})
         rows.extend(result.get("list", []))
         next_cursor = result.get("nextPageCursor")
-        if not next_cursor or next_cursor in seen_cursors:
+        if not next_cursor:
             return rows
+        if next_cursor in seen_cursors:
+            raise ValueError("Forensic export received a repeated pagination cursor")
         seen_cursors.add(next_cursor)
         cursor = next_cursor
 
