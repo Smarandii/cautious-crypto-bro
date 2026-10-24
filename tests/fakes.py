@@ -148,7 +148,6 @@ class FakeAccountGateway:
         )
         self.account_state_calls = 0
         self.cancelled_entries = 0
-        self.cancelled_exits = 0
         self.cancelled_orders: list[str] = []
         self.protection: list[tuple[str, Decimal, Decimal | None]] = []
         self.exits: list[dict[str, Any]] = []
@@ -197,10 +196,6 @@ class FakeAccountGateway:
     async def cancel_pending_entries(self, symbol: str) -> int:
         self.cancelled_entries += 1
         return 2
-
-    async def cancel_strategy_exits(self, symbol: str) -> int:
-        self.cancelled_exits += 1
-        return 0
 
     async def cancel_order(self, symbol: str, order_id: str) -> None:
         self.cancelled_orders.append(order_id)

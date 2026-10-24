@@ -187,7 +187,6 @@ class Executor:
 
         self.account_state_calls = 0
         self.cancelled_entries = 0
-        self.cancelled_exits = 0
         self.cancelled_orders = []
         self.protection = []
         self.exits = []
@@ -213,14 +212,6 @@ class Executor:
         assert symbol == "BTCUSDT"
         self.cancelled_entries += 1
         return 2
-
-    async def cancel_strategy_exits(
-        self,
-        symbol,
-    ):
-        assert symbol == "BTCUSDT"
-        self.cancelled_exits += 1
-        return 0
 
     async def market_context(
         self,
@@ -340,7 +331,7 @@ def test_supervisor_freezes_entries_and_protects_profit() -> None:
     asyncio.run(supervisor.reconcile_once())
 
     assert executor.cancelled_entries == 1
-    assert executor.cancelled_exits == 0
+    assert executor.cancelled_orders == []
 
     assert len(executor.exits) == 3
 
@@ -535,7 +526,7 @@ def test_supervisor_installs_exits_before_profit_threshold() -> None:
     assert executor.cancelled_entries == 0
 
     # Nothing existed to cancel on first install.
-    assert executor.cancelled_exits == 0
+    assert executor.cancelled_orders == []
 
     # Fixed exits must exist immediately,
     # well before +0.5R protection activation.
@@ -848,7 +839,7 @@ def test_uncertain_strategy_is_quarantined(caplog) -> None:
     assert executor.account_state_calls == 0
     assert sum("is UNCERTAIN" in record.message for record in caplog.records) == 1
     assert executor.cancelled_entries == 0
-    assert executor.cancelled_exits == 0
+    assert executor.cancelled_orders == []
     assert executor.protection == []
     assert executor.exits == []
 
