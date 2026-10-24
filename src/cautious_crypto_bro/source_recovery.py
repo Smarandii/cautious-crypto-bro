@@ -84,6 +84,7 @@ class SourceRecovery:
         self._lock = asyncio.Lock()
         self._wake = asyncio.Event()
         self._next_alert = 0.0
+        self._next_recovery_notice = 0.0
         self._outage = False
         self._manual_reason: str | None = None
         self._next_login = 0.0
@@ -134,7 +135,10 @@ class SourceRecovery:
             self._next_alert = monotonic() + self._alert_seconds
 
     async def _announce_restored(self) -> None:
+        self._next_alert = 0
         if self._outage:
+            if monotonic() < self._next_recovery_notice:
+                return
             try:
                 await self._bot.send_source_notice(
                     "✅ Telegram reader restored; channel catch-up resumed."
@@ -143,8 +147,10 @@ class SourceRecovery:
                 logger.warning(
                     "Source recovery notification failed: %s", type(exc).__name__
                 )
+                self._next_recovery_notice = monotonic() + self._retry_seconds
+                return
             self._outage = False
-        self._next_alert = 0
+            self._next_recovery_notice = 0
 
     async def _monitor_reads(self) -> None:
         while True:
@@ -153,8 +159,9 @@ class SourceRecovery:
                 self.state, self.reason = "DEGRADED", "; ".join(warnings)
                 self._outage = True
                 await self._alert()
-            elif self.state == "DEGRADED":
-                self.state, self.reason = "ONLINE", ""
+            else:
+                if self.state == "DEGRADED":
+                    self.state, self.reason = "ONLINE", ""
                 await self._announce_restored()
             await asyncio.sleep(self._read_check_seconds)
 
