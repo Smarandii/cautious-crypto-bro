@@ -71,7 +71,20 @@ def test_read_open_entry_orders_supports_empty_and_legacy_archives(tmp_path) -> 
     assert analyzer.read_open_entry_orders_snapshot(previous) == (None, None, None)
 
 
-def test_reconcile_does_not_double_count_funding_in_closed_pnl(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "closed_size,complete",
+    [
+        ("2", True),
+        ("1.98", True),
+        ("1", False),
+        ("4", False),
+        ("2.01", False),
+        ("2.0000000001", True),
+    ],
+)
+def test_reconcile_does_not_double_count_funding_in_closed_pnl(
+    tmp_path, capsys, closed_size, complete
+) -> None:
     bundle = tmp_path / "forensic.zip"
     with zipfile.ZipFile(bundle, "w") as archive:
         _write_jsonl(
@@ -125,7 +138,7 @@ def test_reconcile_does_not_double_count_funding_in_closed_pnl(tmp_path) -> None
                     "symbol": "BTCUSDT",
                     "side": "Sell",
                     "updatedTime": "2000",
-                    "closedSize": "2",
+                    "closedSize": closed_size,
                     "closedPnl": "17",
                     "openFee": "0.25",
                     "closeFee": "0.25",
@@ -148,8 +161,8 @@ def test_reconcile_does_not_double_count_funding_in_closed_pnl(tmp_path) -> None
     positions = analyzer.reconcile(bundle)
 
     assert len(positions) == 1
-    assert positions[0]["complete"] is True
-    assert positions[0]["closed_qty"] == 2
+    assert positions[0]["complete"] is complete
+    assert positions[0]["closed_qty"] == float(closed_size)
     assert positions[0]["closed_pnl"] == 17
     assert positions[0]["closed_at"] == 2000
     assert positions[0]["funding"] == -1
@@ -179,6 +192,13 @@ def test_reconcile_does_not_double_count_funding_in_closed_pnl(tmp_path) -> None
     assert costs["signed_funding_usdt"] == -1
     assert costs["closed_pnl_net_usdt"] == 17
     assert costs["winner_fee_pct_of_avg_net_win"] == 100 * 0.5 / 17
+    analyzer.report_prospective_demo_exit_profile(
+        positions, profile="payoff_challenger"
+    )
+    output = capsys.readouterr().out
+    assert f"completed_positions={int(complete)}" in output
+    if not complete:
+        assert "unavailable/no_cases" in output
 
 
 def test_prospective_demo_exit_profile_counts_only_complete_tagged_positions(
