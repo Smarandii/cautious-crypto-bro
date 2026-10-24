@@ -282,10 +282,13 @@ async def prepare(
     tp=None,
     mode=ApprovalMode.MANUAL,
     relation: OpenRelation | None = None,
+    entry: Entry | None = None,
 ):
     store = IntentStore(path)
     await store.initialize()
     intent = make_intent(side, tp, mode)
+    if entry is not None:
+        intent = intent.model_copy(update={"entry": entry})
     if relation is not None:
         intent = intent.model_copy(update={"relation": relation})
     planner = ExecutionPlanner()

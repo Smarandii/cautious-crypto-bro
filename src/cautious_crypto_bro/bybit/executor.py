@@ -982,19 +982,7 @@ class BybitDemoExecutor:
             )
         ]
 
-        response = self._client.private_post(
-            "/v5/order/create-batch",
-            {
-                "category": "linear",
-                "request": requests,
-            },
-        )
-
-        return self._parse_batch_result(
-            plan.symbol,
-            requests,
-            response,
-        )
+        return self._submit_entry_batch(plan.symbol, requests)
 
     def _execute_sync(
         self,
@@ -1030,19 +1018,26 @@ class BybitDemoExecutor:
         except Exception as exc:
             raise EntryPreflightError(str(exc)) from exc
 
-        response = self._client.private_post(
-            "/v5/order/create-batch",
-            {
-                "category": "linear",
-                "request": requests,
-            },
-        )
+        return self._submit_entry_batch(plan.symbol, requests)
 
-        return self._parse_batch_result(
-            plan.symbol,
-            requests,
-            response,
-        )
+    def _submit_entry_batch(
+        self,
+        symbol: str,
+        requests: list[dict[str, object]],
+    ) -> tuple[str, ...]:
+        try:
+            response = self._client.private_post(
+                "/v5/order/create-batch",
+                {"category": "linear", "request": requests},
+            )
+            return self._parse_batch_result(requests, response)
+        except Exception:
+            # A lost or malformed acknowledgement does not prove rejection.
+            # Cancel only submitted entry links; never replay their creation.
+            self._client.cancel_batch_best_effort(
+                symbol, [str(request["orderLinkId"]) for request in requests]
+            )
+            raise
 
     def _order_params(
         self,
@@ -1079,7 +1074,6 @@ class BybitDemoExecutor:
 
     def _parse_batch_result(
         self,
-        symbol: str,
         requests: list[dict[str, object]],
         response: dict,
     ) -> tuple[str, ...]:
@@ -1095,11 +1089,6 @@ class BybitDemoExecutor:
             or len(results) != len(requests)
             or len(statuses) != len(requests)
         ):
-            self._client.cancel_batch_best_effort(
-                symbol,
-                [str(request["orderLinkId"]) for request in requests],
-            )
-
             raise TradeExecutionError(
                 "Bybit batch response is invalid or does not match submitted order count"
             )
@@ -1127,11 +1116,6 @@ class BybitDemoExecutor:
                 failures.append(f"order {index + 1}: {code} {status.get('msg')}")
 
         if failures:
-            self._client.cancel_batch_best_effort(
-                symbol,
-                [str(request["orderLinkId"]) for request in requests],
-            )
-
             raise TradeExecutionError(
                 "Bybit batch partially failed: " + "; ".join(failures)
             )
