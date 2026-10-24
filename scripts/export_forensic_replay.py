@@ -45,30 +45,6 @@ def _market_candle_coverage(
     return sorted(symbols), min(start_times) - MARKET_CANDLE_LOOKBACK_MS
 
 
-def _private_rows(
-    client: BybitClient,
-    path: str,
-    params: dict[str, object],
-) -> list[dict]:
-    rows = []
-    cursor = None
-    seen_cursors = set()
-
-    while True:
-        request = dict(params)
-        if cursor:
-            request["cursor"] = cursor
-        result = client.private_get(path, request).get("result", {})
-        rows.extend(result.get("list", []))
-        next_cursor = result.get("nextPageCursor")
-        if not next_cursor:
-            return rows
-        if next_cursor in seen_cursors:
-            raise ValueError("Forensic export received a repeated pagination cursor")
-        seen_cursors.add(next_cursor)
-        cursor = next_cursor
-
-
 def _historical_rows(
     client: BybitClient,
     path: str,
@@ -84,8 +60,7 @@ def _historical_rows(
     for window_start in range(start_ms, end_ms, window_ms):
         window_end = min(window_start + window_ms - 1, end_ms)
         rows.extend(
-            _private_rows(
-                client,
+            client.paginate_private_list(
                 path,
                 {
                     **base_params,
@@ -265,8 +240,7 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
         for order in order_history
         if str(order.get("orderId") or "") in entry_order_ids
     ]
-    open_account_orders = _private_rows(
-        client,
+    open_account_orders = client.paginate_private_list(
         "/v5/order/realtime",
         {"category": "linear", "settleCoin": "USDT", "limit": 50},
     )
@@ -315,8 +289,7 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
     open_positions_as_of = datetime.now(UTC).isoformat()
     open_positions = [
         position
-        for position in _private_rows(
-            client,
+        for position in client.paginate_private_list(
             "/v5/position/list",
             {"category": "linear", "settleCoin": "USDT", "limit": 200},
         )
