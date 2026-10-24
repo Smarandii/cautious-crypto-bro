@@ -286,6 +286,14 @@ def account_order_from_item(item: dict) -> AccountOrder:
         and item.get("orderStatus") == "Untriggered"
     ):
         remaining = quantity
+    executed_quantity = _required_quantity(
+        item.get("cumExecQty", 0), "order cumExecQty"
+    )
+    if (
+        item.get("orderStatus") in {"Filled", "PartiallyFilled"}
+        and executed_quantity <= 0
+    ):
+        raise TradeExecutionError("Filled Bybit order cumExecQty must be positive")
 
     return AccountOrder(
         symbol=symbol.strip().upper(),
@@ -314,5 +322,5 @@ def account_order_from_item(item: dict) -> AccountOrder:
             or str(item.get("closeOnTrigger")).casefold() == "true"
         ),
         parent_order_link_id=str(item.get("parentOrderLinkId") or ""),
-        executed_quantity=parse_decimal(item.get("cumExecQty")),
+        executed_quantity=executed_quantity,
     )

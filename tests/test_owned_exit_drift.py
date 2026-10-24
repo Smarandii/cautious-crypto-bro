@@ -29,6 +29,55 @@ from cautious_crypto_bro.storage import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("fault", ["missing", "null", "blank", "negative", "zero"])
+def test_invalid_filled_exit_quantity_blocks_progress_until_repaired(tmp_path, fault):
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = Exchange()
+        with executor_for(exchange) as executor:
+            store, intent, _, coordinator, supervisor = await prepare(
+                database, exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            await supervisor.reconcile_once()
+            state = await state_for(store)
+            link = next(iter(state.expected_exits))
+            exchange.fill(link)
+            filled = exchange.orders[link]
+            valid_quantity = filled["cumExecQty"]
+            if fault == "missing":
+                del filled["cumExecQty"]
+            else:
+                filled["cumExecQty"] = {
+                    "null": None,
+                    "blank": "",
+                    "negative": "-1",
+                    "zero": "0",
+                }[fault]
+            before = len(exchange.requests)
+            with pytest.raises(TradeExecutionError, match="cumExecQty"):
+                await supervisor.reconcile_once()
+            saved = await state_for(IntentStore(database))
+            assert not saved.tp1_done and not saved.entry_frozen
+            assert not any(
+                path
+                in {"/v5/order/create", "/v5/order/cancel", "/v5/position/trading-stop"}
+                for path, _ in exchange.requests[before:]
+            )
+            filled["cumExecQty"] = valid_quantity
+            restarted = PositionSupervisor(
+                store=IntentStore(database),
+                executor=executor,
+                mutation_lock=asyncio.Lock(),
+            )
+            await restarted.reconcile_once()
+            assert (await state_for(IntentStore(database))).tp1_done
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("phase", ["during-cancel", "after-restart"])
 def test_exit_fill_during_replacement_pauses_before_new_exit_submission(
     tmp_path, phase
