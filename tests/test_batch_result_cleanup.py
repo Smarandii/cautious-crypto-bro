@@ -7,12 +7,19 @@ import httpx
 import pytest
 from test_remaining_concerns import Exchange, executor_for, prepare
 
-from cautious_crypto_bro.domain import ApprovalMode, IntentStatus, StrategyStatus
+from cautious_crypto_bro.domain import (
+    ApprovalMode,
+    Entry,
+    EntryType,
+    IntentStatus,
+    StrategyStatus,
+)
 from cautious_crypto_bro.storage import IntentStore
 
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("entry_type", [EntryType.MARKET, EntryType.LIMIT])
 @pytest.mark.parametrize(
     "fault",
     [
@@ -22,15 +29,25 @@ pytestmark = pytest.mark.integration
         "nonobject-result",
         "nonobject-status",
         "missing-code",
+        "invalid-json",
+        "nonobject-envelope",
+        "missing-retcode",
+        "null-result",
+        "read-timeout",
+        "http-error",
     ],
 )
-def test_malformed_batch_cancels_submitted_entries_without_replay(tmp_path, fault):
+def test_malformed_batch_cancels_submitted_entries_without_replay(
+    tmp_path, fault, entry_type
+):
     class MalformedBatchExchange(Exchange):
         submissions = 0
         rollback_links = ()
+        rollbacks = 0
 
         def handle(self, request):
             if request.url.path == "/v5/order/cancel-batch":
+                self.rollbacks += 1
                 body = json.loads(request.content)
                 self.rollback_links = tuple(
                     item["orderLinkId"] for item in body["request"]
@@ -51,7 +68,19 @@ def test_malformed_batch_cancels_submitted_entries_without_replay(tmp_path, faul
             if request.url.path == "/v5/order/create-batch":
                 self.submissions += 1
                 data = response.json()
-                if fault == "null-result-list":
+                if fault == "invalid-json":
+                    return httpx.Response(200, text="invalid-json")
+                if fault == "nonobject-envelope":
+                    return httpx.Response(200, json=[])
+                if fault == "read-timeout":
+                    raise httpx.ReadTimeout("synthetic response lost", request=request)
+                if fault == "http-error":
+                    return httpx.Response(503, text="synthetic unavailable")
+                if fault == "missing-retcode":
+                    del data["retCode"]
+                elif fault == "null-result":
+                    data["result"] = None
+                elif fault == "null-result-list":
                     data["result"]["list"] = None
                 elif fault == "null-extension":
                     data["retExtInfo"] = None
@@ -71,7 +100,12 @@ def test_malformed_batch_cancels_submitted_entries_without_replay(tmp_path, faul
         exchange = MalformedBatchExchange()
         with executor_for(exchange) as executor:
             store, intent, plan, coordinator, _ = await prepare(
-                database, exchange, executor
+                database,
+                exchange,
+                executor,
+                entry=Entry(type=entry_type, price=100)
+                if entry_type is EntryType.LIMIT
+                else None,
             )
             foreign = exchange.create(
                 {
@@ -94,9 +128,13 @@ def test_malformed_batch_cancels_submitted_entries_without_replay(tmp_path, faul
             ]
             assert owned and all(o["orderStatus"] == "Cancelled" for o in owned)
             assert set(exchange.rollback_links) == {o["orderLinkId"] for o in owned}
+            assert exchange.rollbacks == 1
             assert exchange.orders["manual-entry"]["orderId"] == foreign
             assert exchange.orders["manual-entry"]["orderStatus"] == "New"
-            assert exchange.size > 0 and exchange.stop == plan.stop_loss
+            if entry_type is EntryType.MARKET:
+                assert exchange.size > 0 and exchange.stop == plan.stop_loss
+            else:
+                assert exchange.size == 0
             reopened = IntentStore(database)
             assert (await reopened.get_active_position_strategies())[0][
                 0
