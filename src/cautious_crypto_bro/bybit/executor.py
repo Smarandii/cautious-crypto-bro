@@ -427,11 +427,11 @@ class BybitDemoExecutor:
 
     def _strategy_order_sync(self, symbol: str, link_id: str) -> AccountOrder | None:
         for endpoint in ("/v5/order/realtime", "/v5/order/history"):
-            response = self._client.private_get(
+            items = self._client.paginate_private_list(
                 endpoint,
                 {"category": "linear", "symbol": symbol, "orderLinkId": link_id},
             )
-            for item in response.get("result", {}).get("list", []):
+            for item in items:
                 if item.get("orderLinkId") == link_id and item.get("symbol") == symbol:
                     return account_order_from_item(item)
         return None
