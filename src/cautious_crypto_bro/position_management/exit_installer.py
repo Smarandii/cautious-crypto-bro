@@ -228,15 +228,8 @@ class ExitInstaller:
             ):
                 # Preserve frozen geometry across restart only when verified
                 # fills from this revision explain the smaller position.
-                if (
-                    not cancelled_ids
-                    and live_position is not None
-                    and live_position.side is position.side
-                    and live_position.avg_price == position.avg_price
-                    and live_position.size < position.size
-                    and await self._replacement_fill_matches(
-                        state, verified, position.size - live_position.size
-                    )
+                if not cancelled_ids and await self._replacement_fill_matches(
+                    state, verified, position
                 ):
                     return
                 raise ExitReplacementPositionChanged(
@@ -247,19 +240,34 @@ class ExitInstaller:
         self,
         state: PositionStrategy,
         account: AccountStateSummary,
-        reduction: Decimal,
+        snapshot: AccountPosition,
     ) -> bool:
-        executed = Decimal("0")
-        for link_id, (quantity, price) in (state.expected_exits or {}).items():
-            existing = await self._find_existing_exit(state, link_id, account)
-            if not existing:
-                continue
-            if len(existing) != 1 or not _matches_exit(
-                existing[0], state.side, quantity, price
+        for attempt in range(2):
+            live = _find_position(state, account)
+            if (
+                live is None
+                or live.side is not snapshot.side
+                or live.avg_price != snapshot.avg_price
+                or live.size >= snapshot.size
             ):
                 return False
-            executed += existing[0].executed_quantity
-        return executed == reduction
+            executed = Decimal("0")
+            for link_id, (quantity, price) in (state.expected_exits or {}).items():
+                existing = await self._find_existing_exit(state, link_id, account)
+                if not existing:
+                    continue
+                if len(existing) != 1 or not _matches_exit(
+                    existing[0], state.side, quantity, price
+                ):
+                    return False
+                executed += existing[0].executed_quantity
+            if executed == snapshot.size - live.size:
+                return True
+            # Positions and orders are separate reads; a new fill can land
+            # between them. Refresh once before treating the delta as drift.
+            if attempt == 0:
+                account = await self._executor.account_state()
+        return False
 
     async def _confirm_protection_and_handoff(
         self,

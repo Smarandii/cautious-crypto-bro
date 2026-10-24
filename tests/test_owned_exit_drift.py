@@ -37,6 +37,7 @@ pytestmark = pytest.mark.integration
         "reduction",
         "partial-fill",
         "partial-fill-extra-reduction",
+        "partial-fill-between-reads",
     ],
 )
 def test_interrupted_exit_install_requires_fills_to_explain_position_change(
@@ -44,7 +45,22 @@ def test_interrupted_exit_install_requires_fills_to_explain_position_change(
 ):
     async def run():
         database = tmp_path / "state.db"
-        exchange = Exchange()
+
+        class FillingExchange(Exchange):
+            reads_until_fill = 0
+
+            def handle(self, request):
+                if (
+                    self.reads_until_fill
+                    and request.url.path == "/v5/order/realtime"
+                    and "orderLinkId" not in request.url.params
+                ):
+                    self.reads_until_fill -= 1
+                    if not self.reads_until_fill:
+                        self.fill(first, quantity=saved.expected_exits[first][0] / 4)
+                return super().handle(request)
+
+        exchange = FillingExchange()
         with executor_for(exchange) as executor:
             store, intent, plan, coordinator, supervisor = await prepare(
                 database, exchange, executor
@@ -74,6 +90,8 @@ def test_interrupted_exit_install_requires_fills_to_explain_position_change(
                 exchange.fill(first, quantity=saved.expected_exits[first][0] / 2)
                 if change == "partial-fill-extra-reduction":
                     exchange.size -= Decimal("0.1")
+                if change == "partial-fill-between-reads":
+                    exchange.reads_until_fill = 2
             executor.place_reduce_only_exit = place
             before = len(exchange.requests)
             restarted = PositionSupervisor(
@@ -83,7 +101,7 @@ def test_interrupted_exit_install_requires_fills_to_explain_position_change(
             )
             await restarted.reconcile_once()
             reopened = IntentStore(database)
-            if change == "partial-fill":
+            if change in {"partial-fill", "partial-fill-between-reads"}:
                 resumed = await state_for(reopened)
                 assert not resumed.installing_exits
                 assert resumed.expected_exits == saved.expected_exits
