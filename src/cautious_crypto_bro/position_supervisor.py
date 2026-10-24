@@ -24,7 +24,10 @@ from .domain import (
     TradeExecutionError,
 )
 from .ports import AccountGateway, PositionSupervisorStore
-from .position_management.exit_installer import ExitInstaller
+from .position_management.exit_installer import (
+    ExitInstaller,
+    ExitReplacementPositionChanged,
+)
 from .position_management.fill_detector import FillDetector
 from .position_management.trailing_stop_manager import TrailingStopManager
 from .supervision_health import publish_success
@@ -240,6 +243,9 @@ class PositionSupervisor:
 
         try:
             return await self._reconcile(state, plan, account), None
+        except ExitReplacementPositionChanged as exc:
+            await self._manual_override(state, account, str(exc))
+            return None, None
         except StoreError:
             # All strategies share durable storage; no further trading
             # is safe when its state cannot be read or committed.
