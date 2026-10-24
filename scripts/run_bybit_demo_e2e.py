@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -68,6 +69,7 @@ def run_suite(repo: Path) -> int:
         )
         if not state["Running"] or state["Paused"]:
             raise RuntimeError("App must be running and unpaused before testing")
+        image = command("docker", "inspect", container, "--format", "{{.Image}}")
         manifest = {
             "started_utc": datetime.now(UTC).isoformat(),
             "revision": command("git", "rev-parse", "HEAD"),
@@ -80,6 +82,7 @@ def run_suite(repo: Path) -> int:
             "runner_sha256": digest(Path(__file__)),
             "normal_container": container,
             "normal_started_at": state["StartedAt"],
+            "runtime_image": image,
         }
         (evidence / "manifest.json").write_text(
             json.dumps(manifest, indent=2) + "\n",
@@ -93,6 +96,8 @@ def run_suite(repo: Path) -> int:
                     "docker",
                     "compose",
                     "run",
+                    "--pull",
+                    "never",
                     "--rm",
                     "-T",
                     "--no-deps",
@@ -103,6 +108,7 @@ def run_suite(repo: Path) -> int:
                     "--execute-demo",
                 ],
                 cwd=repo,
+                env=os.environ | {"CCB_IMAGE": image},
                 stdout=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
