@@ -140,6 +140,9 @@ def test_live_burst_bounds_model_calls_and_downloads_before_claiming_work(
                             )
                     provider.release.set()
                     results = await asyncio.gather(*tasks, return_exceptions=True)
+                    if intake == "retry":
+                        assert results[0] is True
+                        results = results[1:]
                     assert sum(
                         isinstance(x, asyncio.CancelledError) for x in results
                     ) == int(cancellation != "none")
