@@ -35,6 +35,9 @@ pytestmark = pytest.mark.integration
         "null-result",
         "read-timeout",
         "http-error",
+        "duplicate-order-id",
+        "nonstring-order-id",
+        "blank-order-id",
     ],
 )
 def test_malformed_batch_cancels_submitted_entries_without_replay(
@@ -90,6 +93,14 @@ def test_malformed_batch_cancels_submitted_entries_without_replay(
                     data["result"]["list"][0] = None
                 elif fault == "nonobject-status":
                     data["retExtInfo"]["list"][0] = None
+                elif fault == "duplicate-order-id":
+                    data["result"]["list"][1]["orderId"] = data["result"]["list"][0][
+                        "orderId"
+                    ]
+                elif fault == "nonstring-order-id":
+                    data["result"]["list"][0]["orderId"] = {"invalid": "id"}
+                elif fault == "blank-order-id":
+                    data["result"]["list"][0]["orderId"] = "   "
                 else:
                     data["retExtInfo"]["list"][0] = {}
                 return httpx.Response(200, json=data)

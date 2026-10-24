@@ -1110,10 +1110,20 @@ class BybitDemoExecutor:
 
             order_id = result.get("orderId")
 
-            if str(code) == "0" and order_id:
-                order_ids.append(str(order_id))
+            if (
+                str(code) == "0"
+                and isinstance(order_id, str)
+                and order_id.strip()
+                and order_id not in order_ids
+            ):
+                order_ids.append(order_id)
             else:
-                failures.append(f"order {index + 1}: {code} {status.get('msg')}")
+                detail = (
+                    "invalid or duplicate order ID"
+                    if str(code) == "0"
+                    else f"{code} {status.get('msg')}"
+                )
+                failures.append(f"order {index + 1}: {detail}")
 
         if failures:
             raise TradeExecutionError(
