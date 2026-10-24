@@ -118,7 +118,7 @@ class SourceRecovery:
                 "⚠️ TELEGRAM READER NEEDS ATTENTION — HUMAN REVIEW REQUIRED\n"
                 f"{self.state}: {self.reason}\n"
                 + (
-                    "One or more channel history reads failed; unaffected channels continue. "
+                    "Channel history or post processing failed; unaffected channels continue. "
                     if self.state == "DEGRADED"
                     else "New signal ingestion is unavailable. "
                 )

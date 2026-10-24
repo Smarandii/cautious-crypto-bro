@@ -11,7 +11,7 @@ from aiogram.types import Chat, Message, Update
 from aiogram.types import User as BotUser
 from telethon.errors import AuthKeyUnregisteredError, SessionPasswordNeededError
 from telethon.tl.types import User
-from test_telegram_source import FakeTelegramClient
+from test_telegram_source import FakeMessage, FakeTelegramClient
 
 from cautious_crypto_bro import source_recovery, telegram_source
 from cautious_crypto_bro.approval_bot import ApprovalBot
@@ -193,6 +193,66 @@ async def notice(h, containing):
             text = await h.notices.get()
             if containing in text:
                 return text
+
+
+@pytest.mark.parametrize("path", ["catchup", "retry", "retry-fetch"])
+def test_media_processing_outage_reaches_operator_and_recovers(
+    monkeypatch, tmp_path, path
+):
+    class MediaMessage(FakeMessage):
+        fail_download = True
+
+        async def download_media(self, *, file):
+            if self.fail_download:
+                raise OSError("synthetic media failure")
+            return await super().download_media(file=file)
+
+    async def run():
+        client = RecoveringClient(authorized=True)
+        retry_ids = AsyncMock(return_value=()) if path != "catchup" else None
+        h = harness(monkeypatch, tmp_path, client, retry_ids=retry_ids)
+        task = asyncio.create_task(h.recovery.run())
+        try:
+            await asyncio.wait_for(client.listening.wait(), 3)
+            message = MediaMessage(
+                message_id=1,
+                published_at=datetime.now(UTC),
+                text="Synthetic image signal",
+                image=b"synthetic-image",
+            )
+            client.messages.append(message)
+            original_get_messages = client.get_messages
+            if path == "retry-fetch":
+                message.fail_download = False
+                monkeypatch.setattr(
+                    client,
+                    "get_messages",
+                    AsyncMock(side_effect=OSError("synthetic fetch failure")),
+                )
+            if retry_ids is not None:
+                retry_ids.return_value = (1,)
+                h.source._watermarks[message.chat_id] = 1
+            previous = h.source._watermarks[message.chat_id]
+            await h.source.poll_once()
+            assert any("OSError" in warning for warning in h.source.read_warnings())
+            await notice(h, "HUMAN REVIEW REQUIRED")
+            assert h.recovery.state == "DEGRADED"
+            assert h.source._watermarks[message.chat_id] == previous
+            assert h.source._on_message.await_count == 0
+            message.fail_download = False
+            if path == "retry-fetch":
+                monkeypatch.setattr(client, "get_messages", original_get_messages)
+            await h.source.poll_once()
+            await notice(h, "reader restored")
+            assert h.recovery.state == "ONLINE" and not h.source.read_warnings()
+            assert h.source._on_message.await_count == 1
+            assert client.starts == 1 and client.qrs == 0
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await h.bot.close()
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("phase", ["seed", "history", "retry"])
