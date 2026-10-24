@@ -29,6 +29,86 @@ from cautious_crypto_bro.storage import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        "increase",
+        "average",
+        "reduction",
+        "partial-fill",
+        "partial-fill-extra-reduction",
+    ],
+)
+def test_interrupted_exit_install_requires_fills_to_explain_position_change(
+    tmp_path, change
+):
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = Exchange()
+        with executor_for(exchange) as executor:
+            store, intent, plan, coordinator, supervisor = await prepare(
+                database, exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            place = executor.place_reduce_only_exit
+
+            async def interrupted(**kwargs):
+                await place(**kwargs)
+                raise RuntimeError("Synthetic interrupted installation")
+
+            executor.place_reduce_only_exit = interrupted
+            with pytest.raises(RuntimeError, match="Synthetic interrupted"):
+                await supervisor.reconcile_once()
+            saved = await state_for(store)
+            assert saved.installing_exits and len(saved.expected_exits) == 3
+            first = next(iter(saved.expected_exits))
+            if change == "increase":
+                exchange.size += Decimal("0.1")
+            elif change == "average":
+                exchange.avg += Decimal("1")
+            elif change == "reduction":
+                exchange.size -= Decimal("0.1")
+            else:
+                exchange.fill(first, quantity=saved.expected_exits[first][0] / 2)
+                if change == "partial-fill-extra-reduction":
+                    exchange.size -= Decimal("0.1")
+            executor.place_reduce_only_exit = place
+            before = len(exchange.requests)
+            restarted = PositionSupervisor(
+                store=IntentStore(database),
+                executor=executor,
+                mutation_lock=asyncio.Lock(),
+            )
+            await restarted.reconcile_once()
+            reopened = IntentStore(database)
+            if change == "partial-fill":
+                resumed = await state_for(reopened)
+                assert not resumed.installing_exits
+                assert resumed.expected_exits == saved.expected_exits
+                assert (
+                    len([o for o in exchange.orders.values() if o["reduceOnly"]]) == 3
+                )
+            else:
+                alerts = await reopened.get_pending_strategy_alerts()
+                assert len(alerts) == 1
+                assert alerts[0].status is StrategyStatus.MANUAL_OVERRIDE
+                assert "position changed" in alerts[0].pause_reason
+                assert not any(
+                    path
+                    in {
+                        "/v5/order/create",
+                        "/v5/order/cancel",
+                        "/v5/position/trading-stop",
+                    }
+                    for path, _ in exchange.requests[before:]
+                )
+            assert exchange.stop == plan.stop_loss
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("fault", ["missing", "null", "blank", "negative", "zero"])
 def test_invalid_filled_exit_quantity_blocks_progress_until_repaired(tmp_path, fault):
     async def run():

@@ -226,23 +226,40 @@ class ExitInstaller:
                 or live_position.size != position.size
                 or live_position.avg_price != position.avg_price
             ):
-                # Once this revision has orders, its frozen geometry and
-                # unique links must survive partial fills and restart.
-                if not cancelled_ids and await self._replacement_started(
-                    state, verified
+                # Preserve frozen geometry across restart only when verified
+                # fills from this revision explain the smaller position.
+                if (
+                    not cancelled_ids
+                    and live_position is not None
+                    and live_position.side is position.side
+                    and live_position.avg_price == position.avg_price
+                    and live_position.size < position.size
+                    and await self._replacement_fill_matches(
+                        state, verified, position.size - live_position.size
+                    )
                 ):
                     return
                 raise ExitReplacementPositionChanged(
                     "position changed while cancelling old exits; manual review required"
                 )
 
-    async def _replacement_started(
-        self, state: PositionStrategy, account: AccountStateSummary
+    async def _replacement_fill_matches(
+        self,
+        state: PositionStrategy,
+        account: AccountStateSummary,
+        reduction: Decimal,
     ) -> bool:
-        for link_id in state.expected_exits or {}:
-            if await self._find_existing_exit(state, link_id, account):
-                return True
-        return False
+        executed = Decimal("0")
+        for link_id, (quantity, price) in (state.expected_exits or {}).items():
+            existing = await self._find_existing_exit(state, link_id, account)
+            if not existing:
+                continue
+            if len(existing) != 1 or not _matches_exit(
+                existing[0], state.side, quantity, price
+            ):
+                return False
+            executed += existing[0].executed_quantity
+        return executed == reduction
 
     async def _confirm_protection_and_handoff(
         self,
