@@ -138,15 +138,6 @@ class BybitDemoExecutor:
             symbol,
         )
 
-    async def cancel_strategy_exits(
-        self,
-        symbol: str,
-    ) -> int:
-        return await _run_sync(
-            self._cancel_ccb_exit_orders_sync,
-            symbol,
-        )
-
     async def cancel_order(
         self,
         symbol: str,
