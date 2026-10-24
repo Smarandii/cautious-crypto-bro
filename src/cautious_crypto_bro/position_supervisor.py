@@ -671,11 +671,14 @@ class PositionSupervisor:
     ) -> AccountStateSummary:
         if cancel_pending:
             await self._executor.cancel_pending_entries(state.symbol)
-        account = await self._executor.account_state()
-        if self._pending_entries(state, account):
-            raise TradeExecutionError(
-                "Bybit entry cancellation is not confirmed; refusing to freeze quantity"
-            )
+        # Snapshots read positions before orders. After confirming no entries,
+        # read positions again to include fills during that confirmation.
+        for _ in range(2):
+            account = await self._executor.account_state()
+            if self._pending_entries(state, account):
+                raise TradeExecutionError(
+                    "Bybit entry cancellation is not confirmed; refusing to freeze quantity"
+                )
         updated_position = self._position(state, account)
 
         if updated_position is None:
