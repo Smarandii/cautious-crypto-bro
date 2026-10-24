@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from cautious_crypto_bro.bybit.client import DEMO_BASE_URL, BybitClient
+from cautious_crypto_bro.domain import TradeExecutionError
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 from export_forensic_replay import (  # noqa: E402
@@ -68,7 +69,7 @@ def test_history_export_rejects_pagination_cycles(cursors) -> None:
     )
     try:
         if cursors[-1]:
-            with pytest.raises(ValueError, match="repeated pagination cursor"):
+            with pytest.raises(TradeExecutionError, match="page cursor repeated"):
                 _historical_rows(
                     client, "/v5/position/closed-pnl", {}, 0, 1000, limit=100
                 )
@@ -80,3 +81,25 @@ def test_history_export_rejects_pagination_cycles(cursors) -> None:
     finally:
         client.close()
     assert len(requests) == len(cursors)
+
+
+@pytest.mark.parametrize(
+    "page",
+    [{}, {"list": {}}, {"list": ["invalid-row"]}, {"list": [], "nextPageCursor": 0}],
+)
+def test_history_export_rejects_malformed_pages(page) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v5/market/time":
+            return httpx.Response(200, json={"retCode": 0, "time": 1000})
+        return httpx.Response(200, json={"retCode": 0, "result": page})
+
+    client = BybitClient(DEMO_BASE_URL, "synthetic-key", "synthetic-secret")
+    client._http_client.close()
+    client._http_client = httpx.Client(
+        base_url=DEMO_BASE_URL, transport=httpx.MockTransport(respond)
+    )
+    try:
+        with pytest.raises(TradeExecutionError, match="invalid page"):
+            _historical_rows(client, "/v5/position/closed-pnl", {}, 0, 1000, limit=100)
+    finally:
+        client.close()
