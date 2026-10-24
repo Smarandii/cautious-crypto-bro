@@ -72,18 +72,22 @@ def test_read_open_entry_orders_supports_empty_and_legacy_archives(tmp_path) -> 
 
 
 @pytest.mark.parametrize(
-    "closed_size,complete",
+    "closed_size,complete,settlement_time,funding",
     [
-        ("2", True),
-        ("1.98", True),
-        ("1", False),
-        ("4", False),
-        ("2.01", False),
-        ("2.0000000001", True),
+        ("2", True, "1500", -1),
+        ("1.98", True, "1500", -1),
+        ("1", False, "1500", -1),
+        ("4", False, "1500", -1),
+        ("2.01", False, "1500", -1),
+        ("2.0000000001", True, "1500", -1),
+        ("2", True, "2000", -1),
+        ("2", True, "2500", 0),
+        ("1", False, "2500", -1),
+        ("1.98", True, "2500", -1),
     ],
 )
 def test_reconcile_does_not_double_count_funding_in_closed_pnl(
-    tmp_path, capsys, closed_size, complete
+    tmp_path, capsys, closed_size, complete, settlement_time, funding
 ) -> None:
     bundle = tmp_path / "forensic.zip"
     with zipfile.ZipFile(bundle, "w") as archive:
@@ -152,7 +156,7 @@ def test_reconcile_does_not_double_count_funding_in_closed_pnl(
                 {
                     "type": "SETTLEMENT",
                     "symbol": "BTCUSDT",
-                    "transactionTime": "1500",
+                    "transactionTime": settlement_time,
                     "funding": "-1",
                 }
             ],
@@ -165,10 +169,10 @@ def test_reconcile_does_not_double_count_funding_in_closed_pnl(
     assert positions[0]["closed_qty"] == float(closed_size)
     assert positions[0]["closed_pnl"] == 17
     assert positions[0]["closed_at"] == 2000
-    assert positions[0]["funding"] == -1
+    assert positions[0]["funding"] == funding
     assert positions[0]["net_pnl"] == 17
     assert positions[0]["fees"] == 0.5
-    assert positions[0]["gross_pnl"] == 18.5
+    assert positions[0]["gross_pnl"] == 17.5 - funding
     assert positions[0]["fill_pattern"] == "E1"
     assert positions[0]["source_channel_id"] == 123
     assert positions[0]["confidence"] == 0.99
@@ -187,9 +191,9 @@ def test_reconcile_does_not_double_count_funding_in_closed_pnl(
     assert summary["expectancy_usdt"] == 17
     assert summary["avg_win_r"] == 0.85
     costs = analyzer.cost_summary(positions)
-    assert costs["gross_price_pnl_usdt"] == 18.5
+    assert costs["gross_price_pnl_usdt"] == 17.5 - funding
     assert costs["fees_usdt"] == 0.5
-    assert costs["signed_funding_usdt"] == -1
+    assert costs["signed_funding_usdt"] == funding
     assert costs["closed_pnl_net_usdt"] == 17
     assert costs["winner_fee_pct_of_avg_net_win"] == 100 * 0.5 / 17
     analyzer.report_prospective_demo_exit_profile(
