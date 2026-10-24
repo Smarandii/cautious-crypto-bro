@@ -42,6 +42,56 @@ class SymbolPagedExchange(Exchange):
         return super().handle(request)
 
 
+@pytest.mark.parametrize("endpoint", ["/v5/order/realtime", "/v5/order/history"])
+@pytest.mark.parametrize("fault", ["missing-list", "repeated-cursor"])
+def test_strategy_order_lookup_rejects_incomplete_pages(endpoint, fault):
+    pages = (
+        [{"retCode": 0, "result": {}}]
+        if fault == "missing-list"
+        else [
+            {"retCode": 0, "result": {"list": [], "nextPageCursor": "A"}},
+            {"retCode": 0, "result": {"list": [], "nextPageCursor": "A"}},
+        ]
+    )
+    exchange = SymbolPagedExchange(endpoint, pages)
+    with executor_for(exchange) as executor:
+        with pytest.raises(TradeExecutionError, match="Bybit.*page"):
+            asyncio.run(executor.strategy_order("BTCUSDT", "ccb-owned"))
+    assert len(exchange.page_requests) == len(pages)
+    assert not exchange.orders
+
+
+@pytest.mark.parametrize("endpoint", ["/v5/order/realtime", "/v5/order/history"])
+def test_strategy_order_lookup_reads_later_pages_with_owned_filters(endpoint):
+    exchange = SymbolPagedExchange(endpoint, [])
+    exchange.create(
+        {
+            "symbol": "BTCUSDT",
+            "orderLinkId": "ccb-owned",
+            "side": "Sell",
+            "orderType": "Limit",
+            "qty": "1",
+            "price": "110",
+            "reduceOnly": True,
+        }
+    )
+    row = exchange.orders.pop("ccb-owned")
+    exchange.pages = [
+        {"retCode": 0, "result": {"list": [], "nextPageCursor": "next"}},
+        {"retCode": 0, "result": {"list": [row], "nextPageCursor": ""}},
+    ]
+    with executor_for(exchange) as executor:
+        order = asyncio.run(executor.strategy_order("BTCUSDT", "ccb-owned"))
+    assert order is not None and order.order_id == row["orderId"]
+    first, second = exchange.page_requests
+    assert first == {
+        "category": "linear",
+        "symbol": "BTCUSDT",
+        "orderLinkId": "ccb-owned",
+    }
+    assert second == first | {"cursor": "next"}
+
+
 @pytest.mark.parametrize("endpoint", ["/v5/position/list", "/v5/order/realtime"])
 @pytest.mark.parametrize("fault", ["missing-list", "repeated-cursor"])
 def test_invalid_symbol_pages_stop_close_before_any_mutation(endpoint, fault):
