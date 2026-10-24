@@ -29,6 +29,112 @@ from cautious_crypto_bro.storage import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("phase", ["during-cancel", "after-restart"])
+def test_exit_fill_during_replacement_pauses_before_new_exit_submission(
+    tmp_path, phase
+):
+    class FillDuringCancellation(Exchange):
+        fill_on_cancel = False
+        delay_exits = False
+
+        def handle(self, request):
+            if self.fill_on_cancel and request.url.path == "/v5/order/cancel":
+                body = json.loads(request.content)
+                order = next(
+                    o
+                    for o in self.orders.values()
+                    if o["orderId"] == body.get("orderId")
+                )
+                if order["reduceOnly"]:
+                    if self.delay_exits:
+                        self.requests.append((request.url.path, body))
+                        return httpx.Response(
+                            200,
+                            json={
+                                "retCode": 0,
+                                "result": {"orderId": order["orderId"]},
+                            },
+                        )
+                    self.fill_on_cancel = False
+                    self.fill(order["orderLinkId"])
+                    self.requests.append((request.url.path, body))
+                    return httpx.Response(
+                        200,
+                        json={"retCode": 0, "result": {"orderId": order["orderId"]}},
+                    )
+            return super().handle(request)
+
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = FillDuringCancellation()
+        with executor_for(exchange) as executor:
+            store, intent, plan, coordinator, supervisor = await prepare(
+                database, exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            await supervisor.reconcile_once()
+            state = await state_for(store)
+            await executor.cancel_pending_entries(state.symbol)
+            await store.save_position_strategy(
+                state.model_copy(
+                    update={
+                        "entry_frozen": True,
+                        "base_position_qty": exchange.size,
+                        "rebalance_needed": True,
+                    }
+                )
+            )
+            original_size = exchange.size
+            exchange.fill_on_cancel = True
+            before = len(exchange.requests)
+            if phase == "after-restart":
+                exchange.delay_exits = True
+                with pytest.raises(
+                    TradeExecutionError, match="cancellation.*confirmed"
+                ):
+                    await supervisor.reconcile_once()
+                old_exits = [
+                    o
+                    for o in exchange.orders.values()
+                    if o["reduceOnly"] and o["orderStatus"] == "New"
+                ]
+                exchange.fill(old_exits[0]["orderLinkId"])
+                for order in old_exits[1:]:
+                    order["orderStatus"] = "Cancelled"
+                exchange.delay_exits = exchange.fill_on_cancel = False
+                supervisor = PositionSupervisor(
+                    store=IntentStore(database),
+                    executor=executor,
+                    mutation_lock=asyncio.Lock(),
+                )
+            await supervisor.reconcile_once()
+            reopened = IntentStore(database)
+            alerts = await reopened.get_pending_strategy_alerts()
+            assert (
+                len(alerts) == 1 and alerts[0].status is StrategyStatus.MANUAL_OVERRIDE
+            )
+            assert "position changed" in alerts[0].pause_reason
+            assert 0 < exchange.size < original_size
+            assert exchange.stop == plan.stop_loss
+            assert not any(
+                path == "/v5/order/create" for path, _ in exchange.requests[before:]
+            )
+            restarted = PositionSupervisor(
+                store=reopened, executor=executor, mutation_lock=asyncio.Lock()
+            )
+            before = len(exchange.requests)
+            await restarted.reconcile_once()
+            assert not any(
+                path
+                in {"/v5/order/create", "/v5/order/cancel", "/v5/position/trading-stop"}
+                for path, _ in exchange.requests[before:]
+            )
+
+    asyncio.run(run())
+
+
 def test_rebalance_waits_for_old_exit_cancellation_before_replacement(tmp_path):
     class DelayedExitCancellation(Exchange):
         delay_exits = False

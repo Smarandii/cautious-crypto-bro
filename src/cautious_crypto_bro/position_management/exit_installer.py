@@ -25,6 +25,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class ExitReplacementPositionChanged(TradeExecutionError):
+    """Cancellation raced with a position change; replacement sizing is unsafe."""
+
+
 @dataclass(frozen=True, slots=True)
 class _ExitGeometry:
     """Values derived from the plan and live position, shared by every exit leg."""
@@ -90,7 +94,7 @@ class ExitInstaller:
             protected_stop,
             trailing_distance,
         )
-        await self._cancel_stale_exits(state, account)
+        await self._cancel_stale_exits(state, account, position)
         await self._confirm_protection_and_handoff(
             state,
             plan,
@@ -195,6 +199,7 @@ class ExitInstaller:
         self,
         state: PositionStrategy,
         account: AccountStateSummary,
+        position: AccountPosition,
     ) -> None:
         # The new revision is durable before replacing older owned exits.
         prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-t"
@@ -208,12 +213,36 @@ class ExitInstaller:
             ):
                 await self._executor.cancel_order(state.symbol, order.order_id)
                 cancelled_ids.add(order.order_id)
-        if cancelled_ids:
+        if cancelled_ids or state.installing_exits:
             verified = await self._executor.account_state()
             if any(order.order_id in cancelled_ids for order in verified.open_orders):
                 raise TradeExecutionError(
                     "Bybit exit cancellation is not confirmed; refusing replacement exits"
                 )
+            live_position = _find_position(state, verified)
+            if (
+                live_position is None
+                or live_position.side is not position.side
+                or live_position.size != position.size
+                or live_position.avg_price != position.avg_price
+            ):
+                # Once this revision has orders, its frozen geometry and
+                # unique links must survive partial fills and restart.
+                if not cancelled_ids and await self._replacement_started(
+                    state, verified
+                ):
+                    return
+                raise ExitReplacementPositionChanged(
+                    "position changed while cancelling old exits; manual review required"
+                )
+
+    async def _replacement_started(
+        self, state: PositionStrategy, account: AccountStateSummary
+    ) -> bool:
+        for link_id in state.expected_exits or {}:
+            if await self._find_existing_exit(state, link_id, account):
+                return True
+        return False
 
     async def _confirm_protection_and_handoff(
         self,
