@@ -253,6 +253,12 @@ def _assign_funding(by_symbol: dict[str, list[dict]], settlements: list[dict]) -
             position
             for position in by_symbol.get(symbol, [])
             if position["start"] <= timestamp < position["end"]
+            # A partial close can still accrue funding, including the 1%
+            # residual allowed by the report's completion tolerance.
+            and (
+                position["closed_qty"] < position["entry_qty"]
+                or timestamp <= position["closed_at"]
+            )
         ]
         if len(matches) == 1:
             matches[0]["funding"] += float(row.get("funding") or 0)
