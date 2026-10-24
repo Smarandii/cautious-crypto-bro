@@ -29,6 +29,71 @@ from cautious_crypto_bro.storage import (
 pytestmark = pytest.mark.integration
 
 
+def test_expiry_freeze_includes_fill_during_cancellation_confirmation(tmp_path):
+    class LateFillExchange(Exchange):
+        confirmation_reads = None
+
+        def handle(self, request):
+            if request.url.path == "/v5/order/cancel":
+                body = json.loads(request.content)
+                self.requests.append((request.url.path, body))
+                if self.confirmation_reads is None:
+                    self.confirmation_reads = 0
+                return httpx.Response(
+                    200, json={"retCode": 0, "result": {"orderId": body["orderId"]}}
+                )
+            if (
+                request.url.path == "/v5/order/realtime"
+                and self.confirmation_reads is not None
+            ):
+                self.confirmation_reads += 1
+                if self.confirmation_reads == 2:
+                    pending = [
+                        o
+                        for o in self.orders.values()
+                        if o["orderStatus"] == "New" and not o["reduceOnly"]
+                    ]
+                    self.fill(pending[0]["orderLinkId"])
+                    for order in pending[1:]:
+                        order["orderStatus"] = "Cancelled"
+            return super().handle(request)
+
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = LateFillExchange()
+        with executor_for(exchange) as executor:
+            store, intent, plan, coordinator, supervisor = await prepare(
+                database, exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            initial_size = exchange.size
+            await store.update_execution_plan(
+                plan.model_copy(
+                    update={
+                        "created_at": datetime.now(UTC) - timedelta(days=1),
+                        "policy": plan.policy.model_copy(
+                            update={
+                                "strategy_v2": plan.policy.strategy_v2.model_copy(
+                                    update={"entry_order_ttl_minutes": 1}
+                                )
+                            }
+                        ),
+                    }
+                )
+            )
+            await supervisor.reconcile_once()
+            state = await state_for(IntentStore(database))
+            assert exchange.size > initial_size
+            assert state.entry_frozen and state.expected_exits
+            assert state.base_position_qty == state.last_position_qty == exchange.size
+            assert state.last_avg_price == exchange.avg
+            assert exchange.stop >= plan.stop_loss
+
+    asyncio.run(run())
+
+
 def test_expiry_waits_for_entry_cancellation_before_freezing_quantity(tmp_path):
     class DelayedCancelExchange(Exchange):
         delay_cancellation = True
