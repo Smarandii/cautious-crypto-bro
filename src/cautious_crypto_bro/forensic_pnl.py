@@ -267,6 +267,9 @@ def _finish_positions(positions: list[dict]) -> None:
         )
         position["complete"] = (
             position["closed_fraction"] >= 0.99
+            # Preserve the underfill allowance, but tolerate only float
+            # roundoff above entry fills, never extra closed trades.
+            and position["closed_fraction"] <= 1.0 + 1e-9
             and position["ambiguous_rows"] == 0
             and position["pnl_rows"] > 0
         )
