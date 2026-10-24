@@ -282,14 +282,31 @@ def test_authorization_failures_in_history_paths_reach_operator(
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("fail_recovery_once", [False, True])
 def test_channel_read_outage_escalates_without_disconnecting_valid_session(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, fail_recovery_once
 ):
     async def run():
+        now = [0.0]
+        monkeypatch.setattr(source_recovery, "monotonic", lambda: now[0])
         client = RecoveringClient(authorized=True)
         client.fail_history_after = 0
         client.history_error_auth = False
         h = harness(monkeypatch, tmp_path, client)
+        original_send = h.bot._bot.send_message
+        recovery_attempts = []
+        failed = asyncio.Event()
+
+        async def send(*args, **kwargs):
+            text = kwargs.get("text", args[1] if len(args) > 1 else "")
+            if "reader restored" in text:
+                recovery_attempts.append(now[0])
+                if fail_recovery_once and len(recovery_attempts) == 1:
+                    failed.set()
+                    raise OSError("synthetic recovery notification failure")
+            return await original_send(*args, **kwargs)
+
+        monkeypatch.setattr(h.bot._bot, "send_message", send)
         task = asyncio.create_task(h.recovery.run())
         try:
             await notice(h, "HUMAN REVIEW REQUIRED")
@@ -299,9 +316,17 @@ def test_channel_read_outage_escalates_without_disconnecting_valid_session(
             assert client.qrs == 0 and "already authorized" in h.messages[-1][1]
             client.fail_history_after = None
             await h.source.poll_once()
+            if fail_recovery_once:
+                await asyncio.wait_for(failed.wait(), 3)
+                await asyncio.sleep(0.05)
+                assert recovery_attempts == [0.0]
+                assert h.recovery.state == "ONLINE" and not task.done()
+                now[0] = h.recovery._retry_seconds
             await notice(h, "reader restored")
             assert h.recovery.state == "ONLINE" and client.starts == 1
             assert len(client.handlers) == 2
+            await asyncio.sleep(0.05)
+            assert len(recovery_attempts) == (2 if fail_recovery_once else 1)
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
