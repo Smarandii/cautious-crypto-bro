@@ -23,6 +23,48 @@ pytestmark = pytest.mark.integration
 MISSING = object()
 
 
+@pytest.mark.parametrize("position_idx", [0, 1, 2])
+@pytest.mark.parametrize("size", ["0", "1"])
+def test_hedge_mode_snapshots_fail_before_position_actions(position_idx, size):
+    class PositionModeExchange(ExposureFieldsExchange):
+        def handle(self, request):
+            response = super().handle(request)
+            if request.url.path == "/v5/position/list":
+                data = response.json()
+                for row in data["result"]["list"]:
+                    row["size"] = size
+                return httpx.Response(200, json=data)
+            return response
+
+    async def run():
+        exchange = PositionModeExchange("position", "positionIdx", position_idx)
+        action = PositionActionIntent(
+            source=source("Close BTCUSDT"),
+            symbol="BTCUSDT",
+            action=PositionActionType.CLOSE,
+            expected_side=Side.LONG,
+            summary="Close position",
+            confidence=1,
+        )
+        with executor_for(exchange) as executor:
+            if position_idx == 0:
+                account = await executor.account_state()
+                assert len(account.positions) == int(size)
+            else:
+                with pytest.raises(TradeExecutionError, match="one-way position mode"):
+                    await executor.account_state()
+                with pytest.raises(TradeExecutionError, match="one-way position mode"):
+                    await executor.execute_position_action(action)
+        assert not exchange.orders
+        assert not any(
+            path
+            in {"/v5/order/cancel", "/v5/order/create", "/v5/position/trading-stop"}
+            for path, _ in exchange.requests
+        )
+
+    asyncio.run(run())
+
+
 class ExposureFieldsExchange(Exchange):
     def __init__(self, kind, field, value):
         super().__init__()
