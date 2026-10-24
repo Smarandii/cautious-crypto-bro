@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import TYPE_CHECKING
 
-from ..domain import Side, TakeProfitSource
+from ..domain import Side, TakeProfitSource, TradeExecutionError
 from ._helpers import _find_position, _matches_exit, _round_down, _round_price
 from .fill_detector import FillDetector
 from .trailing_stop_manager import TrailingStopManager
@@ -198,6 +198,7 @@ class ExitInstaller:
     ) -> None:
         # The new revision is durable before replacing older owned exits.
         prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-t"
+        cancelled_ids = set()
         for order in account.open_orders:
             if (
                 order.symbol == state.symbol
@@ -206,6 +207,13 @@ class ExitInstaller:
                 and not order.order_link_id.endswith(f"r{state.exit_revision}")
             ):
                 await self._executor.cancel_order(state.symbol, order.order_id)
+                cancelled_ids.add(order.order_id)
+        if cancelled_ids:
+            verified = await self._executor.account_state()
+            if any(order.order_id in cancelled_ids for order in verified.open_orders):
+                raise TradeExecutionError(
+                    "Bybit exit cancellation is not confirmed; refusing replacement exits"
+                )
 
     async def _confirm_protection_and_handoff(
         self,
