@@ -60,6 +60,8 @@ def test_opt_in_precedes_docker(monkeypatch):
 def test_runner_lifecycle(
     tmp_path, monkeypatch, records, process_exit, expected_exit, resumes
 ):
+    image = "sha256:" + "a" * 64
+    monkeypatch.setenv("CCB_IMAGE", "stale-image:local")
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "e2e_bybit_demo.py").write_text(
         "# fixture", encoding="utf-8"
@@ -73,8 +75,12 @@ def test_runner_lifecycle(
         if args[:3] == ("docker", "compose", "ps"):
             output = "app-container"
         elif args[:2] == ("docker", "inspect"):
-            output = json.dumps(
-                {"Running": True, "Paused": False, "StartedAt": "original"}
+            output = (
+                image
+                if args[-1] == "{{.Image}}"
+                else json.dumps(
+                    {"Running": True, "Paused": False, "StartedAt": "original"}
+                )
             )
         elif args[:2] == ("git", "rev-parse"):
             output = "commit"
@@ -84,6 +90,10 @@ def test_runner_lifecycle(
 
     def process(args, **kwargs):
         calls.append(tuple(args))
+        assert kwargs.get("env", {}).get("CCB_IMAGE") == image, (
+            "E2E must run the deployed image, regardless of the default Compose tag"
+        )
+        assert args[args.index("--pull") + 1] == "never"
         return SimpleNamespace(
             stdout=io.StringIO("\n".join(json.dumps(r) for r in records)),
             wait=lambda: process_exit,
@@ -98,5 +108,6 @@ def test_runner_lifecycle(
     evidence = next((tmp_path / "audit-artifacts").iterdir())
     manifest = json.loads((evidence / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["normal_started_at"] == "original"
+    assert manifest["runtime_image"] == image
     assert len(manifest["suite_sha256"]) == 64
     assert len(manifest["runner_sha256"]) == 64

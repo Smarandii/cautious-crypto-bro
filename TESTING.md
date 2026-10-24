@@ -555,6 +555,10 @@ process only after verified cleanup. Other symbols remain untouched; their nativ
 protection continues while app reconciliation pauses. No Telegram messages, LLM
 calls, production migrations or deployment occur.
 
+The suite uses the running app's immutable image ID, overriding `CCB_IMAGE` for
+the test process and disabling image pulls. Deploy the intended version before
+running this check; local source edits are not loaded into the test container.
+
 Scenarios: staged entry/rebasing; stop handoff and target caps; fresh-process restart;
 interrupted exit installation; changed/removed stops; TP fill and entry freeze;
 Russian 25% REDUCE/rebalance; accepted-but-unconfirmed reduction quarantine; CLOSE
@@ -562,7 +566,9 @@ and zero-position/order cleanup. Partial-fill timing and fills during installati
 are also tested deterministically.
 
 Evidence: `audit-artifacts/bybit-demo-<timestamp>/results.jsonl` and `manifest.json`
-record checks, cleanup receipts, revision, dirty files, hashes and app identity.
+record checks, cleanup receipts, checkout revision/dirty files/hashes, app identity
+and the exact runtime image tested. Checkout metadata does not prove that local
+source edits are deployed.
 If cleanup fails, the app stays paused. Inspect DOGE exposure and evidence before
 unpausing; host/Docker failures also need manual inspection.
 
