@@ -222,7 +222,7 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
         {"category": "linear"},
         start_ms,
         end_ms,
-        limit=1_000,
+        limit=100,
     )
     entry_order_ids = {
         str(order_id) for plan, order_ids, *_ in plans for order_id in order_ids
@@ -276,7 +276,7 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
         {"accountType": "UNIFIED", "category": "linear"},
         start_ms,
         end_ms,
-        limit=100,
+        limit=50,
     )
     closed_pnl = _historical_rows(
         client,

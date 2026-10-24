@@ -1,16 +1,21 @@
 """Forensic export coverage includes unfilled randomized assignments."""
 
+import json
+import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from cautious_crypto_bro.bybit.client import DEMO_BASE_URL, BybitClient
 from cautious_crypto_bro.domain import TradeExecutionError
+from cautious_crypto_bro.forensic_pnl import reconcile
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+import export_forensic_replay as exporter  # noqa: E402
 from export_forensic_replay import (  # noqa: E402
     MARKET_CANDLE_LOOKBACK_MS,
     _historical_rows,
@@ -103,3 +108,130 @@ def test_history_export_rejects_malformed_pages(page) -> None:
             _historical_rows(client, "/v5/position/closed-pnl", {}, 0, 1000, limit=100)
     finally:
         client.close()
+
+
+def test_export_bundle_uses_supported_private_page_sizes(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "state.sqlite3"
+    now = datetime.now(UTC)
+    timestamp = int(now.timestamp() * 1000)
+    with sqlite3.connect(database_path) as database:
+        database.executescript(
+            """
+            CREATE TABLE execution_plans (
+                intent_id TEXT, payload_json TEXT, bybit_order_ids_json TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE intents (
+                intent_id TEXT, status TEXT, approval_mode TEXT, payload_json TEXT
+            );
+            CREATE TABLE position_actions (
+                payload_json TEXT, status TEXT, bybit_order_id TEXT, created_at TEXT
+            );
+            """
+        )
+        database.execute(
+            "INSERT INTO execution_plans VALUES (?,?,?,?)",
+            (
+                "intent-1",
+                json.dumps(
+                    {
+                        "strategy_version": 2,
+                        "symbol": "BTCUSDT",
+                        "side": "LONG",
+                        "stop_loss": "90",
+                    }
+                ),
+                '["entry-1"]',
+                now.isoformat(),
+            ),
+        )
+        database.execute(
+            "INSERT INTO intents VALUES (?,?,?,?)",
+            ("intent-1", "EXECUTED", "AUTO", "{}"),
+        )
+
+    pages = {
+        "/v5/execution/list": (
+            100,
+            [
+                {
+                    "execType": "Trade",
+                    "orderId": "entry-1",
+                    "execTime": str(timestamp),
+                    "execQty": "2",
+                    "execPrice": "100",
+                    "closedSize": "0",
+                }
+            ],
+        ),
+        "/v5/account/transaction-log": (
+            50,
+            [
+                {
+                    "type": "SETTLEMENT",
+                    "symbol": "BTCUSDT",
+                    "transactionTime": str(timestamp),
+                    "funding": "-1",
+                }
+            ],
+        ),
+        "/v5/position/closed-pnl": (
+            100,
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "side": "Sell",
+                    "updatedTime": str(timestamp),
+                    "closedSize": "2",
+                    "closedPnl": "17",
+                }
+            ],
+        ),
+        "/v5/order/history": (50, []),
+        "/v5/order/realtime": (50, []),
+        "/v5/position/list": (200, []),
+    }
+    seen = set()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/v5/market/time":
+            return httpx.Response(200, json={"retCode": 0, "time": timestamp})
+        if path == "/v5/market/kline":
+            return httpx.Response(200, json={"retCode": 0, "result": {"list": []}})
+        maximum, rows = pages[path]
+        if int(request.url.params["limit"]) > maximum:
+            return httpx.Response(
+                200, json={"retCode": 10001, "retMsg": "limit exceeds endpoint maximum"}
+            )
+        seen.add(path)
+        return httpx.Response(
+            200, json={"retCode": 0, "result": {"list": rows, "nextPageCursor": ""}}
+        )
+
+    client = BybitClient(DEMO_BASE_URL, "synthetic-key", "synthetic-secret")
+    client._http_client.close()
+    client._http_client = httpx.Client(
+        base_url=DEMO_BASE_URL, transport=httpx.MockTransport(respond)
+    )
+    monkeypatch.setattr(exporter, "BybitClient", lambda **kwargs: client)
+    monkeypatch.setattr(
+        exporter,
+        "get_settings",
+        lambda: SimpleNamespace(
+            database_path=database_path,
+            bybit_api_key="synthetic-key",
+            bybit_api_secret="synthetic-secret",
+        ),
+    )
+    bundle = tmp_path / "export.zip"
+    try:
+        metadata = exporter.export_bundle(bundle)
+    finally:
+        client.close()
+    assert seen == set(pages)
+    assert metadata["filled_v2_cases"] == 1
+    positions = reconcile(bundle)
+    assert len(positions) == 1 and positions[0]["complete"]
+    assert positions[0]["net_pnl"] == 17
+    assert positions[0]["funding"] == -1
