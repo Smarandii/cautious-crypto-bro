@@ -20,17 +20,13 @@ class FillDetector:
     async def drift_reason(
         self, state: PositionStrategy, account: AccountStateSummary
     ) -> str | None:
-        if state.exit_revision <= 0 or state.rebalance_needed:
+        if state.exit_revision <= 0 or (
+            state.rebalance_needed and not state.installing_exits
+        ):
             return None
         if state.expected_exits is None:
             return "Legacy exit snapshot unavailable; manual review required"
-        prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-t"
-        if any(
-            order.symbol == state.symbol
-            and order.order_link_id.startswith(prefix)
-            and order.order_link_id not in state.expected_exits
-            for order in account.open_orders
-        ):
+        if self._has_unexpected_exit(state, account):
             return "Unexpected owned fixed exit outside the saved revision"
         completed = {
             self.exit_link_id(state, index)
@@ -53,6 +49,9 @@ class FillDetector:
             if order is None:
                 order = await self._executor.strategy_order(state.symbol, link)
             if order is None:
+                if state.installing_exits:
+                    # A crash can leave saved legs not yet submitted.
+                    continue
                 return f"Owned exit missing or unconfirmed: {link}"
             if not _matches_exit(order, state.side, quantity, price):
                 return (
@@ -61,6 +60,25 @@ class FillDetector:
                     f"live={order.quantity}/{order.price}"
                 )
         return None
+
+    @staticmethod
+    def _has_unexpected_exit(
+        state: PositionStrategy, account: AccountStateSummary
+    ) -> bool:
+        prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-t"
+        for order in account.open_orders:
+            if (
+                order.symbol == state.symbol
+                and order.order_link_id.startswith(prefix)
+                and order.order_link_id not in (state.expected_exits or {})
+            ):
+                if state.installing_exits:
+                    # Older revisions can remain while cancellation is pending.
+                    revision = order.order_link_id.rsplit("r", 1)[-1]
+                    if revision.isdecimal() and int(revision) < state.exit_revision:
+                        continue
+                return True
+        return False
 
     async def detect(
         self,

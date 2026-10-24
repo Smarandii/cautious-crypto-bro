@@ -525,6 +525,9 @@ class PositionSupervisor:
         account: AccountStateSummary,
         position: AccountPosition,
     ) -> AccountStateSummary:
+        exit_drift = await self._fill_detector.drift_reason(state, account)
+        if exit_drift is not None:
+            return await self._manual_override(state, account, exit_drift)
         # Resume the same revision and sizing snapshot; completed orders retain
         # their unique IDs in exchange history and must never be resubmitted.
         snapshot = replace(
