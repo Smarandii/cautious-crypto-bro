@@ -557,7 +557,8 @@ def test_unexpected_position_protection_pauses_before_other_mutations(
 
 
 @pytest.mark.parametrize("change", [None, "cancel", "price"])
-def test_fixed_exit_drift_blocks_partial_stop_handoff(tmp_path, change):
+@pytest.mark.parametrize("installing", [False, True])
+def test_fixed_exit_drift_blocks_partial_stop_handoff(tmp_path, change, installing):
     class HandoffExchange(Exchange):
         def handle(self, request):
             response = super().handle(request)
@@ -586,6 +587,10 @@ def test_fixed_exit_drift_blocks_partial_stop_handoff(tmp_path, change):
             exchange.mark = Decimal("102")
             await supervisor.reconcile_once()
             state = await state_for(store)
+            if installing:
+                await store.save_position_strategy(
+                    state.model_copy(update={"installing_exits": True})
+                )
             target = next(
                 order for order in exchange.exits() if "-t1r" in order["orderLinkId"]
             )
@@ -616,7 +621,13 @@ def test_fixed_exit_drift_blocks_partial_stop_handoff(tmp_path, change):
             restarted = PositionSupervisor(
                 store=reopened, executor=executor, mutation_lock=asyncio.Lock()
             )
-            await restarted.reconcile_once()
+            try:
+                await restarted.reconcile_once()
+            finally:
+                if change is not None:
+                    assert (
+                        exchange.orders["attached-stop"]["orderStatus"] == "Untriggered"
+                    )
             alerts = await reopened.get_pending_strategy_alerts()
             if change is None:
                 assert not alerts
@@ -629,7 +640,6 @@ def test_fixed_exit_drift_blocks_partial_stop_handoff(tmp_path, change):
                     len(alerts) == 1 and target["orderLinkId"] in alerts[0].pause_reason
                 )
                 assert alerts[0].status is StrategyStatus.MANUAL_OVERRIDE
-                assert exchange.orders["attached-stop"]["orderStatus"] == "Untriggered"
                 assert not any(
                     path
                     in {
