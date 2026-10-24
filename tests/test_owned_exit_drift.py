@@ -1,6 +1,7 @@
 """Owned-exit supervision through real SQLite, HTTP adapter, and alert delivery."""
 
 import asyncio
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -12,7 +13,12 @@ import pytest
 from test_remaining_concerns import Exchange, executor_for, prepare, state_for
 
 from cautious_crypto_bro.approval_bot import ApprovalBot
-from cautious_crypto_bro.domain import ApprovalMode, IntentStatus, StrategyStatus
+from cautious_crypto_bro.domain import (
+    ApprovalMode,
+    IntentStatus,
+    StrategyStatus,
+    TradeExecutionError,
+)
 from cautious_crypto_bro.position_supervisor import PositionSupervisor
 from cautious_crypto_bro.storage import (
     LATEST_SCHEMA_SQL,
@@ -21,6 +27,73 @@ from cautious_crypto_bro.storage import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def test_expiry_waits_for_entry_cancellation_before_freezing_quantity(tmp_path):
+    class DelayedCancelExchange(Exchange):
+        delay_cancellation = True
+
+        def handle(self, request):
+            if self.delay_cancellation and request.url.path == "/v5/order/cancel":
+                body = json.loads(request.content)
+                self.requests.append((request.url.path, body))
+                return httpx.Response(
+                    200, json={"retCode": 0, "result": {"orderId": body["orderId"]}}
+                )
+            return super().handle(request)
+
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = DelayedCancelExchange()
+        with executor_for(exchange) as executor:
+            store, intent, plan, coordinator, supervisor = await prepare(
+                database, exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            await store.update_execution_plan(
+                plan.model_copy(
+                    update={
+                        "created_at": datetime.now(UTC) - timedelta(days=1),
+                        "policy": plan.policy.model_copy(
+                            update={
+                                "strategy_v2": plan.policy.strategy_v2.model_copy(
+                                    update={"entry_order_ttl_minutes": 1}
+                                )
+                            }
+                        ),
+                    }
+                )
+            )
+            before = len(exchange.requests)
+            with pytest.raises(TradeExecutionError, match="cancellation.*confirmed"):
+                await supervisor.reconcile_once()
+            state = await state_for(IntentStore(database))
+            assert not state.entry_frozen and state.exit_revision == 0
+            assert exchange.stop == plan.stop_loss and exchange.size > 0
+            assert any(
+                path == "/v5/order/cancel" for path, _ in exchange.requests[before:]
+            )
+            assert not any(
+                path in {"/v5/order/create", "/v5/position/trading-stop"}
+                for path, _ in exchange.requests[before:]
+            )
+            exchange.delay_cancellation = False
+            restarted = PositionSupervisor(
+                store=IntentStore(database),
+                executor=executor,
+                mutation_lock=asyncio.Lock(),
+            )
+            await restarted.reconcile_once()
+            state = await state_for(IntentStore(database))
+            assert state.entry_frozen and state.expected_exits
+            assert not any(
+                o["orderStatus"] == "New" and not o["reduceOnly"]
+                for o in exchange.orders.values()
+            )
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("phase", ["initial", "managed", "installing"])
