@@ -29,6 +29,83 @@ from cautious_crypto_bro.storage import (
 pytestmark = pytest.mark.integration
 
 
+def test_rebalance_waits_for_old_exit_cancellation_before_replacement(tmp_path):
+    class DelayedExitCancellation(Exchange):
+        delay_exits = False
+
+        def handle(self, request):
+            if self.delay_exits and request.url.path == "/v5/order/cancel":
+                body = json.loads(request.content)
+                order = next(
+                    o
+                    for o in self.orders.values()
+                    if o["orderId"] == body.get("orderId")
+                    or o["orderLinkId"] == body.get("orderLinkId")
+                )
+                if order["reduceOnly"]:
+                    self.requests.append((request.url.path, body))
+                    return httpx.Response(
+                        200,
+                        json={"retCode": 0, "result": {"orderId": order["orderId"]}},
+                    )
+            return super().handle(request)
+
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = DelayedExitCancellation()
+        with executor_for(exchange) as executor:
+            store, intent, plan, coordinator, supervisor = await prepare(
+                database, exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            await supervisor.reconcile_once()
+            state = await state_for(store)
+            old_links = set(state.expected_exits)
+            assert len(old_links) == 3
+            await executor.cancel_pending_entries(state.symbol)
+            await store.save_position_strategy(
+                state.model_copy(
+                    update={
+                        "entry_frozen": True,
+                        "base_position_qty": exchange.size,
+                        "rebalance_needed": True,
+                    }
+                )
+            )
+            exchange.delay_exits = True
+            before = len(exchange.requests)
+            with pytest.raises(
+                TradeExecutionError, match="exit.*cancellation.*confirmed"
+            ):
+                await supervisor.reconcile_once()
+            reopened = IntentStore(database)
+            state = await state_for(reopened)
+            assert state.installing_exits
+            assert exchange.stop == plan.stop_loss
+            assert all(
+                exchange.orders[link]["orderStatus"] == "New" for link in old_links
+            )
+            assert not any(
+                path == "/v5/order/create" for path, _ in exchange.requests[before:]
+            )
+            exchange.delay_exits = False
+            restarted = PositionSupervisor(
+                store=reopened, executor=executor, mutation_lock=asyncio.Lock()
+            )
+            await restarted.reconcile_once()
+            state = await state_for(IntentStore(database))
+            assert not state.installing_exits and len(state.expected_exits) == 3
+            assert set(state.expected_exits).isdisjoint(old_links)
+            assert all(
+                exchange.orders[link]["orderStatus"] == "Cancelled"
+                for link in old_links
+            )
+
+    asyncio.run(run())
+
+
 def test_expiry_freeze_includes_fill_during_cancellation_confirmation(tmp_path):
     class LateFillExchange(Exchange):
         confirmation_reads = None
