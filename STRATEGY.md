@@ -16,6 +16,9 @@ the LIMIT/RANGE batch, Bybit must accept that leverage for both sides of the
 one-way symbol. An already-matching setting succeeds; unsupported leverage or
 other setting failures reject the entry without submitting orders. E2/E3 retain
 the leverage applied before E1. Historical plans without leverage default to 10x.
+Snapshots explicitly identifying hedge-mode positions are rejected before
+exposure checks or position actions, including flat legs. Mode is never switched
+automatically; the adapter requires one-way mode.
 
 Trader stops take precedence. Otherwise a 2% fallback uses the MARKET snapshot,
 LIMIT price, or adverse RANGE edge (LONG lower / SHORT upper). Stops round outward

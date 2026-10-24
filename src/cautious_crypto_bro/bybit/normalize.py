@@ -66,7 +66,14 @@ def _required_quantity(value: object, name: str) -> Decimal:
     return quantity
 
 
+def _require_one_way_position(item: dict) -> None:
+    position_idx = item.get("positionIdx", 0)
+    if type(position_idx) is not int or position_idx != 0:
+        raise TradeExecutionError("Bybit adapter requires one-way position mode")
+
+
 def account_position_from_item(item: dict) -> AccountPosition | None:
+    _require_one_way_position(item)
     size = _required_quantity(item.get("size"), "position size")
 
     if size <= 0:
@@ -117,6 +124,7 @@ def position_exposure_from_item(item: object) -> PositionExposure | None:
     ):
         raise TradeExecutionError("Bybit position is not an object")
 
+    _require_one_way_position(item)
     size = _required_quantity(item.get("size"), "position size")
 
     if size <= 0:
