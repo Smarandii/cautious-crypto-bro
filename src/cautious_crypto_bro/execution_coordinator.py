@@ -141,28 +141,54 @@ class ExecutionCoordinator:
         result: PositionActionExecutionResult,
     ) -> None:
         expected_remaining = self._expected_remaining(action, result)
+        # Another actor can move the position before our order finishes.
+        order_confirmed = False
 
         for attempt in range(20):
-            state = await self._executor.account_state()
-
-            if self._confirms_position_action(
-                action,
-                result,
-                state,
-                expected_remaining,
-            ):
-                return
+            if not order_confirmed:
+                order_confirmed = await self._action_order_filled(action, result)
+            if order_confirmed:
+                state = await self._executor.account_state()
+                if self._confirms_position_action(
+                    action, result, state, expected_remaining
+                ):
+                    return
 
             if attempt < 19:
                 await asyncio.sleep(0.25)
 
-        if action.action is PositionActionType.CLOSE:
+        if not order_confirmed:
+            detail = "market order fill is unconfirmed"
+        elif action.action is PositionActionType.CLOSE:
             detail = "position is still open"
         else:
             detail = "position quantity did not reach the submitted REDUCE target"
 
         raise PositionActionConfirmationError(
             f"Bybit accepted position action {result.order_id}, but {detail}"
+        )
+
+    async def _action_order_filled(
+        self, action: PositionActionIntent, result: PositionActionExecutionResult
+    ) -> bool:
+        order = await self._executor.strategy_order(
+            action.symbol, f"ccb-action-{action.action_id.hex[:24]}"
+        )
+        if order is None:
+            return False
+        if order.order_id != result.order_id:
+            raise PositionActionConfirmationError("Action order identity mismatch")
+        if (
+            order.status
+            in {"Cancelled", "Rejected", "Deactivated", "PartiallyFilledCanceled"}
+            and order.executed_quantity <= 0
+        ):
+            raise PositionActionConfirmationError(
+                f"Action order ended without a fill: {order.status}"
+            )
+        return (
+            order.status in {"Filled", "Cancelled", "PartiallyFilledCanceled"}
+            and order.executed_quantity > 0
         )
 
     @staticmethod

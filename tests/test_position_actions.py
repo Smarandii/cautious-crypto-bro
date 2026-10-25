@@ -10,6 +10,7 @@ import httpx
 
 from cautious_crypto_bro.bybit import BybitClient, BybitDemoExecutor
 from cautious_crypto_bro.domain import (
+    AccountOrder,
     AccountPosition,
     AccountStateSummary,
     ApprovalMode,
@@ -359,6 +360,23 @@ class CoordinatorExecutor:
             submitted_quantity=(Decimal("3")),
             cancelled_entry_orders=2,
             cancelled_exit_orders=3,
+        )
+
+    async def strategy_order(self, symbol, link_id):
+        return AccountOrder(
+            symbol=symbol,
+            side=Side.SHORT,
+            order_type="Market",
+            status="Filled",
+            quantity=Decimal("3"),
+            remaining_quantity=Decimal("0"),
+            price=None,
+            avg_price=Decimal("2.2"),
+            order_id="reduce-confirm-test",
+            order_link_id=link_id,
+            reduce_only=True,
+            executed_quantity=Decimal("3"),
+            updated_at=datetime.now(UTC),
         )
 
     async def account_state(self):
