@@ -152,14 +152,14 @@ class SourceRecovery:
             self._outage = False
             self._next_recovery_notice = 0
 
-    async def _monitor_reads(self) -> None:
+    async def _monitor_reads(self, startup_complete: asyncio.Event) -> None:
         while True:
             warnings = self._source.read_warnings()
             if warnings:
                 self.state, self.reason = "DEGRADED", "; ".join(warnings)
                 self._outage = True
                 await self._alert()
-            else:
+            elif startup_complete.is_set():
                 if self.state == "DEGRADED":
                     self.state, self.reason = "ONLINE", ""
                 await self._announce_restored()
@@ -170,17 +170,17 @@ class SourceRecovery:
         if user_id is None:
             raise SourceAuthorizationRequired("Telegram authorization required")
         self._pin_user(user_id)
-        await self._source.start()
-        warnings = self._source.read_warnings()
-        self.state = "DEGRADED" if warnings else "ONLINE"
-        self.reason = "; ".join(warnings)
-        self._manual_reason = None
-        self.last_online = datetime.now(UTC)
-        if not warnings:
-            await self._announce_restored()
+        startup_complete = asyncio.Event()
         async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(self._monitor_reads(startup_complete))
+            await self._source.start()
+            warnings = self._source.read_warnings()
+            self.state = "DEGRADED" if warnings else "ONLINE"
+            self.reason = "; ".join(warnings)
+            self._manual_reason = None
+            self.last_online = datetime.now(UTC)
+            startup_complete.set()
             tasks.create_task(self._source.run_catchup())
-            tasks.create_task(self._monitor_reads())
             await self._source.run_until_disconnected()
 
     async def run(self) -> None:

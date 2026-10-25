@@ -10,6 +10,7 @@ import aiosqlite
 import httpx
 import pytest
 from test_remaining_concerns import Exchange, executor_for, make_intent
+from test_source_recovery import RecoveringClient, harness, notice
 from test_telegram_source import FakeMessage, FakeTelegramClient
 
 from cautious_crypto_bro import telegram_source
@@ -131,6 +132,112 @@ def workflow(store, executor, provider, *, mode=AutoApprovalMode.OPEN_ONLY):
     )
     supervisor = PositionSupervisor(store=store, executor=executor, mutation_lock=lock)
     return service, bot, supervisor
+
+
+@pytest.mark.parametrize("path", ["catchup", "live", "startup"])
+def test_durable_model_failure_reaches_operator_without_blocking_later_posts(
+    tmp_path, monkeypatch, path
+):
+    class OutageModel(ModelTransport):
+        unavailable = True
+
+        def __init__(self):
+            super().__init__()
+            self.startup_blocked = asyncio.Event()
+            self.release_startup = asyncio.Event()
+
+        async def complete(self, request):
+            if path == "startup" and not request.images and self.unavailable:
+                self.startup_blocked.set()
+                await self.release_startup.wait()
+            if self.unavailable and request.images:
+                self.image_requests += 1
+                raise RuntimeError("Temporary model outage")
+            self.fail_image_once = False
+            return await super().complete(request)
+
+    async def run():
+        database = tmp_path / "state.db"
+        store = IntentStore(database)
+        await store.initialize()
+        provider = OutageModel()
+        client = RecoveringClient(authorized=True)
+
+        async def retry_ids(channel):
+            return await store.get_retryable_source_message_ids(
+                channel, lease_seconds=300
+            )
+
+        h = harness(monkeypatch, tmp_path, client, retry_ids=retry_ids)
+        exchange = ExchangeTransport()
+        with executor_for(exchange) as executor:
+            service, bot, _ = workflow(store, executor, provider)
+            h.source._on_message = service.on_message
+            messages = [
+                FakeMessage(
+                    message_id=1,
+                    published_at=datetime.now(UTC),
+                    text="Enter BTCUSDT LONG at market, stop 90",
+                    image=b"chart",
+                ),
+                FakeMessage(
+                    message_id=2,
+                    published_at=datetime.now(UTC),
+                    text="Commentary",
+                ),
+            ]
+            if path == "startup":
+                client.messages = messages
+                h.source._watermarks[-1001234567890] = 0
+                h.recovery._outage = True
+            task = asyncio.create_task(h.recovery.run())
+            try:
+                with patch.object(bot._bot, "send_message", new=AsyncMock()):
+                    if path == "startup":
+                        await asyncio.wait_for(provider.startup_blocked.wait(), 3)
+                        await notice(h, "HUMAN REVIEW REQUIRED")
+                        assert not client.listening.is_set()
+                        assert not any(
+                            "reader restored" in text for _, text in h.messages
+                        )
+                        provider.release_startup.set()
+                    await asyncio.wait_for(client.listening.wait(), 3)
+                    client.messages = messages
+                    if path == "live":
+                        await h.source._handle_messages(
+                            client.messages[:1], chat=client.entity
+                        )
+                        await notice(h, "HUMAN REVIEW REQUIRED")
+                    if path != "startup":
+                        await h.source.poll_once()
+                    async with aiosqlite.connect(database) as db:
+                        rows = await (
+                            await db.execute(
+                                "SELECT message_id,status FROM source_messages ORDER BY message_id"
+                            )
+                        ).fetchall()
+                    assert rows == [(1, "FAILED"), (2, "COMPLETED")]
+                    assert h.source._watermarks[-1001234567890] == 2
+                    assert exchange.size == 0
+                    if path == "catchup":
+                        await notice(h, "HUMAN REVIEW REQUIRED")
+                    assert h.recovery.state == "DEGRADED"
+                    attempts = provider.image_requests
+                    provider.unavailable = False
+                    await h.source.poll_once()
+                    await notice(h, "reader restored")
+                    assert h.recovery.state == "ONLINE" and not h.source.read_warnings()
+                    assert provider.image_requests == attempts + 1
+                    assert not await retry_ids(-1001234567890)
+                    assert exchange.size > 0 and exchange.stop == Decimal("90")
+                    assert client.starts == 1 and client.qrs == 0
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                await bot.close()
+                await h.bot.close()
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("retry_state", ["failed", "stale_claim", "active_claim"])

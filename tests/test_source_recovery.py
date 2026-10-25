@@ -211,6 +211,12 @@ def test_media_processing_outage_reaches_operator_and_recovers(
         client = RecoveringClient(authorized=True)
         retry_ids = AsyncMock(return_value=()) if path != "catchup" else None
         h = harness(monkeypatch, tmp_path, client, retry_ids=retry_ids)
+
+        async def completed(_post):
+            if retry_ids is not None:
+                retry_ids.return_value = ()
+
+        h.source._on_message.side_effect = completed
         task = asyncio.create_task(h.recovery.run())
         try:
             await asyncio.wait_for(client.listening.wait(), 3)
@@ -312,6 +318,15 @@ def test_channel_read_outage_escalates_without_disconnecting_valid_session(
             await notice(h, "HUMAN REVIEW REQUIRED")
             assert h.recovery.state == "DEGRADED" and not task.done()
             assert "OSError" in h.recovery.status()
+            await h.source._handle_messages(
+                (
+                    FakeMessage(
+                        message_id=1, published_at=datetime.now(UTC), text="Commentary"
+                    ),
+                ),
+                chat=client.entity,
+            )
+            assert h.source.read_warnings(), "Live success hid a history read failure"
             await command(h.bot, "/source_login")
             assert client.qrs == 0 and "already authorized" in h.messages[-1][1]
             client.fail_history_after = None
