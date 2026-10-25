@@ -123,6 +123,9 @@ async def owned(settings):
         events.append("cleanup.complete")
 
     runtime = SimpleNamespace(
+        store=SimpleNamespace(
+            pending_recovery_notices=AsyncMock(return_value=((), ()))
+        ),
         bot=bot,
         supervisor=SimpleNamespace(reconcile_once=AsyncMock(), run=forever),
         service=SimpleNamespace(
@@ -138,9 +141,7 @@ async def owned(settings):
     async with AsyncExitStack() as stack:
         stack.callback(cleanup)
         stack.push_async_callback(bot.close)
-        await app._run_application(
-            runtime, interrupted_intents=(), interrupted_actions=()
-        )
+        await app._run_application(runtime)
 
 
 app.get_settings = lambda: SimpleNamespace(log_level="INFO", database_path=database)

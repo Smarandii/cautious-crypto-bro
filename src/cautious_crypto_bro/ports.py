@@ -494,6 +494,14 @@ class PnlRepository(Protocol):
 
 
 class RecoveryRepository(Protocol):
+    async def pending_recovery_notices(
+        self,
+    ) -> tuple[tuple[UUID, ...], tuple[UUID, ...]]: ...
+
+    async def acknowledge_recovery_notices(
+        self, intent_ids: tuple[UUID, ...], action_ids: tuple[UUID, ...]
+    ) -> None: ...
+
     async def quarantine_interrupted_executions(
         self,
     ) -> tuple[tuple[UUID, ...], tuple[UUID, ...]]: ...

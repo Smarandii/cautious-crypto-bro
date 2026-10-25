@@ -7,7 +7,6 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from time import monotonic
 from types import FrameType
-from uuid import UUID
 
 from .approval_bot import BYBIT_IP_BINDING_HELP, ApprovalBot
 from .bybit import BybitDemoExecutor
@@ -71,10 +70,7 @@ async def async_main() -> None:
 async def _run_owned_application(settings: Settings) -> None:
     store = IntentStore(settings.database_path)
     await store.initialize()
-    (
-        interrupted_intents,
-        interrupted_actions,
-    ) = await store.quarantine_interrupted_executions()
+    await store.quarantine_interrupted_executions()
     stale_sources = await store.reset_stale_processing_sources(
         settings.source_processing_lease_seconds,
     )
@@ -92,17 +88,14 @@ async def _run_owned_application(settings: Settings) -> None:
             runtime_store=runtime_store,
             cleanup=cleanup,
         )
-        await _run_application(
-            runtime,
-            interrupted_intents=interrupted_intents,
-            interrupted_actions=interrupted_actions,
-        )
+        await _run_application(runtime)
 
 
 @dataclass(frozen=True, slots=True)
 class _Runtime:
     """Every collaborator the process needs, wired once at startup."""
 
+    store: IntentStore
     bot: ApprovalBot
     supervisor: PositionSupervisor
     service: SignalService
@@ -234,6 +227,7 @@ async def _build_runtime(
     bot.bind_source_recovery(source_recovery)
 
     return _Runtime(
+        store=store,
         bot=bot,
         supervisor=supervisor,
         service=service,
@@ -242,24 +236,13 @@ async def _build_runtime(
     )
 
 
-async def _run_application(
-    runtime: _Runtime,
-    *,
-    interrupted_intents: tuple[UUID, ...],
-    interrupted_actions: tuple[UUID, ...],
-) -> None:
+async def _run_application(runtime: _Runtime) -> None:
     runtime.bot.set_startup_blocked(
         "Startup reconciliation pending. Trading callbacks and signal ingestion are paused."
     )
     await runtime.bot.start()
     async with asyncio.TaskGroup() as tg:
-        tg.create_task(
-            _deliver_recovery_warning(
-                runtime,
-                uncertain_intents=len(interrupted_intents),
-                uncertain_actions=len(interrupted_actions),
-            )
-        )
+        tg.create_task(_deliver_recovery_warning(runtime))
         tg.create_task(runtime.bot.run())
         # Operator polling is live, but every trading callback remains gated.
         # Grug, Chesterton's Fence (faithful paraphrase): preserve the existing
@@ -288,16 +271,18 @@ async def _run_application(
 async def _deliver_recovery_warning(
     runtime: _Runtime,
     *,
-    uncertain_intents: int,
-    uncertain_actions: int,
     retry_seconds: float = 30,
 ) -> None:
     while True:
         try:
+            intent_ids, action_ids = await runtime.store.pending_recovery_notices()
+            if not intent_ids and not action_ids:
+                return
             await runtime.bot.send_recovery_warning(
-                uncertain_intents=uncertain_intents,
-                uncertain_actions=uncertain_actions,
+                uncertain_intents=len(intent_ids),
+                uncertain_actions=len(action_ids),
             )
+            await runtime.store.acknowledge_recovery_notices(intent_ids, action_ids)
             return
         except Exception:
             logging.getLogger(__name__).exception(

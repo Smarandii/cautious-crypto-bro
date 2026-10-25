@@ -120,19 +120,14 @@ def test_interrupted_execution_warning_is_retried_without_blocking_startup(
 
                 monkeypatch.setattr(app, "_deliver_recovery_warning", quick_warning)
             runtime = SimpleNamespace(
+                store=store,
                 bot=bot,
                 service=service,
                 supervisor=supervisor,
                 source_recovery=SimpleNamespace(run=source_run),
             )
             before = len(exchange.requests)
-            task = asyncio.create_task(
-                app._run_application(
-                    runtime,
-                    interrupted_intents=interrupted,
-                    interrupted_actions=actions,
-                )
-            )
+            task = asyncio.create_task(app._run_application(runtime))
             try:
                 async with asyncio.timeout(3):
                     await first_send.wait()
