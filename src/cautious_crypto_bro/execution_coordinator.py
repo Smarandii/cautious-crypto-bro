@@ -547,6 +547,9 @@ class ExecutionCoordinator:
         try:
             result = await self._executor.execute_position_action(action)
             await self._confirm_position_action(action, result)
+            # Final persistence can fail after the exchange action is confirmed.
+            # Retain the acknowledged order and quarantine before releasing the lock.
+            await self._store.complete_position_action(action, result.order_id)
 
         except PositionActionPreflightError as exc:
             return await self._preflight_failure_outcome(action_id, action, exc)
@@ -561,13 +564,6 @@ class ExecutionCoordinator:
             return await self._uncertain_outcome(action_id, action, result, exc)
 
         assert result is not None
-        # Status and resulting strategy rebalance/close must be durable
-        # before releasing the lock to the position supervisor.
-        await self._store.complete_position_action(
-            action,
-            result.order_id,
-        )
-
         return PositionActionExecutionOutcome(
             status=IntentStatus.EXECUTED,
             message="Executed on Bybit Demo",
