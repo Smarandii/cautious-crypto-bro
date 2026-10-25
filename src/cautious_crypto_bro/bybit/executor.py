@@ -873,12 +873,12 @@ class BybitDemoExecutor:
 
         average_price = parse_decimal(record.get("avgPrice"))
 
-        remaining = parse_decimal(record.get("leavesQty"))
-
+        # IOC cancellation can leave an unfilled remainder. A terminal status
+        # establishes the final executed quantity used to size E2/E3.
         if (
             filled_quantity > 0
             and average_price > 0
-            and (status == "Filled" or remaining <= 0)
+            and status in {"Filled", "Cancelled", "PartiallyFilledCanceled"}
         ):
             return MarketPrimaryExecutionResult(
                 order_id=order_id,
