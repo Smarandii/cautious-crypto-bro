@@ -27,6 +27,7 @@ pytestmark = pytest.mark.integration
         ("Фикс 25% сейчас", "REDUCE", 25),
         ("Фикс25%", "REDUCE", 25),
         ("Фикс 1/4", "REDUCE", 25),
+        ("Профит 80%, фикс 25% сейчас", "REDUCE", 25),
         ("Не фикс 25%", "REDUCE", None),
         ("Завтра фикс 25%", "REDUCE", None),
         ("Если вырастет, фикс 25%", "REDUCE", None),

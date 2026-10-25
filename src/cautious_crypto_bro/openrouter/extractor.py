@@ -1100,7 +1100,11 @@ def _reduce_close_pct(
     raw: ExtractedPositionAction,
     action_evidence: str,
 ) -> float | None:
-    close_pct = _reduction_pct_from_evidence(action_evidence)
+    shorthand = _SHORTHAND_REDUCE_PATTERN.search(
+        _normalize_evidence_text(action_evidence)
+    )
+    amount_evidence = shorthand.group(0) if shorthand else action_evidence
+    close_pct = _reduction_pct_from_evidence(amount_evidence)
 
     if close_pct is None:
         logger.warning(
