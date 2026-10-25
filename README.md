@@ -81,6 +81,12 @@ reminder for previously quarantined interrupted executions; see STRATEGY.md for
 migration and rollback requirements. Exchange executions are never replayed by
 this notification queue.
 
+Original production extraction and normalization decisions survive evaluation-cache
+expiry in SQLite schema 11. Use `scripts/report_source_coverage.py --database PATH
+--hours 24` for a read-only aggregate report without Telegram, Bybit or model calls.
+Historical missing decisions remain unknown; see STRATEGY.md for evidence privacy,
+upgrade and rollback requirements.
+
 SIGTERM requests application-wide shutdown, including partial startup. Polling
 stops accepting updates; active Telegram handlers and non-abortable exchange work
 drain before clients close and state ownership is released. Repeated SIGTERM does

@@ -930,6 +930,7 @@ def test_schema_8_upgrade_preserves_legacy_strategy_and_is_idempotent(tmp_path):
     with sqlite3.connect(database) as db:
         db.executescript(legacy_schema)
         db.execute("DROP TABLE interrupted_execution_notices")
+        db.execute("DROP TABLE source_decisions")
         db.execute("PRAGMA user_version = 8")
         db.execute(
             "INSERT INTO position_strategies(strategy_id, symbol, side, status, created_at, updated_at) "

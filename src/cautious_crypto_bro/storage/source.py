@@ -16,6 +16,32 @@ from ._connection import _Store, sqlite_connection
 
 
 class SourceRepositoryImpl(_Store):
+    async def record_source_decision(
+        self,
+        source: SourceMessage,
+        claim_token: str,
+        payload_json: str,
+    ) -> bool:
+        """Retain the owning attempt's decision independently of the model cache."""
+        async with sqlite_connection(self._database_path) as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO source_decisions(
+                    channel_id, message_id, claim_token, attempt_count, payload_json
+                )
+                SELECT channel_id, message_id, claim_token, attempt_count, ?
+                FROM source_messages
+                WHERE channel_id = ? AND message_id = ?
+                  AND status = 'PROCESSING' AND claim_token = ?
+                ON CONFLICT(channel_id, message_id, claim_token) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (payload_json, source.channel_id, source.message_id, claim_token),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
     async def get_retryable_source_message_ids(
         self,
         channel_id: int,

@@ -795,6 +795,9 @@ class SignalExtraction:
         PositionActionIntent,
         ...,
     ] = ()
+    raw_extraction: IntentExtraction | None = None
+    evaluation_fingerprint: str | None = None
+    evaluation_model: str | None = None
 
     @property
     def actionable(self) -> bool:

@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import unicodedata
+from dataclasses import replace
 
 from pydantic import ValidationError
 
@@ -1298,7 +1299,12 @@ class IntentExtractor:
                     cached_extraction,
                 )
 
-                return cached_signals
+                return replace(
+                    cached_signals,
+                    raw_extraction=cached_extraction,
+                    evaluation_fingerprint=evaluation_fingerprint,
+                    evaluation_model=self._cache_identity,
+                )
 
         response = await self._provider.complete(
             _extraction_request(
@@ -1327,4 +1333,9 @@ class IntentExtractor:
             extraction,
         )
 
-        return signals
+        return replace(
+            signals,
+            raw_extraction=extraction,
+            evaluation_fingerprint=evaluation_fingerprint,
+            evaluation_model=self._cache_identity,
+        )

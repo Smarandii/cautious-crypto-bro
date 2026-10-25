@@ -209,9 +209,9 @@ Pause alerts are retried from SQLite every 30 seconds, independently of exchange
 reconciliation. Delivery is at least once: a crash after Telegram accepts an alert
 but before SQLite records it can produce a duplicate.
 
-SQLite schema 10 supports migrations from 4–9 and preserves existing strategy rows.
+SQLite schema 11 supports migrations from 4–10 and preserves existing strategy rows.
 Before upgrading, stop the old app and back up its complete state; do not run old
-and new writers concurrently. Earlier images reject schema 10. Rollback requires
+and new writers concurrently. Earlier images reject schema 11. Rollback requires
 stopping the new app, reconciling any exchange changes since backup, and restoring
 a matching pre-upgrade database before starting the old image. Do not merely lower
 the schema version or overwrite current exchange protection.
@@ -224,6 +224,24 @@ schema-9 upgrade queues existing interrupted-execution uncertainty once because
 historical notification acknowledgements are unavailable. Previously warned
 records may therefore generate one upgrade reminder; unrelated uncertainty is
 not queued by this migration.
+
+Source decisions are retained per processing attempt in schema 11: original model
+extraction, fingerprint/model identity, original source and position context,
+normalized candidates, planning errors and produced record IDs. Approval and
+execution outcomes remain authoritative in their existing intent/action records.
+Decision writes require the current source claim and finish before a new signal
+batch can reach the exchange; a failed write leaves the source retryable. Completed
+attempts cannot be overwritten. This evidence has no Redis TTL and is included in
+the normal SQLite state backup. It contains private source/account context; do not
+publish the database or raw decision rows. Images and credentials are not copied.
+
+`scripts/report_source_coverage.py --database PATH --hours 24` reads SQLite only
+and prints aggregate dispositions and linked record statuses. Its window is source
+processing time, not publication time. Unknown historical evidence is explicit;
+no extraction is backfilled on upgrade. `audit_recent_signals.py` prefers original
+stored decisions without reconstructing context or re-normalizing them with new
+code. `--fresh` explicitly requests a new evaluation. Old cache-based fallbacks
+remain labeled separately and do not prove an original production decision.
 
 ## Randomized Demo LONG participation test
 

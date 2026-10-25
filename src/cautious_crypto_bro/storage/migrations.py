@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from ._connection import sqlite_connection
-from .schema import LATEST_SCHEMA_SQL, LATEST_SCHEMA_VERSION, RECOVERY_NOTICE_SCHEMA_SQL
+from .schema import (
+    LATEST_SCHEMA_SQL,
+    LATEST_SCHEMA_VERSION,
+    RECOVERY_NOTICE_SCHEMA_SQL,
+    SOURCE_DECISION_SCHEMA_SQL,
+)
 
 MIGRATION_4_TO_5_SQL = "\nCREATE TABLE IF NOT EXISTS position_strategies (\n    strategy_id TEXT PRIMARY KEY,\n    symbol TEXT NOT NULL,\n    side TEXT NOT NULL,\n    status TEXT NOT NULL,\n    entry_frozen INTEGER NOT NULL DEFAULT 0,\n    base_position_qty TEXT,\n    last_position_qty TEXT,\n    last_avg_price TEXT,\n    tp1_done INTEGER NOT NULL DEFAULT 0,\n    tp2_done INTEGER NOT NULL DEFAULT 0,\n    tp3_done INTEGER NOT NULL DEFAULT 0,\n    trailing_active INTEGER NOT NULL DEFAULT 0,\n    exit_revision INTEGER NOT NULL DEFAULT 0,\n    rebalance_needed INTEGER NOT NULL DEFAULT 0,\n    created_at TEXT NOT NULL,\n    updated_at TEXT NOT NULL\n);\n\nCREATE INDEX IF NOT EXISTS ix_position_strategies_active\nON position_strategies(status, symbol);\n"
 
@@ -48,7 +53,7 @@ async def initialize_database(database_path: Path) -> None:
         if version == LATEST_SCHEMA_VERSION:
             return
 
-        if version in {4, 5, 6, 7, 8, 9}:
+        if version in {4, 5, 6, 7, 8, 9, 10}:
             try:
                 steps = (
                     (4, MIGRATION_4_TO_5_SQL),
@@ -57,6 +62,7 @@ async def initialize_database(database_path: Path) -> None:
                     (7, MIGRATION_7_TO_8_SQL),
                     (8, MIGRATION_8_TO_9_SQL),
                     (9, MIGRATION_9_TO_10_SQL),
+                    (10, SOURCE_DECISION_SCHEMA_SQL),
                 )
                 migration_sql = "\n".join(
                     sql for source_version, sql in steps if version <= source_version
@@ -78,7 +84,7 @@ async def initialize_database(database_path: Path) -> None:
         if version != 0:
             raise RuntimeError(
                 "Unsupported database schema version: "
-                f"{version}; expected 0, 4, 5, 6, 7, 8, 9, "
+                f"{version}; expected 0, 4, 5, 6, 7, 8, 9, 10, "
                 f"or {LATEST_SCHEMA_VERSION}"
             )
 

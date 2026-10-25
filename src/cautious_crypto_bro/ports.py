@@ -241,6 +241,13 @@ class EvaluationCache(Protocol):
 
 
 class SourceRepository(Protocol):
+    async def record_source_decision(
+        self,
+        source: SourceMessage,
+        claim_token: str,
+        payload_json: str,
+    ) -> bool: ...
+
     async def defer_unavailable_source_messages(
         self, channel_id: int, message_ids: tuple[int, ...], *, lease_seconds: int
     ) -> None: ...

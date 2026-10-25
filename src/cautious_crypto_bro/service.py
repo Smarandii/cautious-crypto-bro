@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from collections import Counter
 from dataclasses import dataclass
@@ -629,6 +630,11 @@ class SignalService:
             )
             return None
 
+        if not await self._record_source_decision(
+            source, claim_token, signals, context_snapshot
+        ):
+            return None
+
         if not signals.actionable:
             await self._store.mark_source_completed(
                 source,
@@ -645,6 +651,21 @@ class SignalService:
             account_state=(context_snapshot.account_state),
         )
 
+        if not await self._record_source_decision(
+            source,
+            claim_token,
+            signals,
+            context_snapshot,
+            planning={
+                "planned_intent_ids": [str(intent.intent_id) for intent, _ in planned],
+                "position_action_ids": [
+                    str(action.action_id) for action in position_actions
+                ],
+                "errors": planning_errors,
+            },
+        ):
+            return None
+
         return _PlannedBatch(
             planned=planned,
             position_actions=position_actions,
@@ -652,6 +673,51 @@ class SignalService:
             account_state=context_snapshot.account_state,
             account_state_error=context_snapshot.account_state_error,
         )
+
+    async def _record_source_decision(
+        self,
+        source: SourceMessage,
+        claim_token: str,
+        signals: SignalExtraction,
+        context_snapshot: SignalContextSnapshot,
+        *,
+        planning: dict | None = None,
+    ) -> bool:
+        # Alternate extractors without original evidence remain explicitly unknown.
+        if signals.raw_extraction is None:
+            return True
+        payload = {
+            "version": 1,
+            "phase": "PLANNED" if planning is not None else "NORMALIZED",
+            "evaluation_fingerprint": signals.evaluation_fingerprint,
+            "evaluation_model": signals.evaluation_model,
+            "source": source.model_dump(mode="json"),
+            "extraction": signals.raw_extraction.model_dump(mode="json"),
+            "position_context": context_snapshot.position_context.model_dump(
+                mode="json"
+            ),
+            "normalized": {
+                "open_intents": [
+                    item.model_dump(mode="json") for item in signals.open_intents
+                ],
+                "position_actions": [
+                    item.model_dump(mode="json") for item in signals.position_actions
+                ],
+            },
+            "planning": planning,
+        }
+        try:
+            return await self._store.record_source_decision(
+                source, claim_token, json.dumps(payload, ensure_ascii=False)
+            )
+        except Exception as exc:
+            await self._store.mark_source_failed(
+                source,
+                claim_token,
+                f"Decision persistence failed: {type(exc).__name__}",
+            )
+            logger.exception("Source decision persistence failed")
+            return False
 
     async def _plan_open_intents(
         self,
