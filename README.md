@@ -82,10 +82,14 @@ migration and rollback requirements. Exchange executions are never replayed by
 this notification queue.
 
 Original production extraction and normalization decisions survive evaluation-cache
-expiry in SQLite schema 11. Use `scripts/report_source_coverage.py --database PATH
+expiry (introduced in SQLite schema 11). Use `scripts/report_source_coverage.py --database PATH
 --hours 24` for a read-only aggregate report without Telegram, Bybit or model calls.
 Historical missing decisions remain unknown; see STRATEGY.md for evidence privacy,
 upgrade and rollback requirements.
+
+The schema-12 zone ledger preserves independent frozen budgets and fill ownership
+as groundwork for multiple POIs. It does not enable multi-zone trading; remaining
+protection and execution gates are in `docs/independent-zone-execution.md`.
 
 SIGTERM requests application-wide shutdown, including partial startup. Polling
 stops accepting updates; active Telegram handlers and non-abortable exchange work

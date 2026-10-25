@@ -209,9 +209,9 @@ Pause alerts are retried from SQLite every 30 seconds, independently of exchange
 reconciliation. Delivery is at least once: a crash after Telegram accepts an alert
 but before SQLite records it can produce a duplicate.
 
-SQLite schema 11 supports migrations from 4–10 and preserves existing strategy rows.
+SQLite schema 12 supports migrations from 4–11 and preserves existing strategy rows.
 Before upgrading, stop the old app and back up its complete state; do not run old
-and new writers concurrently. Earlier images reject schema 11. Rollback requires
+and new writers concurrently. Earlier images reject schema 12. Rollback requires
 stopping the new app, reconciling any exchange changes since backup, and restoring
 a matching pre-upgrade database before starting the old image. Do not merely lower
 the schema version or overwrite current exchange protection.
@@ -242,6 +242,24 @@ no extraction is backfilled on upgrade. `audit_recent_signals.py` prefers origin
 stored decisions without reconstructing context or re-normalizing them with new
 code. `--fresh` explicitly requests a new evaluation. Old cache-based fallbacks
 remain labeled separately and do not prove an original production decision.
+
+Schema 12 adds a zone allocation ledger for the independently budgeted-zone work
+in `docs/independent-zone-execution.md`. It freezes saved plans and source lineage,
+binds confirmed order identities once and records execution IDs idempotently.
+Each zone retains its entire frozen policy budget; two zones do not split one
+budget. Group snapshots report per-zone quantities and discrepancies, including
+overclosure, overfill, unknown/changed orders and net-position mismatches. Quantity
+agreement does not verify stop protection or complete historical execution data.
+
+The legacy trading path does not enroll or supervise these groups. The ledger is
+evidence, not ownership permission: multi-zone execution remains disabled pending
+native protection, portfolio admission and recovery integration. No historical
+zone allocations are guessed on upgrade. `scripts/report_zone_ledger.py --database
+PATH` prints an aggregate ledger report without exchange/model calls; it always
+identifies missing live/protection proof. Budgets/source evidence in state backups
+remain private. Restart reads the frozen allocation; it must not replace it with
+a later mutable/rebased plan. Unknown orders require explicit investigation,
+never adoption by order-link prefix alone.
 
 ## Randomized Demo LONG participation test
 
