@@ -16,7 +16,7 @@ from telethon.crypto import AuthKey
 from telethon.sessions import SQLiteSession
 
 from cautious_crypto_bro.state_ownership import state_ownership
-from cautious_crypto_bro.storage import IntentStore
+from cautious_crypto_bro.storage import LATEST_SCHEMA_VERSION, IntentStore
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,7 +93,10 @@ def test_backup_preserves_wal_rows_schema_session_and_sources(tmp_path):
         receipt = json.loads(result.stdout)
         assert receipt["isolated_restore_verified"]
         assert receipt["archive_sha256"] == digest(output)
-        assert receipt["files"]["database.sqlite3"]["schema_version"] == 9
+        assert (
+            receipt["files"]["database.sqlite3"]["schema_version"]
+            == LATEST_SCHEMA_VERSION
+        )
         assert "SYNTHETIC_PRIVATE" not in result.stdout + result.stderr
         assert (digest(database), digest(session)) == before
         restored = tmp_path / "independent-restore"

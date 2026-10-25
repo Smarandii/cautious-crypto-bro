@@ -150,17 +150,14 @@ def test_exchange_rejection_keeps_status_but_blocks_trading(
 
             monkeypatch.setattr(app, "_reconcile_before_ingestion", reconcile)
             runtime = SimpleNamespace(
+                store=store,
                 bot=bot,
                 service=service,
                 supervisor=supervisor,
                 source_recovery=SimpleNamespace(run=source_run),
             )
             exchange.armed = True
-            task = asyncio.create_task(
-                app._run_application(
-                    runtime, interrupted_intents=(), interrupted_actions=()
-                )
-            )
+            task = asyncio.create_task(app._run_application(runtime))
             try:
                 async with asyncio.timeout(5):
                     notice = await notices.get()

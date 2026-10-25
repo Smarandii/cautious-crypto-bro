@@ -32,6 +32,8 @@ def _fake_application(monkeypatch, tmp_path, failed_reconciliation=None):
         return 0
 
     store = SimpleNamespace(
+        pending_recovery_notices=AsyncMock(return_value=((), ())),
+        acknowledge_recovery_notices=AsyncMock(),
         initialize=step("store.initialize"),
         quarantine_interrupted_executions=quarantine,
         reset_stale_processing_sources=reset_stale,
@@ -195,8 +197,7 @@ def test_initial_reconciliation_precedes_any_execution(
 
         assert events.index("store.quarantine") < events.index("store.reset_stale")
         assert events.index("store.reset_stale") < events.index("supervisor.reconcile")
-        assert events.count("bot.recovery_warning") == 1
-        assert events.index("store.quarantine") < events.index("bot.recovery_warning")
+        assert "bot.recovery_warning" not in events
         assert events.index("supervisor.reconcile") < events.index("service.recover")
         assert events.count("supervisor.reconcile") == 2
         assert events.index("service.recover") < events.index("source.start")

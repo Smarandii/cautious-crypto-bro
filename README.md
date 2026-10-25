@@ -73,6 +73,14 @@ orders. Direct Bybit calls also drain their synchronous worker before unwinding.
 This can delay shutdown by the duration of an in-flight request/workflow. Hard
 process termination still relies on startup quarantine for unknown outcomes.
 
+Interrupted-execution warnings are queued with quarantine in SQLite and retried
+without blocking startup. They survive process restarts and are acknowledged only
+after Telegram accepts them. Delivery is at least once: a crash or failed local
+acknowledgement can produce a duplicate warning. The schema-10 upgrade may send one
+reminder for previously quarantined interrupted executions; see STRATEGY.md for
+migration and rollback requirements. Exchange executions are never replayed by
+this notification queue.
+
 SIGTERM requests application-wide shutdown, including partial startup. Polling
 stops accepting updates; active Telegram handlers and non-abortable exchange work
 drain before clients close and state ownership is released. Repeated SIGTERM does

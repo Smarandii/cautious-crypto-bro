@@ -145,6 +145,12 @@ def migrate_from(
 
     with sqlite3.connect(database) as db:
         create_legacy_policy(db)
+        # Policy-focused fixtures include the legacy execution tables read
+        # by the interrupted-notice backfill.
+        db.executescript("""
+            CREATE TABLE intents(intent_id TEXT PRIMARY KEY, status TEXT, error TEXT);
+            CREATE TABLE position_actions(action_id TEXT PRIMARY KEY, status TEXT, error TEXT);
+        """)
 
         if version >= 5:
             db.executescript(MIGRATION_4_TO_5_SQL)

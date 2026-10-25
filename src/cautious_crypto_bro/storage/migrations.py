@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ._connection import sqlite_connection
-from .schema import LATEST_SCHEMA_SQL, LATEST_SCHEMA_VERSION
+from .schema import LATEST_SCHEMA_SQL, LATEST_SCHEMA_VERSION, RECOVERY_NOTICE_SCHEMA_SQL
 
 MIGRATION_4_TO_5_SQL = "\nCREATE TABLE IF NOT EXISTS position_strategies (\n    strategy_id TEXT PRIMARY KEY,\n    symbol TEXT NOT NULL,\n    side TEXT NOT NULL,\n    status TEXT NOT NULL,\n    entry_frozen INTEGER NOT NULL DEFAULT 0,\n    base_position_qty TEXT,\n    last_position_qty TEXT,\n    last_avg_price TEXT,\n    tp1_done INTEGER NOT NULL DEFAULT 0,\n    tp2_done INTEGER NOT NULL DEFAULT 0,\n    tp3_done INTEGER NOT NULL DEFAULT 0,\n    trailing_active INTEGER NOT NULL DEFAULT 0,\n    exit_revision INTEGER NOT NULL DEFAULT 0,\n    rebalance_needed INTEGER NOT NULL DEFAULT 0,\n    created_at TEXT NOT NULL,\n    updated_at TEXT NOT NULL\n);\n\nCREATE INDEX IF NOT EXISTS ix_position_strategies_active\nON position_strategies(status, symbol);\n"
 
@@ -20,6 +20,20 @@ ALTER TABLE position_strategies ADD COLUMN pause_reason TEXT;
 ALTER TABLE position_strategies ADD COLUMN pause_notified INTEGER NOT NULL DEFAULT 0;
 """
 
+MIGRATION_9_TO_10_SQL = (
+    RECOVERY_NOTICE_SCHEMA_SQL
+    + """
+INSERT INTO interrupted_execution_notices(kind, record_id)
+SELECT 'OPEN', intent_id FROM intents
+WHERE status = 'UNCERTAIN'
+  AND error = 'Process restarted during execution; exchange outcome is unknown; not retried automatically';
+INSERT INTO interrupted_execution_notices(kind, record_id)
+SELECT 'ACTION', action_id FROM position_actions
+WHERE status = 'UNCERTAIN'
+  AND error = 'Process restarted during execution; exchange outcome is unknown; not retried automatically';
+"""
+)
+
 
 async def initialize_database(database_path: Path) -> None:
     database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,7 +48,7 @@ async def initialize_database(database_path: Path) -> None:
         if version == LATEST_SCHEMA_VERSION:
             return
 
-        if version in {4, 5, 6, 7, 8}:
+        if version in {4, 5, 6, 7, 8, 9}:
             try:
                 steps = (
                     (4, MIGRATION_4_TO_5_SQL),
@@ -42,6 +56,7 @@ async def initialize_database(database_path: Path) -> None:
                     (6, MIGRATION_6_TO_7_SQL),
                     (7, MIGRATION_7_TO_8_SQL),
                     (8, MIGRATION_8_TO_9_SQL),
+                    (9, MIGRATION_9_TO_10_SQL),
                 )
                 migration_sql = "\n".join(
                     sql for source_version, sql in steps if version <= source_version
@@ -63,7 +78,7 @@ async def initialize_database(database_path: Path) -> None:
         if version != 0:
             raise RuntimeError(
                 "Unsupported database schema version: "
-                f"{version}; expected 0, 4, 5, 6, 7, 8, "
+                f"{version}; expected 0, 4, 5, 6, 7, 8, 9, "
                 f"or {LATEST_SCHEMA_VERSION}"
             )
 

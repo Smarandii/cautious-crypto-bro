@@ -209,13 +209,21 @@ Pause alerts are retried from SQLite every 30 seconds, independently of exchange
 reconciliation. Delivery is at least once: a crash after Telegram accepts an alert
 but before SQLite records it can produce a duplicate.
 
-SQLite schema 9 supports migrations from 4–8 and preserves existing strategy rows.
+SQLite schema 10 supports migrations from 4–9 and preserves existing strategy rows.
 Before upgrading, stop the old app and back up its complete state; do not run old
-and new writers concurrently. Earlier images reject schema 9. Rollback requires
+and new writers concurrently. Earlier images reject schema 10. Rollback requires
 stopping the new app, reconciling any exchange changes since backup, and restoring
 a matching pre-upgrade database before starting the old image. Do not merely lower
 the schema version or overwrite current exchange protection.
 Resume paused strategies only after ownership, live orders and protection agree.
+
+Interrupted-execution warnings are reserved in SQLite in the quarantine transaction
+and acknowledged only after Telegram accepts delivery. Pending warnings survive
+process restarts; acknowledgement failure can produce a duplicate warning. The
+schema-9 upgrade queues existing interrupted-execution uncertainty once because
+historical notification acknowledgements are unavailable. Previously warned
+records may therefore generate one upgrade reminder; unrelated uncertainty is
+not queued by this migration.
 
 ## Randomized Demo LONG participation test
 

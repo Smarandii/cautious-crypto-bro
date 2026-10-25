@@ -58,6 +58,12 @@ class RecoveryRepositoryImpl(SharedRepositoryMixin, _Store):
                     error=error,
                 )
 
+                await db.executemany(
+                    "INSERT OR IGNORE INTO interrupted_execution_notices(kind, record_id) VALUES (?, ?)",
+                    [("OPEN", str(ident)) for ident in intent_ids]
+                    + [("ACTION", str(ident)) for ident in action_ids],
+                )
+
                 if action_symbols:
                     await db.executemany(
                         """
@@ -81,6 +87,29 @@ class RecoveryRepositoryImpl(SharedRepositoryMixin, _Store):
                 raise
 
         return intent_ids, action_ids
+
+    async def pending_recovery_notices(
+        self,
+    ) -> tuple[tuple[UUID, ...], tuple[UUID, ...]]:
+        rows = await self._fetch(
+            "SELECT kind, record_id FROM interrupted_execution_notices ORDER BY kind, record_id",
+            many=True,
+        )
+        return (
+            tuple(UUID(row[1]) for row in rows if row[0] == "OPEN"),
+            tuple(UUID(row[1]) for row in rows if row[0] == "ACTION"),
+        )
+
+    async def acknowledge_recovery_notices(
+        self, intent_ids: tuple[UUID, ...], action_ids: tuple[UUID, ...]
+    ) -> None:
+        async with sqlite_connection(self._database_path) as db:
+            await db.executemany(
+                "DELETE FROM interrupted_execution_notices WHERE kind = ? AND record_id = ?",
+                [("OPEN", str(ident)) for ident in intent_ids]
+                + [("ACTION", str(ident)) for ident in action_ids],
+            )
+            await db.commit()
 
     async def get_pending_auto_intent_ids(
         self,
