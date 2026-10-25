@@ -252,17 +252,14 @@ async def _run_application(
         "Startup reconciliation pending. Trading callbacks and signal ingestion are paused."
     )
     await runtime.bot.start()
-    try:
-        await runtime.bot.send_recovery_warning(
-            uncertain_intents=len(interrupted_intents),
-            uncertain_actions=len(interrupted_actions),
-        )
-    except Exception:
-        logging.getLogger(__name__).exception(
-            "Failed to send interrupted-execution recovery warning"
-        )
-
     async with asyncio.TaskGroup() as tg:
+        tg.create_task(
+            _deliver_recovery_warning(
+                runtime,
+                uncertain_intents=len(interrupted_intents),
+                uncertain_actions=len(interrupted_actions),
+            )
+        )
         tg.create_task(runtime.bot.run())
         # Operator polling is live, but every trading callback remains gated.
         # Grug, Chesterton's Fence (faithful paraphrase): preserve the existing
@@ -286,6 +283,27 @@ async def _run_application(
         tg.create_task(runtime.service.run_periodic_account_pnl_sync())
 
         tg.create_task(runtime.source_recovery.run())
+
+
+async def _deliver_recovery_warning(
+    runtime: _Runtime,
+    *,
+    uncertain_intents: int,
+    uncertain_actions: int,
+    retry_seconds: float = 30,
+) -> None:
+    while True:
+        try:
+            await runtime.bot.send_recovery_warning(
+                uncertain_intents=uncertain_intents,
+                uncertain_actions=uncertain_actions,
+            )
+            return
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Failed to send interrupted-execution recovery warning; retry scheduled"
+            )
+        await asyncio.sleep(retry_seconds)
 
 
 async def _startup_notice(runtime: _Runtime, text: str) -> bool:
