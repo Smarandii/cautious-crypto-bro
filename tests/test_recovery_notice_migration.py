@@ -19,6 +19,7 @@ def snapshot(db):
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         )
         if row[0] not in {"interrupted_execution_notices", "source_decisions"}
+        and not row[0].startswith("zone_")
     ]
     return {
         name: db.execute(f'SELECT * FROM "{name}" ORDER BY rowid').fetchall()
@@ -47,6 +48,13 @@ def test_schema9_upgrade_preserves_records_and_backfills_only_interrupted_notice
                 )
                 db.execute("DROP TABLE interrupted_execution_notices")
                 db.execute("DROP TABLE source_decisions")
+                for table in (
+                    "zone_executions",
+                    "zone_orders",
+                    "zone_allocations",
+                    "zone_groups",
+                ):
+                    db.execute(f"DROP TABLE {table}")
                 db.execute("PRAGMA user_version = 9")
                 before = snapshot(db)
                 if fail_first:

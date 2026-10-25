@@ -1,6 +1,33 @@
 from __future__ import annotations
 
-LATEST_SCHEMA_VERSION = 11
+LATEST_SCHEMA_VERSION = 12
+
+ZONE_LEDGER_SCHEMA_SQL = """
+CREATE TABLE zone_groups (
+    group_id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL CHECK(side IN ('LONG', 'SHORT'))
+);
+CREATE TABLE zone_allocations (
+    zone_id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL REFERENCES zone_groups(group_id),
+    plan_json TEXT NOT NULL,
+    source_json TEXT NOT NULL
+);
+CREATE INDEX ix_zone_allocations_group ON zone_allocations(group_id);
+CREATE TABLE zone_orders (
+    order_id TEXT PRIMARY KEY,
+    zone_id TEXT NOT NULL REFERENCES zone_allocations(zone_id),
+    order_link_id TEXT NOT NULL UNIQUE,
+    payload_json TEXT NOT NULL
+);
+CREATE TABLE zone_executions (
+    execution_id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES zone_orders(order_id),
+    payload_json TEXT NOT NULL
+);
+CREATE INDEX ix_zone_executions_order ON zone_executions(order_id);
+"""
 
 SOURCE_DECISION_SCHEMA_SQL = """
 CREATE TABLE source_decisions (
@@ -29,3 +56,4 @@ LATEST_SCHEMA_SQL = "\nCREATE TABLE source_messages (\n    channel_id INTEGER NO
 
 LATEST_SCHEMA_SQL += RECOVERY_NOTICE_SCHEMA_SQL
 LATEST_SCHEMA_SQL += SOURCE_DECISION_SCHEMA_SQL
+LATEST_SCHEMA_SQL += ZONE_LEDGER_SCHEMA_SQL

@@ -134,6 +134,9 @@ separately rather than silently pooling it into the old cohort.
 Each step needs its own issue, branch, atomic MR and validation evidence. Intermediate
 infrastructure does not constitute delivered multi-zone support.
 
+Step 1 is tracked in [#135](https://github.com/Smarandii/cautious-crypto-bro/issues/135).
+It adds allocation evidence only; parent #123 remains open for the complete path.
+
 Acceptance scenarios: two disjoint LONG zones with different default stops; SHORT
 symmetry; one zone filled and another pending; partial fills in both; one zone
 exiting while another remains open; late fill after cancellation; TTL affecting
