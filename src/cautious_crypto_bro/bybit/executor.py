@@ -662,15 +662,15 @@ class BybitDemoExecutor:
         symbol: str,
     ) -> int:
         cancelled: set[str] = set()
-
+        params = {
+            "category": "linear",
+            "symbol": symbol,
+            "openOnly": 0,
+            "limit": 50,
+        }
         items = self._client.paginate_private_list(
             "/v5/order/realtime",
-            {
-                "category": "linear",
-                "symbol": symbol,
-                "openOnly": 0,
-                "limit": 50,
-            },
+            params,
         )
 
         for item in items:
@@ -699,6 +699,21 @@ class BybitDemoExecutor:
 
             cancelled.add(order_id)
 
+        if cancelled:
+            # Cancellation acknowledgements do not prove the exits are inactive.
+            for attempt in range(5):
+                remaining = self._client.paginate_private_list(
+                    "/v5/order/realtime", params
+                )
+                if not any(
+                    str(item.get("orderId") or "") in cancelled for item in remaining
+                ):
+                    return len(cancelled)
+                if attempt < 4:
+                    time.sleep(0.25)
+            raise TradeExecutionError(
+                "CCB exit cancellation is not confirmed; refusing position action"
+            )
         return len(cancelled)
 
     def _cancel_ccb_entry_orders_sync(
