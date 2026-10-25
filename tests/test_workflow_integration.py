@@ -240,6 +240,122 @@ def test_durable_model_failure_reaches_operator_without_blocking_later_posts(
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("album", [False, True])
+@pytest.mark.parametrize("retry_outcome", ["model_failure", "media_failure", "success"])
+def test_live_retry_overlapping_history_is_attempted_once_per_poll(
+    tmp_path, monkeypatch, album, retry_outcome
+):
+    class OutageModel(ModelTransport):
+        unavailable = True
+
+        async def complete(self, request):
+            if self.unavailable and request.images:
+                self.image_requests += 1
+                raise RuntimeError("Synthetic model outage")
+            self.fail_image_once = False
+            return await super().complete(request)
+
+    class CountedMessage(FakeMessage):
+        downloads = 0
+        fail_download = False
+
+        async def download_media(self, *, file):
+            self.downloads += 1
+            if self.fail_download:
+                raise OSError("Synthetic media outage")
+            return await super().download_media(file=file)
+
+    async def run():
+        database = tmp_path / "state.db"
+        store = IntentStore(database)
+        await store.initialize()
+        provider = OutageModel()
+        client = FakeTelegramClient([])
+        monkeypatch.setattr(telegram_source, "TelegramClient", lambda *a, **kw: client)
+
+        async def retry_ids(channel):
+            return await store.get_retryable_source_message_ids(
+                channel, lease_seconds=300
+            )
+
+        with executor_for(ExchangeTransport()) as executor:
+            service, bot, _ = workflow(store, executor, provider)
+            source = telegram_source.TelegramSource(
+                api_id=1,
+                api_hash="synthetic",
+                session_name="synthetic",
+                channels=[-1001234567890],
+                on_message=service.on_message,
+                retry_message_ids=retry_ids,
+            )
+            try:
+                with patch.object(bot._bot, "send_message", new=AsyncMock()):
+                    await source.start()
+                    images = [
+                        CountedMessage(
+                            message_id=1,
+                            published_at=datetime.now(UTC),
+                            text="Enter BTCUSDT LONG at market, stop 90",
+                            grouped_id=99 if album else None,
+                            image=b"chart",
+                        )
+                    ]
+                    if album:
+                        images.append(
+                            CountedMessage(
+                                message_id=2,
+                                published_at=datetime.now(UTC),
+                                grouped_id=99,
+                                image=b"position",
+                            )
+                        )
+                    client.messages = [
+                        *images,
+                        FakeMessage(
+                            message_id=3,
+                            published_at=datetime.now(UTC),
+                            text="Commentary",
+                        ),
+                    ]
+                    await source._handle_messages(images, chat=client.entity)
+                    assert provider.image_requests == 1
+                    provider.unavailable = retry_outcome != "success"
+                    images[0].fail_download = retry_outcome == "media_failure"
+                    before = sum(message.downloads for message in images)
+                    await source.poll_once()
+                    expected_downloads = 1 if images[0].fail_download else len(images)
+                    assert (
+                        sum(message.downloads for message in images) - before
+                        == expected_downloads
+                    )
+                    assert provider.image_requests == (
+                        1 if images[0].fail_download else 2
+                    )
+                    assert source._watermarks[-1001234567890] == (
+                        0 if images[0].fail_download else 3
+                    )
+                    assert bool(await retry_ids(-1001234567890)) == provider.unavailable
+                    if provider.unavailable:
+                        assert source.read_warnings()
+                    provider.unavailable = False
+                    images[0].fail_download = False
+                    await source.poll_once()
+                    assert not await retry_ids(-1001234567890)
+                    assert not source.read_warnings()
+                    assert source._watermarks[-1001234567890] == 3
+                    async with aiosqlite.connect(database) as db:
+                        rows = await (
+                            await db.execute(
+                                "SELECT message_id,status FROM source_messages ORDER BY message_id"
+                            )
+                        ).fetchall()
+                    assert rows == [(1, "COMPLETED"), (3, "COMPLETED")]
+            finally:
+                await bot.close()
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("retry_state", ["failed", "stale_claim", "active_claim"])
 def test_failed_album_retries_after_restart_without_blocking_later_posts(
     tmp_path, retry_state

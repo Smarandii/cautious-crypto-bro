@@ -531,7 +531,10 @@ class TelegramSource:
         await self._seed_watermarks(self._entities)
         for entity in self._entities:
             chat_id = _telegram_chat_id(entity)
-            retries_processed = await self._retry_failed_messages(entity, chat_id)
+            retry_results = await self._retry_failed_messages(entity, chat_id)
+            retries_processed = retry_results is not None and all(
+                retry_results.values()
+            )
             watermark = self._watermarks.get(chat_id)
 
             if watermark is None:
@@ -562,26 +565,39 @@ class TelegramSource:
                 ),
             )
 
-            for group in _group_telegram_messages(messages):
-                try:
-                    await self._handle_messages(
-                        group,
-                        chat=entity,
-                    )
-                    self._watermarks[chat_id] = max(message.id for message in group)
-                except Exception as exc:
-                    self._read_errors[chat_id] = type(exc).__name__
-                    logger.exception(
-                        "Failed to process Telegram catch-up post starting at %s/%s",
-                        group[0].chat_id,
-                        group[0].id,
-                    )
-                    # Never advance over a failed post, including startup
-                    # downloads. Other channels can still make progress.
-                    break
-            else:
-                if retries_processed:
-                    await self._refresh_read_warning(chat_id)
+            replayed = await self._replay_catchup_messages(
+                entity, messages, retry_results
+            )
+            if replayed and retries_processed:
+                await self._refresh_read_warning(chat_id)
+
+    async def _replay_catchup_messages(
+        self,
+        entity: Any,
+        messages: Sequence[Message],
+        retry_results: dict[int, bool] | None,
+    ) -> bool:
+        chat_id = _telegram_chat_id(entity)
+        for group in _group_telegram_messages(messages):
+            retried = retry_results.get(group[0].id) if retry_results else None
+            if retried is False:
+                # A thrown retry failure must still block chronological progress.
+                return False
+            try:
+                if retried is None:
+                    await self._handle_messages(group, chat=entity)
+                self._watermarks[chat_id] = max(message.id for message in group)
+            except Exception as exc:
+                self._read_errors[chat_id] = type(exc).__name__
+                logger.exception(
+                    "Failed to process Telegram catch-up post starting at %s/%s",
+                    group[0].chat_id,
+                    group[0].id,
+                )
+                # Never advance over a failed post, including startup
+                # downloads. Other channels can still make progress.
+                return False
+        return True
 
     async def _refresh_read_warning(
         self, chat_id: int, *, clear_recovered: bool = True
@@ -620,13 +636,16 @@ class TelegramSource:
             messages.append(message)
         return messages
 
-    async def _retry_failed_messages(self, entity: Any, chat_id: int) -> bool:
+    async def _retry_failed_messages(
+        self, entity: Any, chat_id: int
+    ) -> dict[int, bool] | None:
+        """Return callback delivery outcomes; None means retry lookup/fetch failed."""
         if self._retry_message_ids is None:
-            return True
+            return {}
         try:
             message_ids = await self._retry_message_ids(chat_id)
             if not message_ids:
-                return True
+                return {}
             messages = cast(
                 Sequence[Message | None],
                 await self._client.get_messages(entity, ids=list(message_ids)),
@@ -636,7 +655,7 @@ class TelegramSource:
         except Exception as exc:
             self._read_errors[chat_id] = type(exc).__name__
             logger.exception("Failed to fetch retryable Telegram posts for %s", chat_id)
-            return False
+            return None
 
         available = [
             message
@@ -650,8 +669,9 @@ class TelegramSource:
             logger.warning(
                 "Retryable Telegram posts unavailable in %s: %s", chat_id, missing
             )
-        processed = True
+        results: dict[int, bool] = {}
         for group in _group_telegram_messages(available):
+            processed = True
             try:
                 await self._handle_messages(group, chat=entity)
             except Exception as exc:
@@ -660,7 +680,8 @@ class TelegramSource:
                 logger.exception(
                     "Failed to retry Telegram post %s/%s", chat_id, group[0].id
                 )
-        return processed
+            results.update((message.id, processed) for message in group)
+        return results
 
     async def _handle_messages(
         self,
