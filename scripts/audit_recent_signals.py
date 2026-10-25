@@ -40,6 +40,11 @@ from cautious_crypto_bro.runtime_store import (
 from cautious_crypto_bro.signal_context import (
     build_position_context,
 )
+from cautious_crypto_bro.source_coverage import (
+    decision_disposition,
+    production_decision,
+    record_disposition_status,
+)
 from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.telegram_replay import (
     TelegramReplayError,
@@ -273,6 +278,7 @@ async def current_app_state(
             SELECT
                 intent_id,
                 status,
+                approval_mode,
                 error,
                 created_at
             FROM intents
@@ -293,6 +299,7 @@ async def current_app_state(
             {
                 "intent_id": row["intent_id"],
                 "status": row["status"],
+                "approval_mode": row["approval_mode"],
                 "error": row["error"],
                 "created_at": row["created_at"],
             }
@@ -304,6 +311,7 @@ async def current_app_state(
             SELECT
                 action_id,
                 status,
+                approval_mode,
                 error,
                 created_at
             FROM position_actions
@@ -324,11 +332,15 @@ async def current_app_state(
             {
                 "action_id": row["action_id"],
                 "status": row["status"],
+                "approval_mode": row["approval_mode"],
                 "error": row["error"],
                 "created_at": row["created_at"],
             }
             for row in rows
         ]
+        result["production_decision"] = await production_decision(
+            db, channel_id, message_id
+        )
 
     return result
 
@@ -682,6 +694,39 @@ async def main() -> int:
                             "decision_source": ("not-evaluated"),
                         }
 
+                        original = app_state.get("production_decision")
+                        if original is not None and not args.fresh:
+                            normalized = original["normalized"]
+                            actionable = bool(
+                                normalized["open_intents"]
+                                or normalized["position_actions"]
+                            )
+                            record.update(
+                                decision_source="production",
+                                evaluation=original["extraction"],
+                                position_context=original["position_context"],
+                                derived_actionable=actionable,
+                                derived_open_intents=normalized["open_intents"],
+                                derived_position_actions=normalized["position_actions"],
+                                production_decision=original,
+                                production_disposition=decision_disposition(
+                                    original,
+                                    app_state["source_processing"]["status"],
+                                    [
+                                        record_disposition_status(
+                                            item["status"], item["approval_mode"]
+                                        )
+                                        for item in app_state["persisted_intents"]
+                                        + app_state["persisted_position_actions"]
+                                    ],
+                                ),
+                                category="ACTIONABLE"
+                                if actionable
+                                else "NON_ACTIONABLE",
+                            )
+                            records.append(record)
+                            continue
+
                         try:
                             post = await telegram_messages_to_post(
                                 group,
@@ -872,6 +917,10 @@ async def main() -> int:
 
     print()
     print(f"Cached decisions reused: {cache_count}")
+    print(
+        "Original production decisions reused: "
+        f"{sum(record['decision_source'] == 'production' for record in records)}"
+    )
     print(f"Fresh LLM calls: {fresh_count}")
 
     return 0

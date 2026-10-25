@@ -18,7 +18,7 @@ def snapshot(db):
         for row in db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         )
-        if row[0] != "interrupted_execution_notices"
+        if row[0] not in {"interrupted_execution_notices", "source_decisions"}
     ]
     return {
         name: db.execute(f'SELECT * FROM "{name}" ORDER BY rowid').fetchall()
@@ -46,6 +46,7 @@ def test_schema9_upgrade_preserves_records_and_backfills_only_interrupted_notice
                     (str(unrelated.action_id),),
                 )
                 db.execute("DROP TABLE interrupted_execution_notices")
+                db.execute("DROP TABLE source_decisions")
                 db.execute("PRAGMA user_version = 9")
                 before = snapshot(db)
                 if fail_first:
