@@ -8,6 +8,7 @@ from ..domain import (
     AccountStateSummary,
     ExecutionPlan,
     Side,
+    SourceMessage,
     StoreError,
     TradingIntent,
 )
@@ -121,7 +122,11 @@ class ZoneLedgerRepositoryImpl(_Store):
             )
             old = await cursor.fetchone()
             if old is not None:
-                if tuple(old) != values:
+                if (
+                    old[0] != str(group_id)
+                    or ExecutionPlan.model_validate_json(old[1]) != plan
+                    or SourceMessage.model_validate_json(old[2]) != intent.source
+                ):
                     raise StoreError("Frozen zone allocation cannot be replaced")
             else:
                 await db.execute(

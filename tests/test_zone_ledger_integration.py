@@ -208,6 +208,19 @@ def test_identity_conflicts_never_rewrite_frozen_evidence(tmp_path):
             assert db.execute("SELECT COUNT(*) FROM zone_executions").fetchone() == (1,)
         result = await store.zone_group_snapshot(group, account("1"))
         assert result["quantity_reconciled"]
+        equivalent = plans[0].model_copy(
+            update={
+                "policy": plans[0].policy.model_copy(
+                    update={"risk_per_trade_pct": D("1.0")}
+                )
+            }
+        )
+        with sqlite3.connect(database) as db:
+            db.execute(
+                "UPDATE execution_plans SET payload_json=? WHERE intent_id=?",
+                (equivalent.model_dump_json(), str(plans[0].intent_id)),
+            )
+        await store.register_zone(group, plans[0].intent_id)
         with sqlite3.connect(database) as db:
             db.execute(
                 "UPDATE execution_plans SET payload_json=? WHERE intent_id=?",
