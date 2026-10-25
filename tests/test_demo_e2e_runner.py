@@ -57,8 +57,15 @@ def test_opt_in_precedes_docker(monkeypatch):
         ([], 0, 1, True),
     ],
 )
+@pytest.mark.parametrize("zone_protection", [False, True])
 def test_runner_lifecycle(
-    tmp_path, monkeypatch, records, process_exit, expected_exit, resumes
+    tmp_path,
+    monkeypatch,
+    records,
+    process_exit,
+    expected_exit,
+    resumes,
+    zone_protection,
 ):
     image = "sha256:" + "a" * 64
     monkeypatch.setenv("CCB_IMAGE", "stale-image:local")
@@ -94,6 +101,10 @@ def test_runner_lifecycle(
             "E2E must run the deployed image, regardless of the default Compose tag"
         )
         assert args[args.index("--pull") + 1] == "never"
+        assert args[args.index("--volume") + 1] == (
+            f"{tmp_path / 'scripts' / 'e2e_bybit_demo.py'}:/app/scripts/e2e_bybit_demo.py:ro"
+        )
+        assert ("--zone-protection" in args) is zone_protection
         return SimpleNamespace(
             stdout=io.StringIO("\n".join(json.dumps(r) for r in records)),
             wait=lambda: process_exit,
@@ -101,7 +112,7 @@ def test_runner_lifecycle(
 
     monkeypatch.setattr(runner.subprocess, "run", command)
     monkeypatch.setattr(runner.subprocess, "Popen", process)
-    assert runner.run_suite(tmp_path) == expected_exit
+    assert runner.run_suite(tmp_path, zone_protection=zone_protection) == expected_exit
     assert ("docker", "pause", "app-container") in calls
     assert (("docker", "unpause", "app-container") in calls) is resumes
     assert not any("restart" in call for call in calls)

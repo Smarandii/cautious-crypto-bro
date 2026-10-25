@@ -15,6 +15,7 @@ import tempfile
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
+from uuid import uuid4
 
 from cautious_crypto_bro.bybit import (
     DEMO_BASE_URL,
@@ -613,25 +614,171 @@ async def main(args):
         )
         with tempfile.TemporaryDirectory(prefix="ccb-e2e-") as directory:
             for side in (Side.LONG, Side.SHORT):
-                await run_side(e, side, Path(directory))
+                if getattr(args, "zone_protection", False):
+                    await observe_zone_stops(e, side)
+                else:
+                    await run_side(e, side, Path(directory))
         emit(
             "suite",
             result="passed",
-            coverage="real exchange plus labeled application fault injection",
+            coverage=(
+                "native independent-exit stop observation; no activation proof"
+                if getattr(args, "zone_protection", False)
+                else "real exchange plus labeled application fault injection"
+            ),
             not_live_tested=[
                 "partial-fill timing",
                 "immediate fill during installation",
                 "Telegram delivery",
                 "LLM accuracy",
+                "paired-stop amendment/cancellation races",
+                "independent-zone offline/restart lifecycle",
             ],
         )
     finally:
         e.close()
 
 
+async def observe_zone_stops(e, side):
+    """Observe native behavior; a successful observation is not activation proof."""
+    require(symbol_flat(await e.account_state()), "Zone probe symbol must be flat")
+    context = await e.market_context(SYMBOL)
+    # Reserve quote movement above the minimum, with bounded aggregate exposure.
+    unit = max(context.min_qty, context.min_notional * D("1.2") / context.market_price)
+    unit = rounded(unit, context.qty_step) + context.qty_step
+    require(unit * 3 * context.market_price <= 50, "Zone probe notional bound exceeded")
+    sign = D(1) if side is Side.LONG else D(-1)
+    prefix = f"ccb-zone-{uuid4().hex[:16]}-"
+    parents = [prefix + "a", prefix + "b"]
+    quantities = [unit, unit * 2]
+    stops = [
+        rounded(context.market_price * (1 - sign * distance), context.tick_size)
+        for distance in (D("0.05"), D("0.06"))
+    ]
+
+    def children(account, parent):
+        return [
+            o
+            for o in account.open_orders
+            if o.symbol == SYMBOL
+            and o.kind == "SL"
+            and o.parent_order_link_id == parent
+        ]
+
+    emit("mutation_started", side=side.value, scenario="independent_zone_stop")
+    try:
+        for index, parent in enumerate(parents):
+            response = await asyncio.to_thread(
+                e._client.private_post,
+                "/v5/order/create",
+                {
+                    "category": "linear",
+                    "symbol": SYMBOL,
+                    "side": "Buy" if side is Side.LONG else "Sell",
+                    "orderType": "Market",
+                    "qty": str(quantities[index]),
+                    "timeInForce": "IOC",
+                    "positionIdx": 0,
+                    "orderLinkId": parent,
+                    "stopLoss": str(stops[index]),
+                    "tpslMode": "Partial",
+                    "slOrderType": "Market",
+                },
+            )
+            require(
+                bool(response.get("result", {}).get("orderId")),
+                "Missing entry acknowledgement",
+            )
+            expected = sum(quantities[: index + 1])
+            account = await wait_account(
+                e,
+                lambda a, expected=expected, parent=parent: (
+                    position(a) is not None
+                    and position(a).size == expected
+                    and bool(children(a, parent))
+                ),
+                "zone entry and parent-linked stop",
+            )
+            stop_orders = children(account, parent)
+            require(len(stop_orders) == 1, "Ambiguous native stop identity")
+            require(
+                stop_orders[0].remaining_quantity == quantities[index]
+                and stop_orders[0].trigger_price == stops[index],
+                "Native stop does not cover its entry allocation",
+            )
+        before = await e.account_state()
+        before_ids = [children(before, parent)[0].order_id for parent in parents]
+        require(before_ids[0] != before_ids[1], "Zones share one stop identity")
+        response = await asyncio.to_thread(
+            e._client.private_post,
+            "/v5/order/create",
+            {
+                "category": "linear",
+                "symbol": SYMBOL,
+                "side": "Sell" if side is Side.LONG else "Buy",
+                "orderType": "Market",
+                "qty": str(unit),
+                "reduceOnly": True,
+                "positionIdx": 0,
+                "orderLinkId": prefix + "exit-a",
+            },
+        )
+        exit_id = response.get("result", {}).get("orderId")
+        require(bool(exit_id), "Missing reduction acknowledgement")
+        # Confirm the particular exit, not just a coincidentally matching net size.
+        deadline = asyncio.get_running_loop().time() + 15
+        while True:
+            history = await asyncio.to_thread(
+                e._client.private_get,
+                "/v5/order/history",
+                {"category": "linear", "symbol": SYMBOL, "orderId": exit_id},
+            )
+            rows = history.get("result", {}).get("list", [])
+            if any(
+                r.get("orderId") == exit_id
+                and r.get("orderStatus") == "Filled"
+                and D(r.get("cumExecQty", "0")) == unit
+                for r in rows
+            ):
+                break
+            require(
+                asyncio.get_running_loop().time() < deadline,
+                "Reduction fill unverified",
+            )
+            await asyncio.sleep(0.3)
+        account = await wait_account(
+            e,
+            lambda a: position(a) is not None and position(a).size == unit * 2,
+            "B remainder after confirmed A exit",
+        )
+        # Allow asynchronous child adjustment, then take a second fresh snapshot.
+        await asyncio.sleep(2)
+        account = await e.account_state()
+        a_stops, b_stops = [children(account, parent) for parent in parents]
+        emit(
+            "independent_zone_stop_observation",
+            side=side.value,
+            a_stop_count=len(a_stops),
+            a_stop_quantity_units=sum(o.remaining_quantity for o in a_stops) / unit,
+            b_stop_count=len(b_stops),
+            b_stop_quantity_units=sum(o.remaining_quantity for o in b_stops) / unit,
+            b_original_stop_preserved=any(
+                o.order_id == before_ids[1] and o.trigger_price == stops[1]
+                for o in b_stops
+            ),
+            net_quantity_units=position(account).size / unit
+            if position(account)
+            else 0,
+            activation_proven=False,
+        )
+    finally:
+        await cleanup(e, side, prefix)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute-demo", action="store_true")
+    parser.add_argument("--zone-protection", action="store_true")
     parser.add_argument("--resume-db", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
