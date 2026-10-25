@@ -549,7 +549,7 @@ class TelegramSource:
 
             if not messages:
                 if retries_processed:
-                    self._read_errors.pop(chat_id, None)
+                    await self._refresh_read_warning(chat_id)
                 continue
 
             logger.info(
@@ -581,7 +581,29 @@ class TelegramSource:
                     break
             else:
                 if retries_processed:
-                    self._read_errors.pop(chat_id, None)
+                    await self._refresh_read_warning(chat_id)
+
+    async def _refresh_read_warning(
+        self, chat_id: int, *, clear_recovered: bool = True
+    ) -> None:
+        try:
+            pending = ()
+            if self._retry_message_ids is not None:
+                pending = await self._retry_message_ids(chat_id)
+        except UnauthorizedError:
+            raise
+        except Exception as exc:
+            self._read_errors[chat_id] = type(exc).__name__
+            logger.exception(
+                "Failed to check Telegram post retry status for %s", chat_id
+            )
+            return
+        if pending:
+            # The callback can record a failed post without raising, so a
+            # successful history read alone does not prove processing recovered.
+            self._read_errors[chat_id] = "Post processing retries pending"
+        elif clear_recovered:
+            self._read_errors.pop(chat_id, None)
 
     async def _catchup_messages(self, entity: Any, watermark: int) -> list[Message]:
         messages: list[Message] = []
@@ -666,6 +688,9 @@ class TelegramSource:
                     len(post.images),
                 )
                 await self._on_message(post)
+                await self._refresh_read_warning(
+                    post.source.channel_id, clear_recovered=False
+                )
 
     async def run_until_disconnected(
         self,
