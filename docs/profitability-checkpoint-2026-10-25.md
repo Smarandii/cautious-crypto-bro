@@ -90,6 +90,9 @@ attribution before using this checkpoint as a complete strategy track record;
 improve valid-post coverage through the separately tracked findings below.
 The attribution investigation is tracked in
 [#129](https://github.com/Smarandii/cautious-crypto-bro/issues/129).
+Its [case analysis](forensic-attribution-limits-2026-10-25.md) identifies historical
+owner overlap, missing-owner opening fills and one still-open position. The
+reported subset is not a complete strategy track record.
 
 Reproduce the cohort reports with `scripts/analyze_forensic_pnl.py BUNDLE.zip`
 and `scripts/analyze_long_participation.py BUNDLE.zip`. The checkpoint's primary
