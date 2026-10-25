@@ -477,7 +477,7 @@ class BybitDemoExecutor:
         try:
             self._sync_clock()
             initial_exposure = self._exposure_sync(action.symbol)
-            self._position_for_action(
+            initial_position = self._position_for_action(
                 action,
                 initial_exposure,
             )
@@ -497,6 +497,10 @@ class BybitDemoExecutor:
             action,
             self._exposure_sync(action.symbol),
         )
+        if position.side is not initial_position.side:
+            raise TradeExecutionError(
+                "Position side changed during cancellation; refusing position action"
+            )
 
         body, submitted_quantity = self._action_order_body(action, position)
 

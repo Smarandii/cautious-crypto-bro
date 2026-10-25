@@ -20,6 +20,71 @@ from cautious_crypto_bro.storage import IntentStore
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("kind", [PositionActionType.REDUCE, PositionActionType.CLOSE])
+@pytest.mark.parametrize("expected_side", [None, Side.LONG])
+def test_action_does_not_follow_position_side_change_during_cancellation(
+    tmp_path, kind, expected_side
+):
+    class ReversedExchange(Exchange):
+        reverse_on_cancel = False
+
+        def handle(self, request):
+            if self.reverse_on_cancel and request.url.path == "/v5/order/cancel":
+                self.reverse_on_cancel = False
+                self.side = Side.SHORT
+                self.stop = 110
+            return super().handle(request)
+
+    async def run():
+        database = tmp_path / "state.db"
+        exchange = ReversedExchange()
+        with executor_for(exchange) as executor:
+            store, intent, _, coordinator, supervisor = await prepare(
+                database, exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            await supervisor.reconcile_once()
+            initial_size = exchange.size
+            action = PositionActionIntent(
+                source=source(message_id=2),
+                symbol="BTCUSDT",
+                action=kind,
+                expected_side=expected_side,
+                close_pct=25 if kind is PositionActionType.REDUCE else None,
+                summary="Lifecycle action",
+                confidence=1,
+            )
+            claim = await store.claim_source(action.source, lease_seconds=300)
+            await store.create_signal_batch_and_complete_source((), (action,), claim)
+            exchange.reverse_on_cancel = True
+            before = len(exchange.requests)
+            result = await coordinator.execute_position_action(
+                action.action_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert result.status is IntentStatus.UNCERTAIN
+            assert "side" in result.message.casefold()
+            assert exchange.side is Side.SHORT and exchange.size == initial_size
+            assert exchange.stop == 110
+            assert not any(
+                path == "/v5/order/create" for path, _ in exchange.requests[before:]
+            )
+            reopened = IntentStore(database)
+            assert (
+                await reopened.get_position_action(action.action_id)
+            ).status is IntentStatus.UNCERTAIN
+            assert (await state_for(reopened)).status is StrategyStatus.UNCERTAIN
+            before = len(exchange.requests)
+            repeated = await coordinator.execute_position_action(
+                action.action_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert repeated.status is IntentStatus.UNCERTAIN
+            assert not exchange.requests[before:]
+
+    asyncio.run(run())
+
+
 class ActionReadFailureExchange(Exchange):
     fault = None
 
