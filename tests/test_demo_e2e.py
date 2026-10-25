@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.util
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -71,3 +72,35 @@ def test_poll_failure_is_bounded():
     with pytest.raises(AssertionError, match="Timed out: never ready"):
         asyncio.run(demo.wait_account(fake, lambda _: False, "never ready", seconds=0))
     fake.account_state.assert_awaited_once()
+
+
+def test_zone_probe_refuses_existing_exposure():
+    fake = SimpleNamespace(
+        account_state=AsyncMock(
+            return_value=SimpleNamespace(
+                positions=[SimpleNamespace(symbol=demo.SYMBOL)], open_orders=[]
+            )
+        ),
+        market_context=AsyncMock(),
+    )
+    with pytest.raises(AssertionError, match="must be flat"):
+        asyncio.run(demo.observe_zone_stops(fake, Side.LONG))
+    fake.market_context.assert_not_awaited()
+
+
+def test_zone_probe_refuses_excessive_minimum_notional():
+    fake = SimpleNamespace(
+        account_state=AsyncMock(
+            return_value=SimpleNamespace(positions=[], open_orders=[])
+        ),
+        market_context=AsyncMock(
+            return_value=SimpleNamespace(
+                min_qty=Decimal("1"),
+                min_notional=Decimal("100"),
+                market_price=Decimal("1"),
+                qty_step=Decimal("1"),
+            )
+        ),
+    )
+    with pytest.raises(AssertionError, match="notional bound exceeded"):
+        asyncio.run(demo.observe_zone_stops(fake, Side.SHORT))

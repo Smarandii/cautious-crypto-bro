@@ -38,7 +38,7 @@ def cleanup_verified(result_path: Path) -> bool:
     return not pending
 
 
-def run_suite(repo: Path) -> int:
+def run_suite(repo: Path, *, zone_protection: bool = False) -> int:
     def command(*args: str) -> str:
         return subprocess.run(
             args,
@@ -101,11 +101,14 @@ def run_suite(repo: Path) -> int:
                     "--rm",
                     "-T",
                     "--no-deps",
+                    "--volume",
+                    f"{repo / 'scripts' / 'e2e_bybit_demo.py'}:/app/scripts/e2e_bybit_demo.py:ro",
                     "--entrypoint",
                     "/app/.venv/bin/python",
                     "app",
                     "/app/scripts/e2e_bybit_demo.py",
                     "--execute-demo",
+                    *(["--zone-protection"] if zone_protection else []),
                 ],
                 cwd=repo,
                 env=os.environ | {"CCB_IMAGE": image},
@@ -177,10 +180,17 @@ def main() -> int:
         action="store_true",
         help="Place small real Bybit Demo test orders",
     )
+    parser.add_argument(
+        "--zone-protection",
+        action="store_true",
+        help="Observe parent-linked partial stops after an independent exit",
+    )
     args = parser.parse_args()
     if not args.execute_demo:
         parser.error("Requires --execute-demo; this suite places Bybit Demo orders")
-    return run_suite(Path(__file__).resolve().parents[1])
+    return run_suite(
+        Path(__file__).resolve().parents[1], zone_protection=args.zone_protection
+    )
 
 
 if __name__ == "__main__":
