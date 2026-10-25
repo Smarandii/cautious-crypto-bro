@@ -207,6 +207,10 @@ class BybitClient:
             ):
                 raise TradeExecutionError(f"Bybit {path} returned an invalid page list")
             cursor = result.get("nextPageCursor", "")
+            # Demo transaction history ends with an empty page and a null cursor.
+            # Do not relax continuation validation for populated or trading pages.
+            if path == "/v5/account/transaction-log" and not page and cursor is None:
+                cursor = ""
             if not isinstance(cursor, str):
                 raise TradeExecutionError(
                     f"Bybit {path} returned an invalid page cursor"

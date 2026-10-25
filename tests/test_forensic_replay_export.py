@@ -110,6 +110,83 @@ def test_history_export_rejects_malformed_pages(page) -> None:
         client.close()
 
 
+def test_transaction_history_keeps_rows_before_empty_null_terminal_page():
+    requests = []
+
+    def respond(request):
+        if request.url.path == "/v5/market/time":
+            return httpx.Response(200, json={"retCode": 0, "time": 1000})
+        requests.append(request)
+        assert len(requests) <= 2
+        assert request.url.path == "/v5/account/transaction-log"
+        assert request.url.params.get("cursor") == (
+            None if len(requests) == 1 else "next"
+        )
+        page = (
+            {
+                "list": [{"id": "settlement-1", "type": "SETTLEMENT"}],
+                "nextPageCursor": "next",
+            }
+            if len(requests) == 1
+            else {"list": [], "nextPageCursor": None}
+        )
+        return httpx.Response(200, json={"retCode": 0, "result": page})
+
+    client = BybitClient(DEMO_BASE_URL, "synthetic-key", "synthetic-secret")
+    client._http_client.close()
+    client._http_client = httpx.Client(
+        base_url=DEMO_BASE_URL, transport=httpx.MockTransport(respond)
+    )
+    try:
+        rows = _historical_rows(
+            client,
+            "/v5/account/transaction-log",
+            {"accountType": "UNIFIED"},
+            0,
+            1000,
+            limit=50,
+        )
+        assert rows == [{"id": "settlement-1", "type": "SETTLEMENT"}]
+        assert len(requests) == 2
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize(
+    "path,page,cursor",
+    [
+        ("/v5/account/transaction-log", [{"id": "unconfirmed-continuation"}], None),
+        ("/v5/account/transaction-log", [], 0),
+        ("/v5/account/transaction-log", [], False),
+        ("/v5/account/transaction-log", [], []),
+        ("/v5/account/transaction-log", [], {}),
+        ("/v5/order/realtime", [], None),
+        ("/v5/position/list", [], None),
+        ("/v5/execution/list", [], None),
+    ],
+)
+def test_terminal_transaction_compatibility_does_not_accept_malformed_pages(
+    path, page, cursor
+):
+    def respond(request):
+        if request.url.path == "/v5/market/time":
+            return httpx.Response(200, json={"retCode": 0, "time": 1000})
+        return httpx.Response(
+            200, json={"retCode": 0, "result": {"list": page, "nextPageCursor": cursor}}
+        )
+
+    client = BybitClient(DEMO_BASE_URL, "synthetic-key", "synthetic-secret")
+    client._http_client.close()
+    client._http_client = httpx.Client(
+        base_url=DEMO_BASE_URL, transport=httpx.MockTransport(respond)
+    )
+    try:
+        with pytest.raises(TradeExecutionError, match="invalid page cursor"):
+            _historical_rows(client, path, {}, 0, 1000, limit=50)
+    finally:
+        client.close()
+
+
 def test_export_bundle_uses_supported_private_page_sizes(tmp_path, monkeypatch) -> None:
     database_path = tmp_path / "state.sqlite3"
     now = datetime.now(UTC)
