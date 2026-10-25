@@ -366,6 +366,11 @@ _LIFECYCLE_NEGATION_PATTERNS: tuple[
     ...,
 ] = (
     re.compile(
+        r"\b(?:не|нельзя|без)\s+"
+        r"(?:(?:надо|нужно|стоит|будем)\s+)?"
+        r"(?:сейчас\s+)?фикс(?=\s|\d)"
+    ),
+    re.compile(
         r"\b(?:не|нельзя)\s+"
         r"(?:(?:надо|нужно|стоит|будем)\s+)?"
         r"(?:сейчас\s+)?"
@@ -393,12 +398,19 @@ _SUGGESTED_REDUCE_PATTERN = re.compile(
     r"\b(?:часть\s+можно\s+закрыть|давайте\s+закроем\s+часть)\b"
 )
 
+_SHORTHAND_REDUCE_PATTERN = re.compile(
+    r"\bфикс\s*(?:"
+    r"\d+(?:[.,]\d+)?\s*(?:%|процент(?:а|ов)?\b)"
+    r"|\d+\s*/\s*\d+)"
+)
+
 
 _REDUCE_INSTRUCTION_PATTERNS: tuple[
     re.Pattern[str],
     ...,
 ] = (
     _SUGGESTED_REDUCE_PATTERN,
+    _SHORTHAND_REDUCE_PATTERN,
     # Russian take-profit milestone, unspecified size.
     # Example: "Фиксируем 3 тейк".
     # The ordinal identifies the TP milestone, not position size.
@@ -620,7 +632,10 @@ def _deterministic_action_evidence(
     if not normalized:
         return None
 
-    if _SUGGESTED_REDUCE_PATTERN.search(normalized) and re.search(
+    if (
+        _SUGGESTED_REDUCE_PATTERN.search(normalized)
+        or _SHORTHAND_REDUCE_PATTERN.search(normalized)
+    ) and re.search(
         r"\b(?:если|когда|при|после|потом|позже|завтра|вчера)\b", normalized
     ):
         # A suggestion tied to a future condition or a recap is not an action
@@ -1085,7 +1100,11 @@ def _reduce_close_pct(
     raw: ExtractedPositionAction,
     action_evidence: str,
 ) -> float | None:
-    close_pct = _reduction_pct_from_evidence(action_evidence)
+    shorthand = _SHORTHAND_REDUCE_PATTERN.search(
+        _normalize_evidence_text(action_evidence)
+    )
+    amount_evidence = shorthand.group(0) if shorthand else action_evidence
+    close_pct = _reduction_pct_from_evidence(amount_evidence)
 
     if close_pct is None:
         logger.warning(
