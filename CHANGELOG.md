@@ -4,16 +4,49 @@ All notable changes to this project are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Bybit Demo only.** No release in this project has ever targeted mainnet, and
-none should. There are no published return, drawdown or win-rate figures; see
-[STRATEGY.md](STRATEGY.md) for what the code does and [TODO.md](TODO.md) for
-what remains unproven.
+**Validated on Bybit Demo.** These releases do not certify mainnet operation or
+live profitability. Descriptive Demo checkpoints are not proof of a profitable
+edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+No changes yet.
+
+## [2.1.0] - 2026-10-26
+
 Refactoring, correctness and repository hardening since `v2.0.0`.
 
+### Upgrade and validation
+
+- SQLite schema 12 supports upgrades from schemas 4–11. Stop the old app and take
+  a complete restore-verified state backup before upgrading. Old images reject
+  schema 12. Rollback requires reconciling exchange changes and restoring a
+  matching pre-upgrade database; do not lower `user_version` or overwrite current
+  exchange protection. Existing trading/source rows are preserved, and missing
+  historical decisions or zone ownership are not invented.
+- Runtime validation is local Bybit Demo with authenticated Telegram/Bybit access,
+  fresh supervision and pending-entry stop checks. CI, container scanning, CodeQL
+  and package-build checks gate release preparation. Exact release/deployment
+  evidence is recorded in the linked release workflow issue #137.
+- Multi-zone execution remains unfinished under #123. Each POI must receive its
+  own full budget; the ledger foundation does not enable multiple competing
+  protection writers. Native quantity-scoped protection, portfolio admission and
+  complete restart/source-action handling remain required before activation.
+
 ### Added
+
+- Durable per-attempt original model extraction, normalization, source/context and
+  planning evidence, independent of the six-hour evaluation cache. Coverage audits
+  prefer original production decisions; a SQLite-only report distinguishes known
+  no-op, filtered, rejected, routed, executed and unresolved outcomes from unknown
+  historical evidence. Stale attempts cannot replace current evidence.
+- Independent-zone allocation ledger with immutable frozen plans/source lineage,
+  confirmed order bindings and idempotent execution IDs. Separate zone quantities
+  survive restart and out-of-order delivery; reports expose conflicts, overclosure,
+  overfill, changed/unattributed orders and net-position mismatches. Quantity
+  reconciliation never implies verified protection or permission to trade.
+- Labeled MRs, delivery milestones and immutable version-tag/release guidance,
+  reusing the existing tag-triggered verification and package publication workflow.
 
 - Treat malformed Bybit JSON/envelopes as exchange failures so startup gates,
   supervision backoff and operator escalation remain active. Reject missing
