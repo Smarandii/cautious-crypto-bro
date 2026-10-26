@@ -8,23 +8,48 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 live profitability. Descriptive Demo checkpoints are not proof of a profitable
 edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
-## [Unreleased]
+## [2.1.1] - 2026-10-26
 
-- Retain transiently failed OPEN candidates when other signals in the same post
-  succeed. Recover their original IDs without repeating extraction or successful
-  siblings, preserving approval restrictions and the original expiry deadline.
-  Pending recovery is reported as unresolved in source coverage.
+Security maintenance, source-completion and opportunity-coverage fixes on top of
+`v2.1.0`. This remains a Bybit Demo release; it does not certify mainnet
+operation or profitable edge.
+
+### Upgrade and validation
+
 - SQLite schema 13 adds the planning recovery queue. Stop the app and take a
   complete restore-verified state backup before upgrading from schema 12 or
   earlier supported versions. Older images reject schema 13; rollback requires
   exchange reconciliation and a matching pre-upgrade database. Never lower
   `user_version` to force compatibility. Historical missing candidates are not
   automatically replayed.
+- CI, CodeQL, container scanning, package build/install checks and the release
+  tag/version/changelog gate protect this release. Exact merged-revision and local
+  Bybit Demo/Telegram deployment evidence is recorded on the linked release issue.
+- Multi-zone execution remains unfinished under #123. The allocation ledger does
+  not enable multiple competing protection writers; native quantity-scoped
+  protection and the complete restart/source-action path remain required.
+  Mainnet remains unimplemented and is not enabled by this release.
 
+### Fixed
+
+- Retain transiently failed OPEN candidates when other signals in the same post
+  succeed. Recover their original IDs without repeating extraction or successful
+  siblings, preserving approval restrictions and the original expiry deadline.
+  Pending recovery is reported as unresolved in source coverage.
 - Complete Telegram posts with explicit execution-planning rejections as audited
   policy decisions instead of retrying their media and extraction indefinitely.
   Preserve rejection reasons and retry transient processing failures; this does
   not relax sizing rules or require a Telegram session reset.
+
+### Security
+
+- Install current Debian OpenSSL security updates in the runtime image before
+  application dependencies are installed.
+- Update `pydantic-settings` to 2.16.1, development `ruff` to 0.17.2 and pinned
+  workflow actions (setup-uv 10.3.2, CodeQL action 4.39.1).
+- Keep Docker Dependabot on the supported Python 3.12 line. A newer interpreter
+  requires its own runtime migration, packaging validation and rollback plan;
+  digest refreshes of the pinned 3.12 tag continue automatically.
 
 ## [2.1.0] - 2026-10-26
 
