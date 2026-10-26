@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sqlite3
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -33,6 +34,7 @@ pytestmark = pytest.mark.integration
         ("commentary", "PROCESSED_NO_OP"),
         ("filtered", "NORMALIZATION_FILTERED"),
         ("planning", "PLANNING_REJECTED"),
+        ("transport", "PLANNING_REJECTED"),
         ("executed", "EXECUTED"),
     ],
 )
@@ -58,7 +60,7 @@ def test_original_decisions_survive_restart_without_model_or_cache(
                         }
                     ],
                 )
-            elif case in {"planning", "executed"}:
+            elif case in {"planning", "transport", "executed"}:
                 response.update(
                     actionable=True,
                     intents=[
@@ -84,12 +86,58 @@ def test_original_decisions_survive_restart_without_model_or_cache(
         await store.initialize()
         source = make_intent().source.model_copy(update={"text": "Enter now"})
         provider = Model()
-        with executor_for(ExchangeTransport()) as executor:
+        exchange = ExchangeTransport()
+        with executor_for(exchange) as executor:
             service, bot, _ = workflow(store, executor, provider)
             try:
                 with patch.object(bot._bot, "send_message", new=AsyncMock()):
-                    await service.on_message(IncomingPost(source=source))
+                    with (
+                        patch.object(
+                            executor,
+                            "market_context",
+                            side_effect=RuntimeError("temporary market outage"),
+                        )
+                        if case == "transport"
+                        else nullcontext()
+                    ):
+                        await service.on_message(IncomingPost(source=source))
                 assert provider.calls == 1
+                if case in {"planning", "transport"}:
+                    assert exchange.orders == {}
+                if case == "planning":
+                    with sqlite3.connect(database) as db:
+                        status, reason = db.execute(
+                            "SELECT status,last_error FROM source_messages"
+                        ).fetchone()
+                    assert status == "COMPLETED"
+                    assert "ExecutionPlanningError" in reason
+                    assert not await store.get_retryable_source_message_ids(
+                        source.channel_id, lease_seconds=300
+                    )
+                    with sqlite3.connect(database) as db:
+                        assert db.execute(
+                            "SELECT COUNT(*) FROM intents"
+                        ).fetchone() == (0,)
+                    # Restart and replay must not download/extract/submit again.
+                    service, restarted_bot, _ = workflow(
+                        IntentStore(database), executor, provider
+                    )
+                    try:
+                        await service.on_message(IncomingPost(source=source))
+                        assert provider.calls == 1
+                    finally:
+                        await restarted_bot.close()
+                if case == "transport":
+                    assert (
+                        source.message_id
+                        in await store.get_retryable_source_message_ids(
+                            source.channel_id, lease_seconds=300
+                        )
+                    )
+                    with sqlite3.connect(database) as db:
+                        assert db.execute(
+                            "SELECT status FROM source_messages"
+                        ).fetchone() == ("FAILED",)
             finally:
                 await bot.close()
         # A new store process and no provider/cache are sufficient to audit.
