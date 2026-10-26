@@ -8,11 +8,11 @@ from .guidance import GuidanceRepositoryImpl
 from .intent import IntentRepositoryImpl
 from .manual_delivery import ManualDeliveryRepositoryImpl
 from .migrations import initialize_database
+from .planning_candidate import PlanningCandidateRepositoryImpl
 from .pnl import PnlRepositoryImpl
 from .position_action import PositionActionRepositoryImpl
 from .position_strategy import PositionStrategyRepositoryImpl
 from .recovery import RecoveryRepositoryImpl
-from .source import SourceRepositoryImpl
 from .zone import ZoneLedgerRepositoryImpl
 
 
@@ -20,7 +20,6 @@ class SQLiteStore(
     SQLiteConnectionMixin,
     OperatorAttentionRepositoryImpl,
     AutoOutcomeRepositoryImpl,
-    SourceRepositoryImpl,
     IntentRepositoryImpl,
     PositionActionRepositoryImpl,
     PositionStrategyRepositoryImpl,
@@ -28,6 +27,7 @@ class SQLiteStore(
     GuidanceRepositoryImpl,
     ExecutionPolicyRepositoryImpl,
     PnlRepositoryImpl,
+    PlanningCandidateRepositoryImpl,
     RecoveryRepositoryImpl,
     ZoneLedgerRepositoryImpl,
 ):

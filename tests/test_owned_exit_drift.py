@@ -25,7 +25,10 @@ from cautious_crypto_bro.storage import (
     LATEST_SCHEMA_VERSION,
     IntentStore,
 )
-from cautious_crypto_bro.storage.schema import ZONE_LEDGER_SCHEMA_SQL
+from cautious_crypto_bro.storage.schema import (
+    PLANNING_CANDIDATE_SCHEMA_SQL,
+    ZONE_LEDGER_SCHEMA_SQL,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -920,7 +923,9 @@ def test_intentionally_omitted_small_exits_are_not_missing_orders(tmp_path):
 def test_schema_8_upgrade_preserves_legacy_strategy_and_is_idempotent(tmp_path):
     database = tmp_path / "state.db"
     original_id = str(uuid4())
-    legacy_schema = LATEST_SCHEMA_SQL.replace(ZONE_LEDGER_SCHEMA_SQL, "")
+    legacy_schema = LATEST_SCHEMA_SQL.replace(ZONE_LEDGER_SCHEMA_SQL, "").replace(
+        PLANNING_CANDIDATE_SCHEMA_SQL, ""
+    )
     for column in (
         "    expected_exits_json TEXT,\n",
         "    pause_reason TEXT,\n",

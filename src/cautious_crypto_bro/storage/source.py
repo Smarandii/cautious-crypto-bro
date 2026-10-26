@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from uuid import uuid4
 
 import aiosqlite
@@ -230,8 +231,11 @@ class SourceRepositoryImpl(_Store):
         ],
         position_actions: Sequence[PositionActionIntent],
         claim_token: str,
+        *,
+        planning_candidates: Sequence[tuple[TradingIntent, bool, datetime]] = (),
     ) -> bool:
         source = self._validate_batch_inputs(items, position_actions)
+        self._validate_planning_candidates(source, planning_candidates)
 
         async with sqlite_connection(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
@@ -280,6 +284,20 @@ class SourceRepositoryImpl(_Store):
                         (record_id, kind),
                     )
 
+                for intent, duplicate, deadline in planning_candidates:
+                    await db.execute(
+                        "INSERT INTO planning_candidates(intent_id,channel_id,message_id,"
+                        "payload_json,duplicate_in_batch,deadline) VALUES (?,?,?,?,?,?)",
+                        (
+                            str(intent.intent_id),
+                            source.channel_id,
+                            source.message_id,
+                            intent.model_dump_json(),
+                            int(duplicate),
+                            deadline.isoformat(),
+                        ),
+                    )
+
                 if not await self._finish_source(
                     db,
                     source,
@@ -296,6 +314,20 @@ class SourceRepositoryImpl(_Store):
             except Exception:
                 await db.rollback()
                 raise
+
+    @staticmethod
+    def _validate_planning_candidates(
+        source: SourceMessage,
+        candidates: Sequence[tuple[TradingIntent, bool, datetime]],
+    ) -> None:
+        for intent, _, deadline in candidates:
+            if (intent.source.channel_id, intent.source.message_id) != (
+                source.channel_id,
+                source.message_id,
+            ):
+                raise ValueError("Planning candidate belongs to another source")
+            if deadline.tzinfo is None:
+                raise ValueError("Planning deadline must be timezone-aware")
 
     @staticmethod
     def _validate_batch_inputs(

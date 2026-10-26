@@ -6,6 +6,7 @@ from ._connection import sqlite_connection
 from .schema import (
     LATEST_SCHEMA_SQL,
     LATEST_SCHEMA_VERSION,
+    PLANNING_CANDIDATE_SCHEMA_SQL,
     RECOVERY_NOTICE_SCHEMA_SQL,
     SOURCE_DECISION_SCHEMA_SQL,
     ZONE_LEDGER_SCHEMA_SQL,
@@ -54,7 +55,7 @@ async def initialize_database(database_path: Path) -> None:
         if version == LATEST_SCHEMA_VERSION:
             return
 
-        if version in {4, 5, 6, 7, 8, 9, 10, 11}:
+        if version in {4, 5, 6, 7, 8, 9, 10, 11, 12}:
             try:
                 steps = (
                     (4, MIGRATION_4_TO_5_SQL),
@@ -65,6 +66,7 @@ async def initialize_database(database_path: Path) -> None:
                     (9, MIGRATION_9_TO_10_SQL),
                     (10, SOURCE_DECISION_SCHEMA_SQL),
                     (11, ZONE_LEDGER_SCHEMA_SQL),
+                    (12, PLANNING_CANDIDATE_SCHEMA_SQL),
                 )
                 migration_sql = "\n".join(
                     sql for source_version, sql in steps if version <= source_version
@@ -86,7 +88,7 @@ async def initialize_database(database_path: Path) -> None:
         if version != 0:
             raise RuntimeError(
                 "Unsupported database schema version: "
-                f"{version}; expected 0, 4, 5, 6, 7, 8, 9, 10, 11, "
+                f"{version}; expected 0, 4, 5, 6, 7, 8, 9, 10, 11, 12, "
                 f"or {LATEST_SCHEMA_VERSION}"
             )
 

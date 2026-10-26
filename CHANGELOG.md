@@ -10,6 +10,17 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+- Retain transiently failed OPEN candidates when other signals in the same post
+  succeed. Recover their original IDs without repeating extraction or successful
+  siblings, preserving approval restrictions and the original expiry deadline.
+  Pending recovery is reported as unresolved in source coverage.
+- SQLite schema 13 adds the planning recovery queue. Stop the app and take a
+  complete restore-verified state backup before upgrading from schema 12 or
+  earlier supported versions. Older images reject schema 13; rollback requires
+  exchange reconciliation and a matching pre-upgrade database. Never lower
+  `user_version` to force compatibility. Historical missing candidates are not
+  automatically replayed.
+
 - Complete Telegram posts with explicit execution-planning rejections as audited
   policy decisions instead of retrying their media and extraction indefinitely.
   Preserve rejection reasons and retry transient processing failures; this does

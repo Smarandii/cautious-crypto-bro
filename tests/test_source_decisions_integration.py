@@ -21,6 +21,7 @@ from cautious_crypto_bro.source_coverage import (
 )
 from cautious_crypto_bro.storage import LATEST_SCHEMA_SQL, IntentStore
 from cautious_crypto_bro.storage.schema import (
+    PLANNING_CANDIDATE_SCHEMA_SQL,
     SOURCE_DECISION_SCHEMA_SQL,
     ZONE_LEDGER_SCHEMA_SQL,
 )
@@ -34,7 +35,7 @@ pytestmark = pytest.mark.integration
         ("commentary", "PROCESSED_NO_OP"),
         ("filtered", "NORMALIZATION_FILTERED"),
         ("planning", "PLANNING_REJECTED"),
-        ("transport", "PLANNING_REJECTED"),
+        ("transport", "UNRESOLVED"),
         ("executed", "EXECUTED"),
     ],
 )
@@ -208,9 +209,9 @@ def test_schema10_upgrade_preserves_rows_and_does_not_invent_decisions(tmp_path)
     database = tmp_path / "state.db"
     with sqlite3.connect(database) as db:
         db.executescript(
-            LATEST_SCHEMA_SQL.replace(SOURCE_DECISION_SCHEMA_SQL, "").replace(
-                ZONE_LEDGER_SCHEMA_SQL, ""
-            )
+            LATEST_SCHEMA_SQL.replace(PLANNING_CANDIDATE_SCHEMA_SQL, "")
+            .replace(SOURCE_DECISION_SCHEMA_SQL, "")
+            .replace(ZONE_LEDGER_SCHEMA_SQL, "")
         )
         db.execute("PRAGMA user_version = 10")
         source = make_intent().source
