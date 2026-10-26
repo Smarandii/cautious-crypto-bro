@@ -18,7 +18,12 @@ def snapshot(db):
         for row in db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         )
-        if row[0] not in {"interrupted_execution_notices", "source_decisions"}
+        if row[0]
+        not in {
+            "interrupted_execution_notices",
+            "source_decisions",
+            "planning_candidates",
+        }
         and not row[0].startswith("zone_")
     ]
     return {
@@ -48,6 +53,7 @@ def test_schema9_upgrade_preserves_records_and_backfills_only_interrupted_notice
                 )
                 db.execute("DROP TABLE interrupted_execution_notices")
                 db.execute("DROP TABLE source_decisions")
+                db.execute("DROP TABLE planning_candidates")
                 for table in (
                     "zone_executions",
                     "zone_orders",
