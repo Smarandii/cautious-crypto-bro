@@ -368,7 +368,7 @@ def test_supervisor_freezes_entries_and_protects_profit() -> None:
     ("ttl_minutes", "age_minutes"),
     [(0, 300), (240, 60)],
 )
-def test_supervisor_preserves_legacy_and_young_gtc_entries(
+def test_supervisor_preserves_legacy_and_young_entries_when_expiry_disabled(
     ttl_minutes: int,
     age_minutes: int,
 ) -> None:
@@ -398,6 +398,73 @@ def test_supervisor_preserves_legacy_and_young_gtc_entries(
 
     assert executor.cancelled_orders == []
     assert len(executor.state.open_orders) == 1
+
+
+def test_supervisor_applies_configured_ttl_to_legacy_plan_without_stored_ttl() -> None:
+    strategy_plan = _with_entry_ttl(
+        plan(),
+        ttl_minutes=0,
+        age_minutes=300,
+    )
+    state = PositionStrategy(
+        strategy_id=strategy_plan.intent_id,
+        symbol=strategy_plan.symbol,
+        side=strategy_plan.side,
+    )
+    executor = Executor()
+    owned_entries = (
+        _entry_order(strategy_plan, "E1"),
+        _entry_order(strategy_plan, "E2"),
+    )
+    executor.state = replace(
+        executor.state,
+        positions=(),
+        open_orders=owned_entries,
+    )
+    store = Store(state, strategy_plan)
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+        legacy_entry_ttl_minutes=240,
+    )
+
+    asyncio.run(supervisor.reconcile_once())
+
+    assert executor.cancelled_orders == [order.order_id for order in owned_entries]
+    assert executor.state.open_orders == ()
+    assert store.state.status is StrategyStatus.CLOSED
+
+
+def test_supervisor_closes_empty_legacy_plan_after_fallback_ttl() -> None:
+    strategy_plan = _with_entry_ttl(
+        plan(),
+        ttl_minutes=0,
+        age_minutes=300,
+    )
+    state = PositionStrategy(
+        strategy_id=strategy_plan.intent_id,
+        symbol=strategy_plan.symbol,
+        side=strategy_plan.side,
+    )
+    executor = Executor()
+    executor.state = replace(
+        executor.state,
+        positions=(),
+        open_orders=(),
+    )
+    store = Store(state, strategy_plan)
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+        legacy_entry_ttl_minutes=240,
+    )
+
+    asyncio.run(supervisor.reconcile_once())
+
+    assert executor.cancelled_orders == []
+    assert store.state.status is StrategyStatus.CLOSED
 
 
 def test_supervisor_expires_only_owned_entries_and_closes_unfilled_plan() -> None:
@@ -443,7 +510,7 @@ def test_supervisor_expires_only_owned_entries_and_closes_unfilled_plan() -> Non
 def test_supervisor_expires_remaining_entries_but_protects_partial_position() -> None:
     strategy_plan = _with_entry_ttl(
         plan(),
-        ttl_minutes=240,
+        ttl_minutes=0,
         age_minutes=300,
     )
     state = PositionStrategy(
@@ -471,6 +538,7 @@ def test_supervisor_expires_remaining_entries_but_protects_partial_position() ->
         store=store,
         executor=executor,
         mutation_lock=asyncio.Lock(),
+        legacy_entry_ttl_minutes=240,
     )
 
     asyncio.run(supervisor.reconcile_once())

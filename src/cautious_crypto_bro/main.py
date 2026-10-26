@@ -165,6 +165,7 @@ async def _build_runtime(
         mutation_lock=(account_mutation_lock),
         progress_path=supervision_health_path(settings.database_path),
         report_state=bot.report_supervision_state,
+        legacy_entry_ttl_minutes=(settings.demo_entry_order_ttl_minutes),
     )
 
     context_provider = SignalContextProvider(
