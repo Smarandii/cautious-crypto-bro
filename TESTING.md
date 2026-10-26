@@ -21,6 +21,17 @@ git diff --check
 under the measured value and is raised whenever coverage improves, so a drop
 fails the gate rather than passing unnoticed. Raise it, never lower it.
 
+`pytest-xdist` runs the default invocation with one worker per available CPU.
+Use `-n 0` when a failure needs deterministic serial output:
+
+```sh
+uv run pytest -q -n 0 --no-cov tests/test_state_backup.py
+```
+
+Backup CLI tests allow a cold subprocess start up to 60 seconds so a slow
+filesystem or parallel worker does not masquerade as a hang. For the fastest
+local edit loop, add `--no-cov`; keep the coverage gate for the final pass.
+
 To find what is untested:
 
 ```sh

@@ -23,6 +23,7 @@ dev = [
   "pyright>=1.1.405,<2",
   "pytest>=8.4,<10",
   "pytest-cov>=6,<8",
+  "pytest-xdist>=3.8,<4",
   "ruff>=0.13,<1",
 ]
 
@@ -77,7 +78,7 @@ markers = [
 ]
 # Coverage is part of the default invocation rather than a CI-only extra, so a
 # local `pytest -q` and the pull request gate measure exactly the same thing.
-addopts = "--cov --cov-report=term-missing:skip-covered"
+addopts = "-n auto --cov --cov-report=term-missing:skip-covered"
 
 [tool.coverage.run]
 # Application code only. Operator scripts and tests are linear run-once
