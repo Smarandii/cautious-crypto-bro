@@ -8,6 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 live profitability. Descriptive Demo checkpoints are not proof of a profitable
 edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
+## [Unreleased]
+
+### Fixed
+
+- Apply the configured entry-order TTL to legacy Strategy V2 plans that were
+  stored before the TTL field existed. A legacy ladder can no longer own a
+  symbol indefinitely or leave unfilled entry orders after its expiry window.
+  A configured value of zero still disables automatic entry expiry.
+
 ## [2.1.1] - 2026-10-26
 
 Security maintenance, source-completion and opportunity-coverage fixes on top of

@@ -50,11 +50,14 @@ class PositionSupervisor:
         progress_path: Path | None = None,
         failure_retry_seconds: float = 30,
         report_state: Callable[[str | None], Awaitable[None]] | None = None,
+        legacy_entry_ttl_minutes: int = 0,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("Supervisor poll interval must be positive")
         if failure_retry_seconds <= 0:
             raise ValueError("Supervisor failure retry interval must be positive")
+        if legacy_entry_ttl_minutes < 0:
+            raise ValueError("Legacy entry TTL must not be negative")
 
         self._store = store
         self._executor = executor
@@ -63,6 +66,7 @@ class PositionSupervisor:
         self._progress_path = progress_path
         self._failure_retry_seconds = failure_retry_seconds
         self._report_state = report_state
+        self._legacy_entry_ttl_minutes = legacy_entry_ttl_minutes
         self._reported_uncertain: set[UUID] = set()
         self._trailing_stop_manager = TrailingStopManager(executor=executor)
         self._fill_detector = FillDetector(executor=executor)
@@ -1194,6 +1198,12 @@ class PositionSupervisor:
         }:
             return account, False
         ttl_minutes = plan.policy.strategy_v2.entry_order_ttl_minutes
+        if ttl_minutes == 0:
+            # Plans persisted before the entry-order TTL existed have no stored
+            # value and load as zero. Adopt the configured TTL so a legacy
+            # ladder cannot own a symbol forever. A configured value of zero
+            # still disables expiry.
+            ttl_minutes = self._legacy_entry_ttl_minutes
         expires_at = plan.created_at + timedelta(minutes=ttl_minutes)
         if ttl_minutes == 0 or datetime.now(UTC) < expires_at:
             return account, False

@@ -218,6 +218,9 @@ history request can leave an older timestamp; a ledger read failure displays
 - Plans freeze wallet capital and a default 1% price-risk budget.
   Fees and stop slippage can make realized losses larger.
 - MARKET E1 fills before E2/E3 are calculated and submitted.
+- Entry ladders expire after `DEMO_ENTRY_ORDER_TTL_MINUTES` when configured.
+  Legacy plans stored before that field existed adopt the current value instead
+  of owning the symbol forever; zero still disables automatic expiry.
 - Pre-submit failures close empty strategies; potentially accepted submissions
   stay quarantined. Paused strategies require deliberate recovery.
 - Fixed-exit edits, cancellation, or missing orders pause automation with a
