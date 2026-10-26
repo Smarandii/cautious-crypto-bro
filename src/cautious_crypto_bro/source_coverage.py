@@ -43,6 +43,7 @@ def decision_disposition(
     source_status: str,
     record_statuses: list[str],
     source_reason: str | None = None,
+    planning_statuses: list[str] | None = None,
 ) -> str:
     if decision is None:
         return (
@@ -61,10 +62,22 @@ def decision_disposition(
             else "PROCESSED_NO_OP"
         )
     planning = decision.get("planning")
-    if planning is not None and not (
-        planning["planned_intent_ids"] or planning["position_action_ids"]
+    if planning_statuses and "PENDING" in planning_statuses:
+        return "UNRESOLVED"
+    if planning and planning.get("retryable_errors") and not planning_statuses:
+        return "UNRESOLVED"
+    if planning_statuses and {"EXPIRED", "REJECTED"}.intersection(planning_statuses):
+        return "PARTIAL_PLANNING_FAILURE" if record_statuses else "PLANNING_REJECTED"
+    if (
+        planning is not None
+        and not (planning["planned_intent_ids"] or planning["position_action_ids"])
+        and not planning_statuses
     ):
         return "PLANNING_REJECTED" if planning["errors"] else "CONTEXT_FILTERED"
+    return _record_disposition(record_statuses)
+
+
+def _record_disposition(record_statuses: list[str]) -> str:
     if {"UNCERTAIN", "EXECUTING", "AUTO_PENDING"}.intersection(record_statuses):
         return "UNRESOLVED"
     if "PENDING" in record_statuses:
@@ -97,6 +110,11 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
         source_statuses: Counter[str] = Counter()
         approval_modes: Counter[str] = Counter()
         missing = 0
+        cursor = await db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='planning_candidates'"
+        )
+        has_candidates = await cursor.fetchone() is not None
+        candidate_counts: Counter[str] = Counter()
         for channel_id, message_id, status, reason in sources:
             source_statuses[status] += 1
             decision = await production_decision(db, channel_id, message_id)
@@ -112,7 +130,17 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
                     records.append(
                         record_disposition_status(record_status, approval_mode)
                     )
-            disposition = decision_disposition(decision, status, records, reason)
+            candidate_statuses = []
+            if has_candidates:
+                cursor = await db.execute(
+                    "SELECT status FROM planning_candidates WHERE channel_id=? AND message_id=?",
+                    (channel_id, message_id),
+                )
+                candidate_statuses = [row[0] for row in await cursor.fetchall()]
+                candidate_counts.update(candidate_statuses)
+            disposition = decision_disposition(
+                decision, status, records, reason, candidate_statuses
+            )
             missing += disposition == "UNKNOWN"
             dispositions[disposition] += 1
         return {
@@ -122,5 +150,6 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
             "source_statuses": dict(sorted(source_statuses.items())),
             "dispositions": dict(sorted(dispositions.items())),
             "linked_record_statuses": dict(sorted(statuses.items())),
+            "planning_candidate_statuses": dict(sorted(candidate_counts.items())),
             "linked_approval_modes": dict(sorted(approval_modes.items())),
         }

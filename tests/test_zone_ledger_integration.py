@@ -21,7 +21,10 @@ from cautious_crypto_bro.domain import (
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.storage import LATEST_SCHEMA_SQL, IntentStore
-from cautious_crypto_bro.storage.schema import ZONE_LEDGER_SCHEMA_SQL
+from cautious_crypto_bro.storage.schema import (
+    PLANNING_CANDIDATE_SCHEMA_SQL,
+    ZONE_LEDGER_SCHEMA_SQL,
+)
 from cautious_crypto_bro.zone_ledger import ZoneExecution, ZoneOrder
 
 pytestmark = pytest.mark.integration
@@ -294,7 +297,11 @@ def test_quantity_matches_do_not_hide_unknown_or_changed_orders(tmp_path):
 def test_schema11_upgrade_preserves_old_rows_and_does_not_invent_allocations(tmp_path):
     database = tmp_path / "state.db"
     with sqlite3.connect(database) as db:
-        db.executescript(LATEST_SCHEMA_SQL.replace(ZONE_LEDGER_SCHEMA_SQL, ""))
+        db.executescript(
+            LATEST_SCHEMA_SQL.replace(ZONE_LEDGER_SCHEMA_SQL, "").replace(
+                PLANNING_CANDIDATE_SCHEMA_SQL, ""
+            )
+        )
         db.execute("PRAGMA user_version=11")
         before = {
             row[0]: db.execute("SELECT * FROM " + row[0] + " ORDER BY rowid").fetchall()

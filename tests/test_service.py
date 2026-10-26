@@ -442,8 +442,11 @@ def test_multiple_intents_are_planned_persisted_and_sent() -> None:
             items,
             position_actions,
             claim_token,
+            *,
+            planning_candidates=(),
         ):
             assert claim_token == "claim"
+            assert not planning_candidates
             assert position_actions == ()
             self.persisted = list(items)
             return True

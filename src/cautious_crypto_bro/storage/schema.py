@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-LATEST_SCHEMA_VERSION = 12
+LATEST_SCHEMA_VERSION = 13
 
 ZONE_LEDGER_SCHEMA_SQL = """
 CREATE TABLE zone_groups (
@@ -57,3 +57,25 @@ LATEST_SCHEMA_SQL = "\nCREATE TABLE source_messages (\n    channel_id INTEGER NO
 LATEST_SCHEMA_SQL += RECOVERY_NOTICE_SCHEMA_SQL
 LATEST_SCHEMA_SQL += SOURCE_DECISION_SCHEMA_SQL
 LATEST_SCHEMA_SQL += ZONE_LEDGER_SCHEMA_SQL
+
+PLANNING_CANDIDATE_SCHEMA_SQL = """
+CREATE TABLE planning_candidates (
+    intent_id TEXT PRIMARY KEY,
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    duplicate_in_batch INTEGER NOT NULL CHECK(duplicate_in_batch IN (0, 1)),
+    deadline TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING'
+        CHECK(status IN ('PENDING', 'TRANSFERRED', 'REJECTED', 'EXPIRED')),
+    claim_token TEXT,
+    retry_after TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX ix_planning_candidates_due
+ON planning_candidates(status, retry_after);
+"""
+
+LATEST_SCHEMA_SQL += PLANNING_CANDIDATE_SCHEMA_SQL

@@ -65,6 +65,7 @@ class _PlannedBatch:
     position_actions: tuple[PositionActionIntent, ...]
     planning_errors: list[str]
     planning_rejections: list[str]
+    retry_candidates: list[tuple[TradingIntent, bool, datetime]]
     account_state: AccountStateSummary | None
     account_state_error: str | None
 
@@ -82,6 +83,7 @@ class SignalService:
         context_provider: SignalContextProvider,
         auto_approval_mode: AutoApprovalMode = (AutoApprovalMode.DISABLED),
         source_processing_lease_seconds: int = 300,
+        intent_max_age_seconds: int = 900,
         demo_long_risk_multiplier: Decimal = Decimal("1"),
         demo_long_exit_control_fraction: Decimal = Decimal("0"),
         demo_long_participation_skip_fraction: Decimal = Decimal("0"),
@@ -91,6 +93,8 @@ class SignalService:
     ) -> None:
         if source_processing_lease_seconds <= 0:
             raise ValueError("Source processing lease must be positive")
+        if intent_max_age_seconds <= 0:
+            raise ValueError("Intent maximum age must be positive")
         if not Decimal("0") < demo_long_risk_multiplier <= Decimal("1"):
             raise ValueError("Demo LONG risk multiplier must be in (0, 1]")
         if not Decimal("0") <= demo_long_exit_control_fraction <= Decimal("1"):
@@ -133,6 +137,7 @@ class SignalService:
         self._context_provider = context_provider
         self._auto_approval_mode = auto_approval_mode
         self._source_processing_lease_seconds = source_processing_lease_seconds
+        self._intent_max_age_seconds = intent_max_age_seconds
         self._demo_long_risk_multiplier = demo_long_risk_multiplier
         self._demo_long_exit_control_fraction = demo_long_exit_control_fraction
         self._demo_long_participation_skip_fraction = (
@@ -204,6 +209,10 @@ class SignalService:
     async def run_delivery_recovery(self) -> None:
         while True:
             try:
+                await self.recover_planning_candidates()
+            except Exception:
+                logger.exception("Candidate planning recovery failed")
+            try:
                 await self.recover_manual_deliveries()
             except Exception:
                 logger.exception("Manual approval recovery failed")
@@ -212,6 +221,88 @@ class SignalService:
             except Exception:
                 logger.exception("AUTO outcome recovery failed")
             await asyncio.sleep(30)
+
+    async def recover_planning_candidates(self) -> None:
+        await self._recover_transferred_candidates()
+        # Bound each pass so delivery recovery is not starved by a large backlog.
+        for _ in range(10):
+            candidate = await self._store.claim_planning_candidate()
+            if candidate is None:
+                return
+            intent = candidate.intent
+            if datetime.now(UTC) >= candidate.deadline:
+                await self._store.finish_planning_candidate(
+                    intent.intent_id,
+                    candidate.claim_token,
+                    status="EXPIRED",
+                    error="Original source deadline exceeded",
+                )
+                continue
+            try:
+                context = await self._context_provider.snapshot(
+                    intent.source.channel_id
+                )
+                rejections: list[str] = []
+                planned, errors = await self._plan_open_intents(
+                    SignalExtraction(open_intents=(intent,)),
+                    context,
+                    planning_rejections=rejections,
+                    original_duplicate=candidate.duplicate_in_batch,
+                    original_manual=intent.approval_mode is ApprovalMode.MANUAL,
+                )
+                if not planned:
+                    await self._store.finish_planning_candidate(
+                        intent.intent_id,
+                        candidate.claim_token,
+                        status="REJECTED" if rejections else "PENDING",
+                        error="; ".join(errors + rejections)
+                        or "Portfolio admission unavailable",
+                    )
+                    continue
+                recovered, plan = planned[0]
+                if not await self._store.transfer_planning_candidate(
+                    candidate, recovered, plan
+                ):
+                    continue
+            except Exception as exc:
+                await self._store.finish_planning_candidate(
+                    intent.intent_id,
+                    candidate.claim_token,
+                    status="PENDING",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                logger.exception(
+                    "Candidate planning retry failed for %s", intent.intent_id
+                )
+                continue
+            # Once transferred, existing execution/uncertain-outcome recovery owns it.
+            pnl, pnl_error = await self._stored_account_pnl_safe()
+            await self._dispatch_planned_intents(
+                [(recovered, plan)],
+                snapshot=AccountSnapshotDelivery(
+                    state=context.account_state,
+                    state_error=context.account_state_error,
+                    pnl=pnl,
+                    pnl_error=pnl_error,
+                ),
+            )
+
+    async def _recover_transferred_candidates(self) -> None:
+        for intent_id in await self._store.pending_transferred_auto_candidates():
+            if self._auto_approval_mode is AutoApprovalMode.DISABLED:
+                await self._store.mark_failed(
+                    intent_id, "AUTO recovery cancelled: auto approval is disabled"
+                )
+                continue
+            try:
+                outcome = await self._coordinator.execute_intent(
+                    intent_id, approval_mode=ApprovalMode.AUTO
+                )
+                await self._deliver_auto_outcome(intent_id, "OPEN", outcome)
+            except Exception:
+                logger.exception(
+                    "Transferred candidate recovery failed for %s", intent_id
+                )
 
     async def run_periodic_account_pnl_sync(self) -> None:
         while True:
@@ -561,6 +652,7 @@ class SignalService:
             claim_token,
             batch.planned,
             batch.position_actions,
+            batch.retry_candidates,
         )
         if not finalized:
             return
@@ -645,10 +737,12 @@ class SignalService:
             return None
 
         planning_rejections: list[str] = []
+        retry_candidates: list[tuple[TradingIntent, bool, datetime]] = []
         planned, planning_errors = await self._plan_open_intents(
             signals,
             context_snapshot,
             planning_rejections=planning_rejections,
+            retry_candidates=retry_candidates,
         )
         position_actions = self._build_position_actions(
             signals,
@@ -677,6 +771,7 @@ class SignalService:
             position_actions=position_actions,
             planning_errors=planning_errors,
             planning_rejections=planning_rejections,
+            retry_candidates=retry_candidates,
             account_state=context_snapshot.account_state,
             account_state_error=context_snapshot.account_state_error,
         )
@@ -732,6 +827,9 @@ class SignalService:
         context_snapshot: SignalContextSnapshot,
         *,
         planning_rejections: list[str],
+        retry_candidates: list[tuple[TradingIntent, bool, datetime]] | None = None,
+        original_duplicate: bool = False,
+        original_manual: bool = False,
     ) -> tuple[
         list[
             tuple[
@@ -755,9 +853,7 @@ class SignalService:
         account_state = context_snapshot.account_state
         position_context = context_snapshot.position_context
 
-        open_counts = Counter(
-            (intent.symbol, intent.side) for intent in signals.open_intents
-        )
+        open_counts = self._candidate_counts(signals, original_duplicate)
 
         try:
             policy = await self._capital_frozen_policy()
@@ -769,6 +865,9 @@ class SignalService:
             logger.exception(
                 "Execution policy/capital load failed",
             )
+            self._remember_retry_candidates(
+                signals.open_intents, open_counts, retry_candidates
+            )
             return planned, planning_errors
 
         existing_portfolio_risk = await self._existing_portfolio_stop_risk(
@@ -776,6 +875,9 @@ class SignalService:
             planning_errors,
         )
         if existing_portfolio_risk is None:
+            self._remember_retry_candidates(
+                signals.open_intents, open_counts, retry_candidates
+            )
             return planned, planning_errors
 
         batch_reserved_risk = Decimal("0")
@@ -786,6 +888,7 @@ class SignalService:
                 position_context,
                 account_state,
                 open_counts,
+                original_manual=original_manual,
             )
 
             intent_policy = self._policy_for_intent_side(
@@ -816,13 +919,22 @@ class SignalService:
                     planning_errors.append(
                         f"{intent.symbol}: portfolio stop-risk cap: {exc}"
                     )
+                    self._remember_retry_candidates(
+                        (intent,), open_counts, retry_candidates
+                    )
                     continue
 
+            previous_error_count = len(planning_errors)
             plan = await self._plan_single_intent(
                 intent,
                 intent_policy,
                 planning_errors,
                 planning_rejections,
+            )
+            self._remember_retry_candidates(
+                (intent,) if len(planning_errors) > previous_error_count else (),
+                open_counts,
+                retry_candidates,
             )
 
             if plan is not None:
@@ -838,6 +950,33 @@ class SignalService:
                 planned.append((intent, plan))
 
         return planned, planning_errors
+
+    @staticmethod
+    def _candidate_counts(
+        signals: SignalExtraction, original_duplicate: bool
+    ) -> Counter[tuple[str, Side]]:
+        counts = Counter(
+            (intent.symbol, intent.side) for intent in signals.open_intents
+        )
+        if original_duplicate:
+            counts.update(dict.fromkeys(counts, 1))
+        return counts
+
+    def _remember_retry_candidates(
+        self,
+        intents: tuple[TradingIntent, ...],
+        counts: Counter[tuple[str, Side]],
+        candidates: list[tuple[TradingIntent, bool, datetime]] | None,
+    ) -> None:
+        if candidates is None:
+            return
+        for intent in intents:
+            deadline = min(intent.created_at, intent.source.published_at) + timedelta(
+                seconds=self._intent_max_age_seconds
+            )
+            candidates.append(
+                (intent, counts[(intent.symbol, intent.side)] > 1, deadline)
+            )
 
     async def _existing_portfolio_stop_risk(
         self,
@@ -1008,6 +1147,8 @@ class SignalService:
         position_context: SignalPositionContext,
         account_state: AccountStateSummary | None,
         open_counts: Counter[tuple[str, Side]],
+        *,
+        original_manual: bool = False,
     ) -> TradingIntent:
         key = (extracted_intent.symbol, extracted_intent.side)
 
@@ -1018,7 +1159,13 @@ class SignalService:
             duplicate_in_batch=(open_counts[key] > 1),
         )
 
-        return extracted_intent.model_copy(update={"approval_mode": (approval_mode)})
+        return extracted_intent.model_copy(
+            update={
+                "approval_mode": ApprovalMode.MANUAL
+                if original_manual
+                else approval_mode
+            }
+        )
 
     async def _plan_single_intent(
         self,
@@ -1121,12 +1268,14 @@ class SignalService:
             ]
         ],
         position_actions: tuple[PositionActionIntent, ...],
+        retry_candidates: list[tuple[TradingIntent, bool, datetime]],
     ) -> bool:
         try:
             finalized = await self._store.create_signal_batch_and_complete_source(
                 planned,
                 position_actions,
                 claim_token,
+                planning_candidates=retry_candidates,
             )
 
         except Exception as exc:

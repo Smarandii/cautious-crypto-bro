@@ -34,6 +34,7 @@ from .domain import (
     SymbolExposure,
     TradingIntent,
 )
+from .storage.planning_candidate import PlanningCandidate
 
 # ---------------------------------------------------------------------------
 # Infrastructure ports
@@ -281,6 +282,8 @@ class SourceRepository(Protocol):
         items: Sequence[tuple[TradingIntent, ExecutionPlan]],
         position_actions: Sequence[PositionActionIntent],
         claim_token: str,
+        *,
+        planning_candidates: Sequence[tuple[TradingIntent, bool, datetime]] = (),
     ) -> bool: ...
 
     async def reset_stale_processing_sources(
@@ -545,6 +548,18 @@ class SignalServiceStore(
     Protocol,
 ):
     """Everything SignalService needs from durable storage."""
+
+    async def claim_planning_candidate(self) -> PlanningCandidate | None: ...
+
+    async def pending_transferred_auto_candidates(self) -> tuple[UUID, ...]: ...
+
+    async def finish_planning_candidate(
+        self, intent_id: UUID, claim_token: str, *, status: str, error: str
+    ) -> bool: ...
+
+    async def transfer_planning_candidate(
+        self, candidate: PlanningCandidate, intent: TradingIntent, plan: ExecutionPlan
+    ) -> bool: ...
 
 
 class ExecutionCoordinatorStore(

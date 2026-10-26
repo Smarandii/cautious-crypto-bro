@@ -182,6 +182,7 @@ async def _build_runtime(
         context_provider=context_provider,
         auto_approval_mode=(settings.auto_approval_mode),
         source_processing_lease_seconds=(settings.source_processing_lease_seconds),
+        intent_max_age_seconds=settings.intent_max_age_seconds,
         demo_long_risk_multiplier=(settings.demo_long_risk_multiplier),
         demo_long_exit_control_fraction=(settings.demo_long_exit_control_fraction),
         demo_long_participation_skip_fraction=(
