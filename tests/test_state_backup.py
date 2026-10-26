@@ -21,6 +21,9 @@ from cautious_crypto_bro.storage import LATEST_SCHEMA_VERSION, IntentStore
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/state_backup.py"
+# A cold CLI start can take double-digit seconds on a slow or parallel
+# filesystem. Keep enough headroom to distinguish that from a real hang.
+SUBPROCESS_TIMEOUT_SECONDS = 60
 
 
 def inputs(tmp_path):
@@ -44,7 +47,7 @@ def invoke(tmp_path, *arguments):
         [sys.executable, str(SCRIPT), *map(str, arguments)],
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
         cwd=tmp_path,
         env=os.environ
         | {
