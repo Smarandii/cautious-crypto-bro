@@ -16,17 +16,6 @@ on:
       - ".github/workflows/container.yml"
   pull_request:
     branches: [master]
-    paths:
-      - "Dockerfile"
-      - "docker-compose.yaml"
-      - "docker-compose.dev.yaml"
-      - ".dockerignore"
-      - ".gitignore"
-      - "src/**"
-      - "scripts/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/container.yml"
 
 permissions:
   contents: read
