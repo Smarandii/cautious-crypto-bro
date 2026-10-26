@@ -53,6 +53,15 @@ updates:
       base-images:
         patterns:
           - "*"
+    ignore:
+      # `pyproject.toml` supports only Python 3.12 today. Dependabot still
+      # refreshes the digest of the pinned 3.12 tag, but a new minor line
+      # (3.13, 3.15, ...) must be a deliberate runtime migration with its own
+      # issue, packaging validation and rollback plan. See issue #157.
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
 
   # Actions in this repo are pinned to commit SHAs. Dependabot rewrites the SHA
   # and updates the trailing version comment, so pinning stays upgradeable.
