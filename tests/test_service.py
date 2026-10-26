@@ -275,6 +275,7 @@ def test_participation_skip_is_persistable_and_does_not_reserve_cap() -> None:
                 open_intents=(intent(skip_id, "BTCUSDT"), intent(take_id, "ETHUSDT"))
             ),
             context,
+            planning_rejections=[],
         )
     )
 

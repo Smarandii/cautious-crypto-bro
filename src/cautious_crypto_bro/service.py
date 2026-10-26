@@ -36,7 +36,7 @@ from .domain import (
     SourceMessage,
     TradingIntent,
 )
-from .execution import ExecutionPlanner
+from .execution import ExecutionPlanner, ExecutionPlanningError
 from .portfolio_risk import (
     open_stop_risk_usdt,
     policy_with_remaining_portfolio_risk,
@@ -64,6 +64,7 @@ class _PlannedBatch:
     ]
     position_actions: tuple[PositionActionIntent, ...]
     planning_errors: list[str]
+    planning_rejections: list[str]
     account_state: AccountStateSummary | None
     account_state_error: str | None
 
@@ -538,6 +539,7 @@ class SignalService:
                 source,
                 claim_token,
                 batch.planning_errors,
+                batch.planning_rejections,
             )
             return
 
@@ -642,9 +644,11 @@ class SignalService:
             )
             return None
 
+        planning_rejections: list[str] = []
         planned, planning_errors = await self._plan_open_intents(
             signals,
             context_snapshot,
+            planning_rejections=planning_rejections,
         )
         position_actions = self._build_position_actions(
             signals,
@@ -661,7 +665,9 @@ class SignalService:
                 "position_action_ids": [
                     str(action.action_id) for action in position_actions
                 ],
-                "errors": planning_errors,
+                "errors": planning_errors + planning_rejections,
+                "retryable_errors": planning_errors,
+                "rejections": planning_rejections,
             },
         ):
             return None
@@ -670,6 +676,7 @@ class SignalService:
             planned=planned,
             position_actions=position_actions,
             planning_errors=planning_errors,
+            planning_rejections=planning_rejections,
             account_state=context_snapshot.account_state,
             account_state_error=context_snapshot.account_state_error,
         )
@@ -723,6 +730,8 @@ class SignalService:
         self,
         signals: SignalExtraction,
         context_snapshot: SignalContextSnapshot,
+        *,
+        planning_rejections: list[str],
     ) -> tuple[
         list[
             tuple[
@@ -813,6 +822,7 @@ class SignalService:
                 intent,
                 intent_policy,
                 planning_errors,
+                planning_rejections,
             )
 
             if plan is not None:
@@ -1015,6 +1025,7 @@ class SignalService:
         intent: TradingIntent,
         policy: ExecutionPolicy,
         planning_errors: list[str],
+        planning_rejections: list[str],
     ) -> ExecutionPlan | None:
         try:
             market_context = await self._executor.market_context(intent.symbol)
@@ -1024,6 +1035,11 @@ class SignalService:
                 market_context,
             )
 
+        except ExecutionPlanningError as exc:
+            reason = f"{intent.symbol}: {type(exc).__name__}: {exc}"
+            planning_rejections.append(reason)
+            logger.info("Execution candidate rejected: %s", reason)
+            return None
         except Exception as exc:
             error = f"{intent.symbol}: {type(exc).__name__}: {exc}"
             planning_errors.append(error)
@@ -1059,6 +1075,7 @@ class SignalService:
         source: SourceMessage,
         claim_token: str,
         planning_errors: list[str],
+        planning_rejections: list[str],
     ) -> None:
         if planning_errors:
             await self._store.mark_source_failed(
@@ -1069,6 +1086,14 @@ class SignalService:
                     "candidate could be planned: " + " | ".join(planning_errors)
                 ),
             )
+        elif planning_rejections:
+            if not await self._store.mark_source_completed(
+                source,
+                claim_token,
+                reason="Execution planning rejected: "
+                + " | ".join(planning_rejections),
+            ):
+                raise RuntimeError("Source planning rejection could not be recorded")
         else:
             await self._store.mark_source_completed(
                 source,

@@ -10,7 +10,10 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
-No changes yet.
+- Complete Telegram posts with explicit execution-planning rejections as audited
+  policy decisions instead of retrying their media and extraction indefinitely.
+  Preserve rejection reasons and retry transient processing failures; this does
+  not relax sizing rules or require a Telegram session reset.
 
 ## [2.1.0] - 2026-10-26
 
