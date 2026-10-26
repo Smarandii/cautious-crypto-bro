@@ -101,6 +101,18 @@ OPEN trade rules:
   "Take profit after re-entry" describes an existing trade, not a new re-entry.
   Only extract a separate OPEN from such a post when it explicitly instructs
   a new entry now; never replace an unsupported stop update with OPEN.
+- Promotional and performance-recap cards are NOT live exchange evidence.
+  Treat ROI/PnL percentage badges, "results" or profit tables, multiple past
+  symbols with historical open/current prices, QR codes, referral/partner
+  codes and broker marketing branding as non-actionable marketing. Do not emit
+  an OPEN from them even when they visually resemble a position panel.
+- A screenshot may authorize a NEW OPEN only when it is an actual exchange
+  position/order panel for a current position (with current entry/mark/liq/size
+  or position controls), or when the current caption explicitly instructs an
+  entry. Do not treat testimonials, promo posters or historical recap tables as
+  live exchange panels.
+- If the caption is empty and the images are only promotional recaps, return
+  actionable=false; do not infer leverage or entry from marketing badges.
 - if one current exchange screenshot shows multiple distinct live positions,
   extract EACH valid position as its own independent OPEN candidate when its
   symbol and side are available

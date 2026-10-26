@@ -1289,3 +1289,20 @@ def test_observed_partial_close_captions_are_scoped(caption, expected_pct) -> No
         symbol="AKEUSDT", action="CLOSE", evidence_text=None
     )
     assert not _signals_from_extraction(item, extraction).position_actions
+
+
+def test_prompt_guards_promotional_recap_cards() -> None:
+    from cautious_crypto_bro.openrouter import SYSTEM_PROMPT
+
+    prompt = " ".join(SYSTEM_PROMPT.split())
+
+    assert (
+        "Promotional and performance-recap cards are NOT live exchange evidence"
+        in prompt
+    )
+    assert "Do not emit an OPEN from them" in prompt
+    assert "referral/partner codes" in prompt
+    assert (
+        "If the caption is empty and the images are only promotional recaps" in prompt
+    )
+    assert "actionable=false" in prompt

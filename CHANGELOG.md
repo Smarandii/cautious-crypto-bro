@@ -16,6 +16,9 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
   stored before the TTL field existed. A legacy ladder can no longer own a
   symbol indefinitely or leave unfilled entry orders after its expiry window.
   A configured value of zero still disables automatic entry expiry.
+- Reject promotional and performance-recap cards as live OPEN evidence. ROI
+  tables, QR/referral branding and historical recap panels must not become
+  entries; an empty caption with only promotional images is non-actionable.
 
 ## [2.1.1] - 2026-10-26
 
