@@ -56,6 +56,34 @@ notional, and only resumes the app after matching terminal cleanup receipts. A
 passing observation means the experiment completed, not that independent-zone
 protection is safe. No mainnet option exists.
 
+## Run-owned cleanup evidence
+
+The runner mounts its private evidence directory at `/probe-evidence` and supplies
+`CCB_PROBE_EVIDENCE_DIR`. Each case starts only from a flat test symbol and writes
+an ownership journal there. Exact submitted order links are flushed before the
+exchange call; acknowledged order IDs and observed parent-linked children are
+retained. These private journals survive removal of the temporary probe container.
+File flushing and atomic replacement protect against probe-process termination;
+this is not a tested guarantee against host power loss or storage hardware failure.
+
+Cleanup rejects unknown orders, including unrelated protective orders and generic
+`ccb-action-` links. Before closing exposure, it reconciles all execution pages
+since the flat start against the run's exact identities and the fresh net position.
+It submits only that attributable quantity with `reduceOnly`; it does not ask a
+generic CLOSE action to expand its size from a later account snapshot. An
+unresolved close acknowledgment is not submitted again.
+
+Unavailable evidence storage, unknown executions, unmatched exposure or unknown
+protective identities leave cleanup unresolved and prevent automatic app resume.
+In particular, a full-position stop without attributable identity is not adopted
+merely because its price, quantity or symbol matches. Operator reconciliation may
+be required in such a failure. Keep the private journal and receipts; never
+force a cleanup-success receipt or resume over unresolved ownership.
+
+These checks do not provide an atomic exchange lock against human trading or a
+second account writer. The exclusive rehearsal window remains required. They do
+not prove independent-zone exit races, paired-order lifecycle or offline safety.
+
 [Grug, Testing](https://grugbrain.dev/) (faithful paraphrase): exercise real system
 boundaries with a small reliable end-to-end suite. That principle informed this
 native observation instead of treating a simulated stop lifecycle as broker proof.
