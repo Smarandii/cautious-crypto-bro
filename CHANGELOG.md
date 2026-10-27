@@ -10,6 +10,39 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.10] - 2026-10-27
+
+Operator-directed portfolio stop-risk cap checkpoint.
+
+### Changed
+
+- Raise the Compose portfolio stop-risk cap from 400 to 4000 USDT for newly
+  planned positions (#207). Combined with the restored 1.0x LONG sizing this
+  admits about 56 fully-risked concurrent plans at the current wallet (the
+  coverage tier of the earlier 0.10x era) instead of about 5, so same-day
+  multi-post signals are no longer bound to zero planner capacity by the
+  per-symbol equivalents of the previous cap. Sizing, base risk, exits,
+  leverage and participation randomization are unchanged; existing plans and
+  positions keep their frozen policies and never gain capacity retroactively.
+- Document the cap-cohort boundary and its tail risk: the worst-case
+  simultaneous stop-loss is now approximately 57% of the wallet if many plans
+  hit their stops together; the operator explicitly accepted this tenfold
+  exposure scaling. Larger caps scale losses and profits together and do not
+  establish expectancy.
+
+### Upgrade, validation and limitations
+
+- Schema 13 is unchanged. A stopped-writer, restore-verified state backup was
+  taken before the change; the archive SHA-256 stays in the private backups
+  receipt. Cohort reporting that labels pre/post-cap plans in the CLI and
+  dashboard, plus a read-only checkpoint counting previously skipped posts
+  that fit the new cap, follows as a separate issue (#207 stays open until
+  that labeling ships). Rollback restores 400 for future plans and does not
+  rewrite saved plans or close positions.
+- Deployment checks: verify the exact deployed revision and env cap value,
+  native stop protection, supervision connectivity, and that the operator
+  approved the value with its slot and tail arithmetic recorded in #207.
+
 ## [2.2.9] - 2026-10-27
 
 Probe verification checkpoint for the native process-loss rehearsal.
