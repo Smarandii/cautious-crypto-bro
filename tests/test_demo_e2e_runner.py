@@ -30,6 +30,32 @@ PAIR = {
     "a_peer_retired": True,
 }
 
+RECOVERY = {
+    "check": "zone_process_recovery_observation",
+    "side": "LONG",
+    "worker_exit_code": 86,
+    "original_pairs_preserved": True,
+    "recovered_from_journal": True,
+    "entry_submission_replayed": False,
+    "activation_proven": False,
+}
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        None,
+        {"worker_exit_code": 0},
+        {"entry_submission_replayed": True},
+        {"original_pairs_preserved": False},
+    ],
+)
+def test_process_recovery_requires_confirmed_worker_exit_and_both_sides(change):
+    records = [RECOVERY, {**RECOVERY, "side": "SHORT", **(change or {})}]
+    assert runner.recovery_observations_verified(records) is (change is None)
+    assert not runner.recovery_observations_verified(records[:1])
+    assert not runner.recovery_observations_verified(records + records)
+
 
 @pytest.mark.parametrize(
     "change",
@@ -91,6 +117,17 @@ def test_opt_in_precedes_docker(monkeypatch):
     assert exc.value.code == 2
 
 
+def test_conflicting_zone_modes_refused_before_docker(tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Conflicting modes must not start Docker")
+
+    monkeypatch.setattr(runner.subprocess, "run", forbidden)
+    with pytest.raises(ValueError, match="single zone observation mode"):
+        runner.run_suite(
+            tmp_path, zone_pair_cancellation=True, zone_process_recovery=True
+        )
+
+
 @pytest.mark.parametrize(
     "records,process_exit,expected_exit,resumes",
     [
@@ -101,7 +138,10 @@ def test_opt_in_precedes_docker(monkeypatch):
         ([], 0, 1, True),
     ],
 )
-@pytest.mark.parametrize("mode", ["standard", "zones", "pairs", "pairs-missing"])
+@pytest.mark.parametrize(
+    "mode",
+    ["standard", "zones", "pairs", "pairs-missing", "recovery", "recovery-missing"],
+)
 def test_runner_lifecycle(
     tmp_path,
     monkeypatch,
@@ -113,6 +153,12 @@ def test_runner_lifecycle(
 ):
     zone_protection = mode == "zones"
     paired = mode.startswith("pairs")
+    recovery = mode.startswith("recovery")
+    if recovery and process_exit == 0 and expected_exit == 0:
+        if mode == "recovery":
+            records = [*records, RECOVERY, {**RECOVERY, "side": "SHORT"}]
+        else:
+            expected_exit = 1
     if paired and process_exit == 0 and expected_exit == 0:
         if mode == "pairs":
             records = [*records, PAIR, {**PAIR, "side": "SHORT"}]
@@ -157,6 +203,7 @@ def test_runner_lifecycle(
         )
         assert ("--zone-protection" in args) is (zone_protection or paired)
         assert ("--zone-pair-cancellation" in args) is paired
+        assert ("--zone-process-recovery" in args) is recovery
         return SimpleNamespace(
             stdout=io.StringIO("\n".join(json.dumps(r) for r in records)),
             wait=lambda: process_exit,
@@ -166,7 +213,10 @@ def test_runner_lifecycle(
     monkeypatch.setattr(runner.subprocess, "Popen", process)
     assert (
         runner.run_suite(
-            tmp_path, zone_protection=zone_protection, zone_pair_cancellation=paired
+            tmp_path,
+            zone_protection=zone_protection,
+            zone_pair_cancellation=paired,
+            zone_process_recovery=recovery,
         )
         == expected_exit
     )
