@@ -1,6 +1,7 @@
 # Remaining work
 
-Strategy V2 is implemented; package version and release tag are v2.1.1.
+Strategy V2 is implemented; package version and release tag are v2.2.1. The
+independent-zone feature remains unreleased under #123.
 Current behavior lives in [STRATEGY.md](STRATEGY.md).
 
 - Preserve a path to mainnet after performance evaluation: add an explicit
