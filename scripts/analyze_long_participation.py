@@ -316,6 +316,7 @@ def report(bundle: Path) -> None:
     )
     print(f"long_participation_take_assigned={len(by_arm['take'])}")
     print(f"long_participation_take_completed={len(complete_take_positions)}")
+    print(f"long_participation_review_target_completed_takes={REVIEW_TARGET_PER_ARM}")
     print(f"long_participation_take_failed_before_fill={failed_take}")
     print(f"long_participation_take_unresolved={unresolved_take}")
     print(f"long_participation_skip_assigned={len(by_arm['skip'])}")
@@ -333,6 +334,7 @@ def report(bundle: Path) -> None:
         and not invalid_take
         and len(by_arm["take"]) >= REVIEW_TARGET_PER_ARM
         and len(by_arm["skip"]) >= REVIEW_TARGET_PER_ARM
+        and len(complete_take_positions) >= REVIEW_TARGET_PER_ARM
     )
     print(
         "long_participation_status="

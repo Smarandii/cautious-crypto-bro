@@ -891,7 +891,7 @@ def test_participation_dashboard_counts_skips_without_claiming_an_edge() -> None
     database.close()
 
 
-def test_participation_review_uses_resolved_assignments_not_only_filled_trades() -> (
+def test_participation_review_requires_completed_positions_not_only_resolved_assignments() -> (
     None
 ):
     import importlib.util
@@ -949,5 +949,5 @@ def test_participation_review_uses_resolved_assignments_not_only_filled_trades()
     assert experiment["take_unresolved_count"] == 0
     assert experiment["take_completed_position_count"] == 0
     assert experiment["skip_records_valid_count"] == 20
-    assert experiment["status"] == "ready_for_review"
+    assert experiment["status"] == "collecting"
     database.close()
