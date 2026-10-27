@@ -197,6 +197,23 @@ remaining capacity. This is an operational data-collection adjustment, not an
 evidence-based profitability improvement. Evaluate the cap separately from the
 LONG sizing and payoff-profile cohorts.
 
+At the operator's request (#207/#199), the cap was raised again from $400 to
+$4000, deployed under version 2.2.10 on 2026-10-27; plans created after the
+verified 2.2.10 deployment belong to the higher-cap cohort, and the exact
+deployment boundary timestamp is recorded in the follow-up cap-cohort reporting
+issue and the #207 checkpoint. With the restored 1.0x LONG sizing this permits
+roughly 56 fully-risked concurrent plans at a ~7,062 USDT wallet (the same
+coverage tier as the earlier 0.10x era, instead of about 5), and the worst-case
+simultaneous stop-loss is now approximately 57% of the wallet if every plan
+fails to its stop at once — the operator explicitly accepted this 10x tail.
+Cap cohorts: plans created before this boundary do not gain capacity retroactively;
+existing positions and frozen plans remain bounded by their saved plans. Skipped
+at zero capacity events inside the old cap era are counted only by the shipped
+coverage dispositions; the first post-change checkpoint counts historically
+skipped plans that would fit the new cap and is recorded in #207. As before,
+this scales potential losses simultaneously with prospective profits and is
+not evidence of expectancy.
+
 ## Demo entry freshness experiment
 
 Compose sets `DEMO_ENTRY_ORDER_TTL_MINUTES=240` for newly created plans. After
