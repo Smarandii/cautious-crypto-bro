@@ -10,6 +10,34 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-10-27
+
+Protection-maintenance patch on top of `v2.2.1`. This remains a Bybit Demo
+release; it does not certify mainnet operation or profitable edge, and it does
+not enable multi-zone execution.
+
+### Upgrade and validation
+
+- No SQLite schema change is introduced; schema 13 remains current. Stop the app
+  and take a complete restore-verified state backup before the version-only
+  deployment. Rollback is an image rollback to `v2.2.1`; preserve the current
+  database, reconcile exchange changes and never lower `user_version`.
+- CI, CodeQL, container scanning, package build/install checks and the release
+  tag/version/changelog gate protect this release. Exact merged-revision and
+  local Bybit Demo/Telegram deployment evidence is recorded on the release issue.
+- Multi-zone execution remains unfinished under #123. Native quantity-scoped
+  protection and run-owned cleanup remain required; #169 must be verified before
+  any #168 rehearsal. Mainnet remains unimplemented and is not enabled.
+
+### Fixed
+
+- Re-verify the full-position stop after each partial-stop cancellation during
+  the handoff from attached partial stops to a strategy-owned full stop. If the
+  full stop disappeared at the cancellation boundary, reinstall and confirm it
+  before cancelling another partial stop; a conflicting non-null stop fails
+  closed without being overwritten. The fix closes #175 and preserves the #139
+  requirement that one zone cannot leave another allocation unprotected.
+
 ## [2.2.1] - 2026-10-27
 
 Coverage, extraction and repository-hardening maintenance on top of `v2.1.1`.
