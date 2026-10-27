@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
+from .bybit import exchange_failure_reason
 from .domain import (
     AccountOrder,
     AccountPosition,
@@ -90,16 +91,16 @@ class PositionSupervisor:
             except asyncio.CancelledError:
                 raise
 
-            except _AccountStateUnavailable:
+            except _AccountStateUnavailable as exc:
                 delay = retry
                 retry = min(retry * 2, 300)
                 logger.warning(
                     "Supervision account unavailable; retry in %s seconds", delay
                 )
-                await self._notify_state("Exchange account state unavailable")
+                await self._notify_state(exchange_failure_reason(exc))
             except Exception as exc:
                 logger.exception("Position supervisor reconciliation failed")
-                await self._notify_state(type(exc).__name__)
+                await self._notify_state(exchange_failure_reason(exc))
 
             await asyncio.sleep(delay)
 

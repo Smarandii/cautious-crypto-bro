@@ -71,7 +71,7 @@ def test_outage_notice_contains_current_public_ip_or_explicit_failure(
                     + BYBIT_IP_BINDING_HELP,
                 )
             else:
-                await bot.report_supervision_state("Exchange account state unavailable")
+                await bot.report_supervision_state("Bybit error 10010 (Unmatched IP)")
                 await bot._deliver_supervision_notice()
                 await bot._deliver_supervision_notice()
             assert len(requests) == 1 and len(transport.messages) == 1
@@ -110,7 +110,7 @@ def test_later_outage_alert_refreshes_changed_ip(monkeypatch):
         transport = TelegramTransport()
         bot._bot.session = transport
         try:
-            await bot.report_supervision_state("Exchange account state unavailable")
+            await bot.report_supervision_state("Bybit error 10010 (Unmatched IP)")
             await bot._deliver_supervision_notice()
             clock[0] = 901
             await bot._deliver_supervision_notice()
@@ -119,6 +119,42 @@ def test_later_outage_alert_refreshes_changed_ip(monkeypatch):
             assert "at alert time): 8.8.8.8" in messages[0].text
             assert "at alert time): 1.1.1.1" in messages[1].text
             assert "8.8.8.8" not in messages[1].text
+        finally:
+            await bot.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "Exchange request timed out",
+        "Exchange returned invalid response",
+        "TradeExecutionError",
+    ],
+)
+def test_non_ip_failure_reports_cause_without_allowlist_advice(monkeypatch, reason):
+    requests = install_ip_transport(monkeypatch)
+
+    async def run():
+        bot = ApprovalBot(
+            token="123456:synthetic-notice-token",
+            approval_chat_id=1,
+            approver_user_id=1,
+            store=None,
+            executor=None,
+        )
+        await bot._bot.session.close()
+        transport = TelegramTransport()
+        bot._bot.session = transport
+        try:
+            await bot.report_supervision_state(reason)
+            await bot._deliver_supervision_notice()
+            text = html.unescape(list(transport.messages.values())[-1].text)
+            assert reason in text
+            assert "10010" not in text and "api-management" not in text
+            assert "public IP" not in text
+            assert not requests
         finally:
             await bot.close()
 

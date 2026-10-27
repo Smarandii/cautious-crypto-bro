@@ -41,6 +41,7 @@ from .approval_presenter import (
     render_operator_attention,
     render_position_action,
 )
+from .bybit import UNMATCHED_IP_REASON
 from .cancellation import finish_before_cancellation
 from .domain import (
     AccountPnlSummary,
@@ -209,14 +210,17 @@ class ApprovalBot:
             return
         self._next_supervision_notice = monotonic() + 30
         self._next_supervision_send = self._next_supervision_notice
-        text = (
-            "HUMAN REVIEW REQUIRED: position supervision is unavailable. "
-            "Application protection is not verified. Check exchange access and "
-            "review existing positions/protection in Bybit. Use /status for details."
-            "\n" + BYBIT_IP_BINDING_HELP
-            if reason is not None
-            else "Position supervision recovered: a reconciliation pass completed successfully."
-        )
+        if reason is not None:
+            text = (
+                "HUMAN REVIEW REQUIRED: position supervision is unavailable. "
+                "Application protection is not verified. Check exchange access and "
+                "review existing positions/protection in Bybit. Use /status for details. "
+                "Reconciliation will retry automatically.\nReason: " + reason
+            )
+            if reason == UNMATCHED_IP_REASON:
+                text += "\n" + BYBIT_IP_BINDING_HELP
+        else:
+            text = "Position supervision recovered: a reconciliation pass completed successfully."
         try:
             await self.send_source_notice(text)
         except Exception as exc:
