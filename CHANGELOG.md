@@ -10,6 +10,39 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.3] - 2026-10-27
+
+Coverage-reporting and Demo-probe safety patch on top of `v2.2.2`. This remains
+a Bybit Demo release; it does not certify mainnet operation or profitable edge,
+and it does not enable multi-zone execution.
+
+### Upgrade and validation
+
+- No SQLite schema change is introduced; schema 13 remains current. Stop the app
+  and take a complete restore-verified state backup before the version-only
+  deployment. Rollback is an image rollback to `v2.2.2`; preserve the current
+  database, reconcile exchange changes and never lower `user_version`.
+- CI, CodeQL, container scanning, package build/install checks and the release
+  tag/version/changelog gate protect this release. Exact merged-revision and
+  local Bybit Demo/Telegram deployment evidence is recorded on the release issue.
+- Multi-zone execution remains unfinished under #123. Native quantity-scoped
+  protection and run-owned cleanup remain required; #168 still needs its probe
+  implementation and a separate exclusive rehearsal. Mainnet remains
+  unimplemented and is not enabled.
+
+### Changed
+
+- Add aggregate terminal planning-rejection reasons to the read-only source
+  coverage report: minimum size or fixed-exit capacity, price geometry,
+  portfolio stop-risk cap and other. The field counts rejection occurrences, not
+  unique sources, and retains no raw source text. No risk, sizing, exit or
+  execution behavior changes; the coverage-policy decision remains open under
+  #179.
+- Require run ownership before the isolated Demo probe cancels orders. Cleanup
+  now refuses an unowned symbol instead of adopting or mutating it. This affects
+  probe tooling only; the live strategy path is unchanged. The guard is delivered
+  by #174.
+
 ## [2.2.2] - 2026-10-27
 
 Protection-maintenance patch on top of `v2.2.1`. This remains a Bybit Demo
