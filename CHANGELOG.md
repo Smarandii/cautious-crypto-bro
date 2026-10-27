@@ -10,6 +10,32 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.8] - 2026-10-27
+
+### Fixed
+
+- Separate exit-profile and randomized LONG-exit arm results across the known
+  2.2.6 sizing cutover (#203). Reconciled positions preserve saved plan creation
+  time, so historical plans filled later cannot supply the new cohort's sample
+  target or dollar averages. Cap-limited new plans remain in their creation
+  cohort. Unknown creation evidence stays visible and cannot establish review
+  readiness; unaffected SHORTs retain separate results and never complete a
+  LONG sample. CLI and dashboard exports label and retain each cohort.
+
+### Upgrade, validation and limitations
+
+- Trading settings, frozen plans and schema 13 are unchanged. Take a stopped,
+  restore-verified state backup; verify the exact deployment, authenticated Demo
+  access, supervision and native stops. Rollback retains current state and the
+  2.2.6 sizing configuration; no data migration is required.
+- Regression coverage exercises real forensic lineage, executions/closed-PnL
+  and SQLite consumers for both randomized exit arms, 19/20 new completions,
+  old-plan late fills, cap-limited plans, missing/timezone-free timestamps and
+  preserved SHORT costs/results. Existing forensic and report checks remain.
+- This provides honest descriptive exit cohorts, not proof of profitability
+  or a powered experiment. Review #183, independent-zone execution #123/#139
+  and native process-loss proof #190/#198 remain unfinished.
+
 ## [2.2.7] - 2026-10-27
 
 ### Fixed

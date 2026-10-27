@@ -31,7 +31,7 @@ DEMO_LONG_EXIT_AB_CONTROL_PROFILE = "payoff_early_tight_trail_long_ab_020_contro
 LONG_FULL_RISK_STARTED_AT = "2026-10-27T17:06:35+00:00"
 
 
-def participation_sizing_cohorts(assignments: list[dict]) -> dict[str, list[dict]]:
+def long_sizing_cohorts(records: list[dict]) -> dict[str, list[dict]]:
     """Keep the verified sizing cutover separate, including its cap-limited plans."""
     boundary = datetime.fromisoformat(LONG_FULL_RISK_STARTED_AT)
     cohorts: dict[str, list[dict]] = {
@@ -39,10 +39,10 @@ def participation_sizing_cohorts(assignments: list[dict]) -> dict[str, list[dict
         "unknown": [],
         "full_baseline_risk": [],
     }
-    for assignment in assignments:
+    for record in records:
         try:
             created = datetime.fromisoformat(
-                str(assignment.get("created_at", "")).replace("Z", "+00:00")
+                str(record.get("created_at", "")).replace("Z", "+00:00")
             )
             if created.tzinfo is None:
                 raise ValueError("Assignment creation time needs a timezone")
@@ -53,8 +53,19 @@ def participation_sizing_cohorts(assignments: list[dict]) -> dict[str, list[dict
             )
         except (ValueError, TypeError):
             cohort = "unknown"
-        cohorts[cohort].append(assignment)
+        cohorts[cohort].append(record)
     return cohorts
+
+
+def exit_sizing_cohorts(records: list[dict]) -> dict[str, list[dict]]:
+    """SHORT sizing was unchanged; never use SHORTs to complete a LONG sample."""
+    longs = long_sizing_cohorts([row for row in records if row.get("side") != "SHORT"])
+    return {
+        "pre_cutover": longs["pre_cutover"],
+        "unknown": longs["unknown"],
+        "unaffected_shorts": [row for row in records if row.get("side") == "SHORT"],
+        "full_baseline_risk": longs["full_baseline_risk"],
+    }
 
 
 def jsonl(archive: zipfile.ZipFile, root: str, name: str) -> list[dict]:
@@ -189,6 +200,7 @@ def _entry_positions(
             positions.append(
                 {
                     "intent_id": item.get("intent_id", ""),
+                    "created_at": item.get("created_at"),
                     "symbol": intent["symbol"].upper(),
                     "side": intent["side"],
                     "source_channel_id": metadata.get("source_channel_id"),

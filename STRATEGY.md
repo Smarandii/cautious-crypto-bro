@@ -170,6 +170,17 @@ Missing, malformed or timezone-free creation times are visible as `unknown`
 and cannot establish review readiness. This boundary separates the known sizing
 change; it does not eliminate market-regime differences or certify an edge.
 
+Exit-profile reports apply the same creation-time boundary independently to each
+LONG profile/control arm (#203). Reconciliation preserves plan `created_at`
+from forensic lineage; fill and close timestamps never substitute for missing
+creation evidence. Historical LONGs and unknown-provenance LONGs remain separate
+from new LONGs, including old plans that fill after cutover and new plans limited
+by the portfolio cap. SHORT results retain their original sizing history in
+`unaffected_shorts`; they cannot supply a LONG arm's 20-completed-position target.
+Dashboard exit fields refer to current LONGs, with separate results retained in
+`sizing_cohorts`; the CLI labels every group. Legacy archives lacking plan
+creation evidence remain inspectable in `unknown` but cannot establish readiness.
+
 ## Demo portfolio stop-risk cap experiment
 
 New Demo plans are limited by a $400 total open stop-risk cap. Planning estimates

@@ -58,10 +58,13 @@ function renderLongRiskExperiment(experiment){
 function renderDemoExitExperiment(experiment){
   if(!experiment?.active) return;
   const metric=document.querySelectorAll('.metric')[2];
+  if(experiment.sizing_cutover) metric.querySelector('p').textContent+=` LONG exit cohort starts ${experiment.sizing_cutover}; earlier LONGs and unchanged-size SHORTs are reported separately.`;
   const ab=experiment.randomized_long_ab;
   if(ab?.active){
     const control=ab.control;
     const treatment=ab.treatment;
+    const unknown=(control.unknown_time_plan_count??0)+(treatment.unknown_time_plan_count??0);
+    if(unknown) metric.querySelector('p').textContent+=` ${unknown} exit plans have unknown creation times and cannot establish review readiness.`;
     metric.querySelector('p').textContent+=` Randomized LONG exits: ${control.planned_count} control plans at 0.20R vs ${treatment.planned_count} treatment plans at 0.15R; shared LONG sizing policy and portfolio cap.`;
     metric.querySelector('footer').innerHTML=`A/B ${control.completed_position_count??'—'}/${control.review_target_completed_positions} control · ${treatment.completed_position_count??'—'}/${treatment.review_target_completed_positions} treatment completed`;
     return;
