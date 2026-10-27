@@ -56,6 +56,36 @@ notional, and only resumes the app after matching terminal cleanup receipts. A
 passing observation means the experiment completed, not that independent-zone
 protection is safe. No mainnet option exists.
 
+## Paired cancellation observed — 2026-10-27
+
+The #168 rehearsal used deployed revision `eafb56432799c7fb2a343001c155dbcd16c5c1c7`.
+Both cases started flat and unowned on DOGEUSDT, with aggregate entry notional
+bounded to 50 USDT per case. A and B had unequal one-unit/two-unit allocations
+and four distinct exact parent-linked TP/SL children. A's independent reduction
+was confirmed before its original TP was canceled once.
+
+| Case | A protection after independent close | A TP after explicit cancellation | A peer SL | B original pair and two-unit remainder |
+| --- | --- | --- | --- | --- |
+| LONG | One-unit SL remained | Deactivated | Deactivated | Preserved |
+| SHORT | One-unit SL remained | Deactivated | Deactivated | Preserved |
+
+Both cancellations were acknowledged. Fresh account reads and terminal history
+established the result; private before/after journals independently verified B's
+exact child IDs, quantities and triggers. Cleanup needed reconciliation retries,
+then verified no test-symbol position or orders in both cases. The normal app
+resumed without restart and was healthy; both existing app-managed positions
+retained their expected native stops. No production allocation rows were written.
+Exact identities and receipts remain private in
+`audit-artifacts/bybit-demo-20261027-102347-202917`.
+
+This observation supports retiring this particular attached pair by canceling its
+exact TP child. It does **not** remove the interval between A's independent exit
+and pair retirement, during which stale A protection still exists. It does not
+prove trigger/cancel races, late or partial fills, one-sided amendments, restart
+recovery or offline allocation safety. No multi-zone activation is justified;
+#139 and #123 remain open. Lost-acknowledgment handling has synthetic regression
+coverage; this native rehearsal received acknowledgments in both cases.
+
 ## Run-owned cleanup evidence
 
 For #168, use `--execute-demo --zone-pair-cancellation` with the same runner.
