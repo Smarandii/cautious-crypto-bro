@@ -305,6 +305,76 @@ class Executor:
         return f"exit-{len(self.exits)}"
 
 
+class CancellationRacingExecutor(Executor):
+    """Simulate an external full-stop change at the cancellation boundary."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stop_after_cancel: str = "unchanged"
+
+    async def cancel_order(self, symbol, order_id):
+        await super().cancel_order(symbol, order_id)
+        if self.stop_after_cancel == "unchanged":
+            return
+        position = self.state.positions[0]
+        stop_loss = (
+            None
+            if self.stop_after_cancel == "missing"
+            else Decimal(self.stop_after_cancel)
+        )
+        self.state = replace(
+            self.state,
+            positions=(replace(position, stop_loss=stop_loss),),
+        )
+
+
+def _partial_stop_handoff_state(strategy_plan) -> PositionStrategy:
+    return PositionStrategy(
+        strategy_id=strategy_plan.intent_id,
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        status=StrategyStatus.OPEN_RISK,
+        entry_frozen=True,
+        last_position_qty=Decimal("4.08"),
+        last_avg_price=Decimal("100"),
+        exit_revision=1,
+    )
+
+
+def _partial_stop_handoff_account(executor, strategy_plan) -> None:
+    executor.state = replace(
+        executor.state,
+        positions=(
+            replace(
+                executor.state.positions[0],
+                stop_loss=None,
+            ),
+        ),
+        open_orders=tuple(
+            AccountOrder(
+                symbol="BTCUSDT",
+                side=Side.SHORT,
+                order_type="Market",
+                status="Untriggered",
+                quantity=Decimal("2.04"),
+                remaining_quantity=Decimal("2.04"),
+                price=None,
+                avg_price=None,
+                order_id=f"partial-{index}",
+                order_link_id="",
+                parent_order_link_id=(
+                    f"ccb-v2-{strategy_plan.intent_id.hex[:20]}-e{index}"
+                ),
+                reduce_only=False,
+                updated_at=datetime.now(UTC),
+                stop_order_type="PartialStopLoss",
+                trigger_price=Decimal("90"),
+            )
+            for index in (1, 2)
+        ),
+    )
+
+
 def test_supervisor_freezes_entries_and_protects_profit() -> None:
     strategy_plan = plan()
 
@@ -692,6 +762,46 @@ def test_legacy_strategy_hands_off_partial_stops_before_manual_review() -> None:
     assert [o.order_id for o in executor.state.open_orders] == ["partial-4"]
     assert store.state.status is StrategyStatus.MANUAL_OVERRIDE
     assert "Legacy exit snapshot" in store.state.pause_reason
+
+
+def test_partial_stop_handoff_restores_full_stop_lost_during_cancel() -> None:
+    strategy_plan = plan()
+    store = Store(_partial_stop_handoff_state(strategy_plan), strategy_plan)
+    executor = CancellationRacingExecutor()
+    executor.stop_after_cancel = "missing"
+    _partial_stop_handoff_account(executor, strategy_plan)
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+    )
+
+    asyncio.run(supervisor.reconcile_once())
+
+    assert executor.state.positions[0].stop_loss == Decimal("90")
+    assert executor.cancelled_orders == ["partial-1", "partial-2"]
+    assert len(executor.protection) == 3
+    assert store.state.status is StrategyStatus.MANUAL_OVERRIDE
+
+
+def test_partial_stop_handoff_stops_after_conflicting_full_stop() -> None:
+    strategy_plan = plan()
+    store = Store(_partial_stop_handoff_state(strategy_plan), strategy_plan)
+    executor = CancellationRacingExecutor()
+    executor.stop_after_cancel = "95"
+    _partial_stop_handoff_account(executor, strategy_plan)
+    supervisor = PositionSupervisor(
+        store=store,
+        executor=executor,
+        mutation_lock=asyncio.Lock(),
+    )
+
+    with pytest.raises(RuntimeError, match="differs from expected"):
+        asyncio.run(supervisor.reconcile_once())
+
+    assert executor.state.positions[0].stop_loss == Decimal("95")
+    assert executor.cancelled_orders == ["partial-1"]
+    assert [order.order_id for order in executor.state.open_orders] == ["partial-2"]
 
 
 def test_failed_full_stop_verification_does_not_cancel_partials() -> None:

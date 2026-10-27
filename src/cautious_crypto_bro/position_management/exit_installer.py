@@ -597,6 +597,60 @@ class ExitInstaller:
             )
         )
 
+    async def _ensure_full_stop(
+        self,
+        state: PositionStrategy,
+        expected_stop: Decimal,
+    ) -> AccountStateSummary:
+        """Re-read and prove the full stop after a cancellation boundary.
+
+        A partial-stop cancellation can race with an external full-stop
+        removal. Reinstall only a missing stop; a different non-null stop is
+        an external policy change and must not be overwritten.
+        """
+        trailing_distance = state.trailing_distance if state.trailing_active else None
+        for _ in range(2):
+            account = await self._executor.account_state()
+            live_position = _find_position(state, account)
+            if live_position is None:
+                return account
+            if live_position.stop_loss == expected_stop:
+                self._trailing_stop_manager.verify_protection(
+                    live_position,
+                    expected_stop,
+                    trailing_distance,
+                )
+                return account
+            if live_position.stop_loss is not None:
+                raise RuntimeError(
+                    f"Cannot hand off {state.symbol}: full stop "
+                    f"{live_position.stop_loss} differs from expected {expected_stop}"
+                )
+            await self._executor.set_position_protection(
+                state.symbol,
+                expected_stop,
+                trailing_distance=trailing_distance,
+            )
+
+        account = await self._executor.account_state()
+        live_position = _find_position(state, account)
+        if live_position is None:
+            return account
+        if (
+            live_position.stop_loss is not None
+            and live_position.stop_loss != expected_stop
+        ):
+            raise RuntimeError(
+                f"Cannot hand off {state.symbol}: full stop "
+                f"{live_position.stop_loss} differs from expected {expected_stop}"
+            )
+        self._trailing_stop_manager.verify_protection(
+            live_position,
+            expected_stop,
+            trailing_distance,
+        )
+        return account
+
     async def handoff_partial_stops(
         self,
         state: PositionStrategy,
@@ -609,47 +663,28 @@ class ExitInstaller:
             return account
 
         expected_stop = state.protected_stop_loss or plan.stop_loss
-        live_position = position
         # Refuse to cancel any order if protection changed unexpectedly.
-        if position.stop_loss != expected_stop:
-            if position.stop_loss is not None:
-                raise RuntimeError(
-                    f"Cannot hand off {state.symbol}: full stop "
-                    f"{position.stop_loss} differs from expected {expected_stop}"
-                )
-            await self._executor.set_position_protection(
-                state.symbol,
-                expected_stop,
-                trailing_distance=(
-                    state.trailing_distance if state.trailing_active else None
-                ),
+        if position.stop_loss is not None and position.stop_loss != expected_stop:
+            raise RuntimeError(
+                f"Cannot hand off {state.symbol}: full stop "
+                f"{position.stop_loss} differs from expected {expected_stop}"
             )
-            account = await self._executor.account_state()
-            live_position = _find_position(state, account)
-            if live_position is None:
-                raise RuntimeError("Position disappeared during protection handoff")
 
-        self._trailing_stop_manager.verify_protection(
-            live_position,
-            expected_stop,
-            state.trailing_distance if state.trailing_active else None,
-        )
-        # Re-read immediately before cancelling. A stop may have triggered
-        # between the original snapshot and the protection confirmation.
-        account = await self._executor.account_state()
-        live_position = _find_position(state, account)
-        if live_position is None:
-            return account
-        self._trailing_stop_manager.verify_protection(
-            live_position,
-            expected_stop,
-            state.trailing_distance if state.trailing_active else None,
-        )
-        remaining_ids = set(self.partial_stops(state, plan, account))
+        account = await self._ensure_full_stop(state, expected_stop)
+        if _find_position(state, account) is None:
+            raise RuntimeError("Position disappeared during protection handoff")
+
         for order_id in partial_ids:
-            if order_id in remaining_ids:
-                await self._executor.cancel_order(state.symbol, order_id)
-        return await self._executor.account_state()
+            # Recompute after every cancellation. A partial stop may have
+            # triggered, and a new protection snapshot may have appeared.
+            if order_id not in set(self.partial_stops(state, plan, account)):
+                continue
+            await self._executor.cancel_order(state.symbol, order_id)
+            account = await self._ensure_full_stop(state, expected_stop)
+            if _find_position(state, account) is None:
+                return account
+
+        return account
 
     async def _save(
         self,
