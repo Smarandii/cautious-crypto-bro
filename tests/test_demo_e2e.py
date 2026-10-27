@@ -41,6 +41,7 @@ def test_cleanup_ignores_other_symbols():
         cancel_order=AsyncMock(),
     )
     asyncio.run(demo.cleanup(fake, Side.LONG, "ccb-v2-owned-"))
+    fake.account_state.assert_awaited_once()
     fake.execute_position_action.assert_not_called()
     fake.cancel_order.assert_not_called()
 

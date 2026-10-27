@@ -318,8 +318,9 @@ async def cleanup(e, side, prefix, *, ownership=None):
                 require(
                     symbol_flat(account), "Run ownership evidence required for cleanup"
                 )
-            else:
-                owned_quantity = await ownership.verify(account, side)
+                emit("cleanup", symbol=SYMBOL, side=side.value, flat=True)
+                return
+            owned_quantity = await ownership.verify(account, side)
             if position(account):
                 require(
                     not ownership.close_submitted,
@@ -345,8 +346,7 @@ async def cleanup(e, side, prefix, *, ownership=None):
                 )
             await wait_account(e, lambda a: position(a) is None, "cleanup close")
             account = await e.account_state()
-            if ownership is not None:
-                await ownership.verify(account, side)
+            await ownership.verify(account, side)
             for order in account.open_orders:
                 if order.symbol == SYMBOL:
                     await ownership.verify(await e.account_state(), side)

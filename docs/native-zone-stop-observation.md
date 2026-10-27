@@ -63,6 +63,8 @@ The runner mounts its private evidence directory at `/probe-evidence` and suppli
 an ownership journal there. Exact submitted order links are flushed before the
 exchange call; acknowledged order IDs and observed parent-linked children are
 retained. These private journals survive removal of the temporary probe container.
+File flushing and atomic replacement protect against probe-process termination;
+this is not a tested guarantee against host power loss or storage hardware failure.
 
 Cleanup rejects unknown orders, including unrelated protective orders and generic
 `ccb-action-` links. Before closing exposure, it reconciles all execution pages
