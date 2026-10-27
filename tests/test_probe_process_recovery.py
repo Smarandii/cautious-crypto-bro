@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import httpx
 import pytest
 from test_demo_e2e import demo
 from test_remaining_concerns import executor_for
@@ -54,6 +55,155 @@ def reloaded_exchange(tmp_path, side):
         Decimal, (state["size"], state["avg"], state["stop"])
     )
     return exchange
+
+
+class LaggingExchange(PairedExchange):
+    """A real adapter whose private execution reads lag behind the position read."""
+
+    def __init__(self, side, peer_retires, withheld_reads):
+        super().__init__(side, peer_retires)
+        self.withheld_reads = withheld_reads
+
+    def recent_position_reads(self):
+        return sum(1 for path, _ in self.requests if path == "/v5/position/list")
+
+    def handle(self, request):
+        if request.url.path == "/v5/execution/list" and self.withheld_reads > 0:
+            self.withheld_reads -= 1
+            visible = self.executions[
+                : max(0, len(self.executions) - self.withheld_reads)
+            ]
+            return httpx.Response(
+                200,
+                json={"retCode": 0, "result": {"list": visible, "nextPageCursor": ""}},
+            )
+        return super().handle(request)
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+@pytest.mark.parametrize("outcome", ["converging", "persistent"])
+def test_recovery_read_convergence_distinguishes_lag_from_loss(tmp_path, side, outcome):
+    started = int(datetime.now(UTC).timestamp() * 1000)
+    result = subprocess.run(
+        [sys.executable, "-c", WORKER, str(tmp_path), side.value],
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join(
+                str(ROOT / p) for p in ("src", "tests", "scripts")
+            ),
+        },
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+    assert result.returncode == 86, result.stderr
+    assert '"journal_flushed": true' in result.stdout
+    journal_path = tmp_path / "ownership.json"
+    saved = json.loads(journal_path.read_text())
+    exchange = LaggingExchange(
+        side, False, withheld_reads=2 if outcome == "converging" else 99
+    )
+    reloaded = reloaded_exchange(tmp_path, side)
+    exchange.orders = reloaded.orders
+    exchange.executions = reloaded.executions
+    exchange.size, exchange.avg, exchange.stop = (
+        reloaded.size,
+        reloaded.avg,
+        reloaded.stop,
+    )
+
+    async def recover(executor):
+        if outcome == "persistent":
+            with pytest.raises(
+                AssertionError, match="Run executions do not explain net exposure"
+            ):
+                await demo.ProbeOwnership.recover(
+                    executor,
+                    journal_path,
+                    side,
+                    started_after_ms=started,
+                    convergence_delay_seconds=0.01,
+                )
+            return
+        owner = await demo.ProbeOwnership.recover(
+            executor,
+            journal_path,
+            side,
+            started_after_ms=started,
+            convergence_delay_seconds=0.01,
+        )
+        recovery_read_count = exchange.recent_position_reads()
+        try:
+            assert owner.links == set(saved["submitted_links"])
+            assert recovery_read_count == 2
+            await demo.cleanup(executor, side, "recovered-", ownership=owner)
+        finally:
+            owner.restore()
+
+    with executor_for(exchange) as executor:
+        asyncio.run(recover(executor))
+    saved = json.loads(journal_path.read_text())
+    convergence = saved["observations"].get("verify_convergence")
+    creates = [body for path, body in exchange.requests if path == "/v5/order/create"]
+    assert all(body["reduceOnly"] is True for body in creates)
+    if outcome == "converging":
+        assert convergence["converged_after_attempt"] == 2
+        assert convergence["read_limit"] == demo.VERIFY_READ_ATTEMPTS
+        assert convergence["pending_reads"][0]["attempt"] == 1
+        assert len(creates) == 1
+        assert exchange.size == 0
+    else:
+        assert exchange.recent_position_reads() == demo.VERIFY_READ_ATTEMPTS
+        assert convergence["converged_after_attempt"] is None
+        assert convergence["read_limit"] == demo.VERIFY_READ_ATTEMPTS
+        assert len(convergence["pending_reads"]) == demo.VERIFY_READ_ATTEMPTS
+        assert creates == []
+        assert exchange.size != 0
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"convergence_attempts": 0}, {"convergence_delay_seconds": -1}],
+)
+def test_recovery_refuses_invalid_convergence_arguments(tmp_path, kwargs):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    journal = tmp_path / "owner.json"
+    journal.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "symbol": demo.SYMBOL,
+                "started_ms": int(datetime.now(UTC).timestamp() * 1000),
+                "submitted_links": [],
+                "order_ids": [],
+                "cleanup_close_submitted": False,
+                "observations": {},
+            }
+        )
+    )
+    exchange = SimpleNamespace(
+        account_state=AsyncMock(
+            return_value=SimpleNamespace(open_orders=[], positions=[])
+        ),
+        _client=SimpleNamespace(
+            private_post=lambda path, params: {"retCode": 0, "result": {}}
+        ),
+    )
+    with pytest.raises(AssertionError, match="Invalid conservation"):
+        asyncio.run(
+            demo.ProbeOwnership.recover(
+                exchange,
+                journal,
+                Side.LONG,
+                started_after_ms=1,
+                **kwargs,
+            )
+        )
+    exchange.account_state.assert_called_once()
+    exchange.account_state.assert_awaited_once()
 
 
 @pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
@@ -115,6 +265,10 @@ def test_crashed_worker_ownership_recovers_without_replaying_entries(
                 await demo.ProbeOwnership.recover(
                     executor, journal, side, started_after_ms=started
                 )
+            assert (
+                sum(1 for path, _ in exchange.requests if path == "/v5/position/list")
+                == 1
+            )
             return
         owner = await demo.ProbeOwnership.recover(
             executor, journal, side, started_after_ms=started

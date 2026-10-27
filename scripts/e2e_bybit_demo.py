@@ -47,6 +47,8 @@ from cautious_crypto_bro.storage import IntentStore
 
 D = Decimal
 SYMBOL = "DOGEUSDT"
+VERIFY_READ_ATTEMPTS = 3
+VERIFY_READ_DELAY_SECONDS = 1.0
 
 
 class ProbeOwnership:
@@ -108,50 +110,117 @@ class ProbeOwnership:
             or getattr(order, "parent_order_link_id", None) in self.links
         )
 
-    async def verify(self, account, side):
-        orders = [o for o in account.open_orders if o.symbol == SYMBOL]
-        require(all(self.owns_order(o) for o in orders), "Unknown probe-symbol order")
-        with self.journal_lock:
-            self.order_ids.update(o.order_id for o in orders)
-            self.save()
-        executions = await asyncio.to_thread(
-            self.exchange._client.paginate_private_list,
-            "/v5/execution/list",
-            {
-                "category": "linear",
-                "symbol": SYMBOL,
-                "startTime": self.started_ms,
-                "limit": 100,
-            },
+    async def verify(
+        self,
+        account,
+        side,
+        *,
+        convergence_attempts=VERIFY_READ_ATTEMPTS,
+        convergence_delay_seconds=VERIFY_READ_DELAY_SECONDS,
+    ):
+        """Verify ownership; only conservation may lag behind read visibility."""
+        require(
+            type(convergence_attempts) is int and convergence_attempts >= 1,
+            "Invalid conservation read limit",
         )
-        signed_quantity = D(0)
-        seen = set()
-        for execution in executions:
-            if execution.get("execType") == "Funding":
-                continue
-            execution_id = execution.get("execId")
-            require(
-                bool(execution_id) and execution_id not in seen,
-                "Ambiguous execution identity",
+        require(
+            (
+                type(convergence_delay_seconds) is int
+                or type(convergence_delay_seconds) is float
             )
-            seen.add(execution_id)
-            require(execution.get("symbol") == SYMBOL, "Unexpected execution symbol")
-            require(
-                execution.get("orderId") in self.order_ids
-                or execution.get("orderLinkId") in self.links,
-                "Foreign or unattributed probe-symbol execution",
-            )
-            require(execution.get("side") in {"Buy", "Sell"}, "Unknown execution side")
-            quantity = D(execution["execQty"])
-            require(quantity > 0, "Invalid execution quantity")
-            signed_quantity += quantity if execution["side"] == "Buy" else -quantity
-        live = position(account)
-        actual = (
-            D(0) if live is None else live.size * (1 if live.side is Side.LONG else -1)
+            and 0 <= convergence_delay_seconds <= 5,
+            "Invalid conservation read delay",
         )
-        require(signed_quantity == actual, "Run executions do not explain net exposure")
-        require(live is None or live.side is side, "Unexpected probe position side")
-        return abs(signed_quantity)
+        pending = []
+        attempt = 0
+        while True:
+            attempt += 1
+            if attempt > 1:
+                await asyncio.sleep(convergence_delay_seconds)
+                account = await self.exchange.account_state()
+            orders = [o for o in account.open_orders if o.symbol == SYMBOL]
+            require(
+                all(self.owns_order(o) for o in orders),
+                "Unknown probe-symbol order",
+            )
+            with self.journal_lock:
+                self.order_ids.update(o.order_id for o in orders)
+                self.save()
+            executions = await asyncio.to_thread(
+                self.exchange._client.paginate_private_list,
+                "/v5/execution/list",
+                {
+                    "category": "linear",
+                    "symbol": SYMBOL,
+                    "startTime": self.started_ms,
+                    "limit": 100,
+                },
+            )
+            signed_quantity = D(0)
+            seen = set()
+            for execution in executions:
+                if execution.get("execType") == "Funding":
+                    continue
+                execution_id = execution.get("execId")
+                require(
+                    bool(execution_id) and execution_id not in seen,
+                    "Ambiguous execution identity",
+                )
+                seen.add(execution_id)
+                require(
+                    execution.get("symbol") == SYMBOL, "Unexpected execution symbol"
+                )
+                require(
+                    execution.get("orderId") in self.order_ids
+                    or execution.get("orderLinkId") in self.links,
+                    "Foreign or unattributed probe-symbol execution",
+                )
+                require(
+                    execution.get("side") in {"Buy", "Sell"},
+                    "Unknown execution side",
+                )
+                quantity = D(execution["execQty"])
+                require(quantity > 0, "Invalid execution quantity")
+                signed_quantity += quantity if execution["side"] == "Buy" else -quantity
+            live = position(account)
+            actual = (
+                D(0)
+                if live is None
+                else live.size * (1 if live.side is Side.LONG else -1)
+            )
+            # Side is structural evidence; a mismatch may never converge.
+            require(live is None or live.side is side, "Unexpected probe position side")
+            if signed_quantity == actual:
+                if attempt > 1:
+                    # Record the journal only when read visibility genuinely lagged.
+                    self.record_observation(
+                        "verify_convergence",
+                        {
+                            "converged_after_attempt": attempt,
+                            "read_limit": convergence_attempts,
+                            "pending_reads": pending,
+                        },
+                    )
+                return abs(signed_quantity)
+            pending.append(
+                {
+                    "attempt": attempt,
+                    "signed": str(signed_quantity),
+                    "account": str(actual),
+                }
+            )
+            self.record_observation(
+                "verify_convergence",
+                {
+                    "converged_after_attempt": None,
+                    "read_limit": convergence_attempts,
+                    "pending_reads": pending,
+                },
+            )
+            require(
+                attempt < convergence_attempts,
+                "Run executions do not explain net exposure",
+            )
 
     @classmethod
     async def start(cls, exchange, *, journal_path=None):
@@ -170,7 +239,16 @@ class ProbeOwnership:
         return owner
 
     @classmethod
-    async def recover(cls, exchange, journal_path, side, *, started_after_ms):
+    async def recover(
+        cls,
+        exchange,
+        journal_path,
+        side,
+        *,
+        started_after_ms,
+        convergence_attempts=VERIFY_READ_ATTEMPTS,
+        convergence_delay_seconds=VERIFY_READ_DELAY_SECONDS,
+    ):
         """Reload only this rehearsal's journal after its worker is terminal."""
         data = json.loads(journal_path.read_text(encoding="utf-8"))
         require(isinstance(data, dict), "Invalid ownership journal")
@@ -208,7 +286,12 @@ class ProbeOwnership:
         owner.order_ids = set(data["order_ids"])
         owner.close_submitted = data["cleanup_close_submitted"]
         owner.observations = data["observations"]
-        await owner.verify(await exchange.account_state(), side)
+        await owner.verify(
+            await exchange.account_state(),
+            side,
+            convergence_attempts=convergence_attempts,
+            convergence_delay_seconds=convergence_delay_seconds,
+        )
         exchange._client.private_post = owner.submit
         return owner
 
