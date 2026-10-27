@@ -29,7 +29,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.parametrize(
-    "failed_gate,response_kind", [(1, "code"), (2, "code"), (1, "json")]
+    "failed_gate,response_kind", [(1, "code"), (2, "code"), (1, "json"), (1, "timeout")]
 )
 @pytest.mark.parametrize("cancel_outage", [False, True])
 def test_exchange_rejection_keeps_status_but_blocks_trading(
@@ -47,6 +47,10 @@ def test_exchange_rejection_keeps_status_but_blocks_trading(
                 if self.armed and request.url.path == "/v5/position/list":
                     self.account_reads += 1
                     if self.account_reads >= failed_gate and not self.recovered:
+                        if response_kind == "timeout":
+                            raise httpx.ReadTimeout(
+                                "synthetic-secret-must-not-leak", request=request
+                            )
                         if response_kind == "json":
                             return httpx.Response(
                                 200, text="<html>synthetic-secret-must-not-leak</html>"
@@ -162,10 +166,15 @@ def test_exchange_rejection_keeps_status_but_blocks_trading(
                 async with asyncio.timeout(5):
                     notice = await notices.get()
                     assert "synthetic-secret" not in notice
-                    assert "10010 (Unmatched IP)" in notice
-                    assert "https://www.bybit.com/en/app/user/api-management" in notice
+                    show_ip = response_kind == "code"
+                    assert ("10010 (Unmatched IP)" in notice) is show_ip
+                    assert (
+                        "https://www.bybit.com/en/app/user/api-management" in notice
+                    ) is show_ip
+                    if response_kind == "timeout":
+                        assert "Exchange request timed out" in notice
                     assert notice_attempts == 2
-                    assert len(ip_requests) == notice_attempts
+                    assert len(ip_requests) == (notice_attempts if show_ip else 0)
                     assert not task.done() and not source_started.is_set()
                     assert recovery_calls == failed_gate - 1
                     baseline = list(exchange.requests)
@@ -179,9 +188,11 @@ def test_exchange_rejection_keeps_status_but_blocks_trading(
                     updates.put_nowait(Update(update_id=1, message=message))
                     status = await replies.get()
                     assert "protection is not verified" in status
-                    assert "10010 (Unmatched IP)" in status
-                    assert "runtime's current public IP" in status
-                    assert "https://www.bybit.com/en/app/user/api-management" in status
+                    assert ("10010 (Unmatched IP)" in status) is show_ip
+                    assert ("runtime's current public IP" in status) is show_ip
+                    assert (
+                        "https://www.bybit.com/en/app/user/api-management" in status
+                    ) is show_ip
                     for index, data in enumerate(
                         (
                             IntentAction(

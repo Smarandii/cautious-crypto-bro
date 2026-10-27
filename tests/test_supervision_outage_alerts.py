@@ -9,7 +9,7 @@ import pytest
 from aiogram.methods import SendMessage
 from test_manual_lifecycle_smoke import TelegramTransport, mutation_count
 from test_operator_public_ip import install_ip_transport
-from test_remaining_concerns import executor_for, prepare
+from test_remaining_concerns import Exchange, executor_for, prepare
 from test_source_recovery import command
 from test_supervision_health import stop, until
 from test_workflow_integration import ExchangeTransport
@@ -23,6 +23,82 @@ from cautious_crypto_bro.supervision_health import supervision_health_path
 pytestmark = pytest.mark.integration
 
 
+def test_order_read_timeout_reports_sanitized_cause_and_recovers(monkeypatch, tmp_path):
+    ip_requests = install_ip_transport(monkeypatch)
+    clock = [0]
+    monkeypatch.setattr(approval_bot, "monotonic", lambda: clock[0])
+
+    class OrderReadExchange(Exchange):
+        unavailable = False
+        failures = 0
+
+        def handle(self, request):
+            if self.unavailable and "orderLinkId" in request.url.params:
+                self.failures += 1
+                raise httpx.ReadTimeout(
+                    "synthetic-private-order-detail", request=request
+                )
+            return super().handle(request)
+
+    async def run():
+        exchange = OrderReadExchange()
+        with executor_for(exchange) as executor:
+            bot = ApprovalBot(
+                token="123456:synthetic-notice-token",
+                approval_chat_id=1,
+                approver_user_id=1,
+                store=None,
+                executor=None,
+            )
+            await bot._bot.session.close()
+            transport = TelegramTransport()
+            bot._bot.session = transport
+
+            class ReadSupervisor(PositionSupervisor):
+                async def reconcile_once(self):
+                    await executor.strategy_order("BTCUSDT", "synthetic-owned-link")
+
+            path = tmp_path / "progress.json"
+            supervisor = ReadSupervisor(
+                store=None,
+                executor=executor,
+                mutation_lock=asyncio.Lock(),
+                poll_interval_seconds=0.01,
+                progress_path=path,
+                report_state=bot.report_supervision_state,
+            )
+            task = asyncio.create_task(supervisor.run())
+            try:
+                await until(path.exists)
+                exchange.unavailable = True
+                await until(lambda: bot._supervision_warning is not None)
+                await bot._deliver_supervision_notice()
+                text = list(transport.messages.values())[-1].text
+                assert "Exchange request timed out" in text
+                assert "synthetic-private" not in text
+                assert "10010" not in text and "api-management" not in text
+                assert not ip_requests
+                assert exchange.failures > 0
+                exchange.unavailable = False
+                await until(lambda: bot._supervision_warning is None)
+                clock[0] = 31
+                await bot._deliver_supervision_notice()
+                assert (
+                    "supervision recovered"
+                    in list(transport.messages.values())[-1].text
+                )
+                assert not [
+                    r
+                    for r in exchange.requests
+                    if r[0] in {"/v5/order/create", "/v5/order/cancel"}
+                ]
+            finally:
+                await stop(task)
+                await bot.close()
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     ("failure", "fail_notice"),
     [
@@ -30,13 +106,16 @@ pytestmark = pytest.mark.integration
         ("account", True),
         ("account_json", False),
         ("account_array", False),
+        ("account_timeout", False),
+        ("account_auth", False),
         ("mutation", False),
     ],
 )
 def test_running_supervision_escalates_and_recovers_without_notification_spam(
     monkeypatch, tmp_path, caplog, failure, fail_notice
 ):
-    install_ip_transport(monkeypatch)
+    ip_requests = install_ip_transport(monkeypatch)
+    show_ip = failure in {"account", "mutation"}
 
     async def run():
         class OutageExchange(ExchangeTransport):
@@ -51,6 +130,10 @@ def test_running_supervision_escalates_and_recovers_without_notification_spam(
                 )
                 if self.unavailable and request.url.path == target:
                     self.failures += 1
+                    if failure.endswith("timeout"):
+                        raise httpx.ReadTimeout(
+                            "synthetic-private-detail", request=request
+                        )
                     if failure == "account_json":
                         return httpx.Response(
                             200, text="<html>synthetic-private-detail</html>"
@@ -59,7 +142,10 @@ def test_running_supervision_escalates_and_recovers_without_notification_spam(
                         return httpx.Response(200, json=[])
                     return httpx.Response(
                         200,
-                        json={"retCode": 10010, "retMsg": "synthetic-private-detail"},
+                        json={
+                            "retCode": 10003 if failure == "account_auth" else 10010,
+                            "retMsg": "synthetic-private-detail",
+                        },
                     )
                 return super().handle(request)
 
@@ -70,14 +156,18 @@ def test_running_supervision_escalates_and_recovers_without_notification_spam(
             async def make_request(self, bot, method, timeout=None):
                 if isinstance(method, SendMessage):
                     if "HUMAN REVIEW REQUIRED" in method.text:
-                        assert "10010 (Unmatched IP)" in method.text
-                        assert "runtime's current public IP" in html.unescape(
-                            method.text
-                        )
+                        assert ("10010 (Unmatched IP)" in method.text) is show_ip
+                        assert (
+                            "runtime's current public IP" in html.unescape(method.text)
+                        ) is show_ip
                         assert (
                             "https://www.bybit.com/en/app/user/api-management"
                             in method.text
-                        )
+                        ) is show_ip
+                        if failure.endswith("timeout"):
+                            assert "Exchange request timed out" in method.text
+                        if failure == "account_auth":
+                            assert "Bybit error 10003" in method.text
                         assert "synthetic-private-detail" not in method.text
                         self.outage_calls += 1
                         if fail_notice and self.outage_calls == 1:
@@ -145,6 +235,7 @@ def test_running_supervision_escalates_and_recovers_without_notification_spam(
                 assert len(transport.messages) == count
                 assert path.read_bytes() == previous_progress
                 await until(lambda: transport.outage_calls >= 1)
+                assert bool(ip_requests) is show_ip
                 if fail_notice:
                     clock = 31
                     bot._supervision_notice_changed.set()

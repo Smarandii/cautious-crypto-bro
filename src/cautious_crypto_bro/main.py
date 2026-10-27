@@ -9,7 +9,7 @@ from time import monotonic
 from types import FrameType
 
 from .approval_bot import BYBIT_IP_BINDING_HELP, ApprovalBot
-from .bybit import BybitDemoExecutor
+from .bybit import UNMATCHED_IP_REASON, BybitDemoExecutor, exchange_failure_reason
 from .config import Settings, get_settings
 from .domain import TradeExecutionError
 from .execution import ExecutionPlanner
@@ -317,15 +317,18 @@ async def _reconcile_before_ingestion(
         try:
             await runtime.supervisor.reconcile_once()
             return outage, next_alert
-        except TradeExecutionError:
+        except TradeExecutionError as exc:
             outage = True
+            reason = exchange_failure_reason(exc)
             notice = (
                 "Exchange startup reconciliation unavailable. Trading callbacks and "
                 "signal ingestion are paused; application protection is not verified. "
-                "Check Bybit API key IP binding, permissions, and connectivity. "
+                "Check exchange connectivity and use /status for details. "
                 "Account reconciliation will retry automatically, up to five minutes apart."
-                "\n" + BYBIT_IP_BINDING_HELP
+                "\nReason: " + reason
             )
+            if reason == UNMATCHED_IP_REASON:
+                notice += "\n" + BYBIT_IP_BINDING_HELP
             runtime.bot.set_startup_blocked(notice)
             logging.getLogger(__name__).warning(
                 "Exchange startup reconciliation unavailable; retry in %s seconds",

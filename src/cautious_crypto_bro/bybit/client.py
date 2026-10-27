@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Mapping
 from urllib.parse import urlencode
 
@@ -13,6 +14,34 @@ from .auth import BybitAuth
 logger = logging.getLogger(__name__)
 
 DEMO_BASE_URL = "https://api-demo.bybit.com"
+UNMATCHED_IP_REASON = "Bybit error 10010 (Unmatched IP)"
+
+
+def exchange_failure_reason(error: Exception) -> str:
+    """Describe a failure without exposing response text, URLs or credentials."""
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, httpx.TimeoutException):
+            return "Exchange request timed out"
+        if isinstance(current, httpx.TransportError):
+            return "Exchange connection failed"
+        if isinstance(current, httpx.HTTPStatusError):
+            return f"Exchange HTTP error {current.response.status_code}"
+        if isinstance(current, TradeExecutionError):
+            message = str(current)
+            code = re.match(r"Bybit rejected request: (-?\d+)(?:\s|$)", message)
+            if code is not None:
+                return (
+                    UNMATCHED_IP_REASON
+                    if code[1] == "10010"
+                    else f"Bybit error {code[1]}"
+                )
+            if message.startswith(
+                ("Bybit returned invalid", "Bybit returned an invalid")
+            ):
+                return "Exchange returned invalid response"
+        current = current.__cause__
+    return type(error).__name__
 
 
 class BybitClient:
