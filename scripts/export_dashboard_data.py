@@ -617,6 +617,7 @@ def _demo_long_participation_experiment(
         else "ready_for_review"
         if len(take) >= 20
         and len(skip) >= 20
+        and len(complete_take) >= 20
         and unresolved_take == 0
         and len(valid_skips) == len(skip)
         and valid_takes
@@ -638,6 +639,7 @@ def _demo_long_participation_experiment(
         else None,
         "take_unresolved_count": unresolved_take if forensic_available else None,
         "review_target_per_arm": 20,
+        "review_target_completed_take_positions": 20,
         "status": status,
         "take_completed_performance": summarize_reconciled_positions(complete_take),
         "take_completed_performance_bootstrap_95ci": (
@@ -646,7 +648,8 @@ def _demo_long_participation_experiment(
         "skip_portfolio_pnl_usdt": 0.0,
         "comparison_note": (
             "Skip arm is zero exposure by design. Do not compare arm expectancy "
-            "until take assignments are resolved and the per-arm review target is met."
+            "until take assignments are resolved, the per-arm review target is met, "
+            "and at least 20 take positions are fully reconciled."
         ),
     }
 

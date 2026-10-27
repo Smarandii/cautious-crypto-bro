@@ -90,6 +90,31 @@ def test_participation_report_handles_archives_without_assignments(
     )
 
 
+def test_failed_assignments_do_not_supply_completed_position_review_sample(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bundle = tmp_path / "failed-takes.zip"
+    assignments = [
+        {
+            "intent_id": f"{arm}-{index}",
+            "created_at": "2026-10-09T10:00:00+00:00",
+            "status": "FAILED" if arm == "take" else "SKIPPED",
+            "approval_mode": "AUTO" if arm == "take" else "SKIPPED",
+            "bybit_order_ids": [],
+            "arm": arm,
+        }
+        for arm in ("take", "skip")
+        for index in range(20)
+    ]
+    _archive(bundle, assignments)
+    report(bundle)
+    output = capsys.readouterr().out
+    assert "long_participation_take_failed_before_fill=20" in output
+    assert "long_participation_take_unresolved=0" in output
+    assert "long_participation_take_completed=0" in output
+    assert "long_participation_status=collecting/" in output
+
+
 def test_participation_report_stratifies_randomization_by_prior_momentum(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
