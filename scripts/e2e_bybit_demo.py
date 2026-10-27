@@ -10,8 +10,10 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 import tempfile
+import threading
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
@@ -45,6 +47,128 @@ from cautious_crypto_bro.storage import IntentStore
 
 D = Decimal
 SYMBOL = "DOGEUSDT"
+
+
+class ProbeOwnership:
+    """Keep exact submissions and reconcile exposure from a verified flat start."""
+
+    def __init__(self, exchange, journal_path):
+        self.exchange = exchange
+        self.started_ms = int(datetime.now(UTC).timestamp() * 1000)
+        self.links = set()
+        self.order_ids = set()
+        self.close_submitted = False
+        self.original_post = exchange._client.private_post
+        self.journal_path = journal_path
+        self.journal_lock = threading.RLock()
+
+    def save(self):
+        with self.journal_lock:
+            data = {
+                "version": 1,
+                "symbol": SYMBOL,
+                "started_ms": self.started_ms,
+                "submitted_links": sorted(self.links),
+                "order_ids": sorted(self.order_ids),
+                "cleanup_close_submitted": self.close_submitted,
+            }
+            temporary = self.journal_path.with_suffix("." + uuid4().hex + ".tmp")
+            try:
+                with temporary.open("x", encoding="utf-8") as stream:
+                    json.dump(data, stream, sort_keys=True)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, self.journal_path)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    def submit(self, path, params):
+        if path == "/v5/order/create" and params.get("symbol") == SYMBOL:
+            link = params.get("orderLinkId")
+            require(bool(link), "Probe submission requires an exact order link")
+            # Retain the submitted identity even when its acknowledgment is lost.
+            with self.journal_lock:
+                self.links.add(link)
+                self.save()
+            response = self.original_post(path, params)
+            order_id = response.get("result", {}).get("orderId")
+            if order_id:
+                with self.journal_lock:
+                    self.order_ids.add(order_id)
+                    self.save()
+            return response
+        return self.original_post(path, params)
+
+    def owns_order(self, order):
+        return (
+            order.order_id in self.order_ids
+            or order.order_link_id in self.links
+            or getattr(order, "parent_order_link_id", None) in self.links
+        )
+
+    async def verify(self, account, side):
+        orders = [o for o in account.open_orders if o.symbol == SYMBOL]
+        require(all(self.owns_order(o) for o in orders), "Unknown probe-symbol order")
+        with self.journal_lock:
+            self.order_ids.update(o.order_id for o in orders)
+            self.save()
+        executions = await asyncio.to_thread(
+            self.exchange._client.paginate_private_list,
+            "/v5/execution/list",
+            {
+                "category": "linear",
+                "symbol": SYMBOL,
+                "startTime": self.started_ms,
+                "limit": 100,
+            },
+        )
+        signed_quantity = D(0)
+        seen = set()
+        for execution in executions:
+            if execution.get("execType") == "Funding":
+                continue
+            execution_id = execution.get("execId")
+            require(
+                bool(execution_id) and execution_id not in seen,
+                "Ambiguous execution identity",
+            )
+            seen.add(execution_id)
+            require(execution.get("symbol") == SYMBOL, "Unexpected execution symbol")
+            require(
+                execution.get("orderId") in self.order_ids
+                or execution.get("orderLinkId") in self.links,
+                "Foreign or unattributed probe-symbol execution",
+            )
+            require(execution.get("side") in {"Buy", "Sell"}, "Unknown execution side")
+            quantity = D(execution["execQty"])
+            require(quantity > 0, "Invalid execution quantity")
+            signed_quantity += quantity if execution["side"] == "Buy" else -quantity
+        live = position(account)
+        actual = (
+            D(0) if live is None else live.size * (1 if live.side is Side.LONG else -1)
+        )
+        require(signed_quantity == actual, "Run executions do not explain net exposure")
+        require(live is None or live.side is side, "Unexpected probe position side")
+        return abs(signed_quantity)
+
+    @classmethod
+    async def start(cls, exchange, *, journal_path=None):
+        if journal_path is None:
+            directory = os.environ.get("CCB_PROBE_EVIDENCE_DIR")
+            require(bool(directory), "Persistent probe evidence directory required")
+            journal_path = Path(directory) / ("ownership-" + uuid4().hex + ".json")
+        require(journal_path.parent.is_dir(), "Probe evidence directory is unavailable")
+        owner = cls(exchange, journal_path)
+        require(
+            symbol_flat(await exchange.account_state()),
+            "Ownership journal requires a flat start",
+        )
+        owner.save()
+        exchange._client.private_post = owner.submit
+        return owner
+
+    def restore(self):
+        self.exchange._client.private_post = self.original_post
 
 
 def emit(check, **values):
@@ -186,40 +310,46 @@ async def persist_action(store, side, kind, message_id, pct=None):
     return action
 
 
-async def cleanup(e, side, prefix):
+async def cleanup(e, side, prefix, *, ownership=None):
     for attempt in range(3):
         try:
             account = await e.account_state()
-            require(
-                all(
-                    (
-                        o.order_link_id.startswith(prefix)
-                        or o.order_link_id.startswith("ccb-action-")
-                        or o.is_protective
-                    )
-                    for o in account.open_orders
-                    if o.symbol == SYMBOL
-                ),
-                "Foreign orders detected; refusing broad cleanup",
-            )
-            require(
-                all(p.side is side for p in account.positions if p.symbol == SYMBOL),
-                "Foreign position detected; manual cleanup required",
-            )
-            if position(account):
-                action = PositionActionIntent(
-                    source=source(999),
-                    symbol=SYMBOL,
-                    action=PositionActionType.CLOSE,
-                    expected_side=side,
-                    summary="E2E cleanup",
-                    confidence=1,
+            if ownership is None:
+                require(
+                    symbol_flat(account), "Run ownership evidence required for cleanup"
                 )
-                await e.execute_position_action(action)
+            else:
+                owned_quantity = await ownership.verify(account, side)
+            if position(account):
+                require(
+                    not ownership.close_submitted,
+                    "Cleanup close outcome unresolved; no replay",
+                )
+                ownership.close_submitted = True
+                ownership.save()
+                # Freeze the attributable quantity; a later account read must not
+                # expand cleanup to somebody else's new same-side exposure.
+                await asyncio.to_thread(
+                    e._client.private_post,
+                    "/v5/order/create",
+                    {
+                        "category": "linear",
+                        "symbol": SYMBOL,
+                        "side": "Sell" if side is Side.LONG else "Buy",
+                        "orderType": "Market",
+                        "qty": str(owned_quantity),
+                        "reduceOnly": True,
+                        "positionIdx": 0,
+                        "orderLinkId": prefix + "cleanup",
+                    },
+                )
             await wait_account(e, lambda a: position(a) is None, "cleanup close")
             account = await e.account_state()
+            if ownership is not None:
+                await ownership.verify(account, side)
             for order in account.open_orders:
                 if order.symbol == SYMBOL:
+                    await ownership.verify(await e.account_state(), side)
                     await e.cancel_order(SYMBOL, order.order_id)
             await wait_account(e, symbol_flat, "cleanup flat")
             emit("cleanup", symbol=SYMBOL, side=side.value, flat=True)
@@ -291,6 +421,7 @@ async def run_side(e, side, directory):
     )
     supervisor = PositionSupervisor(store=store, executor=e, mutation_lock=lock)
     prefix = f"ccb-v2-{intent.intent_id.hex[:20]}-"
+    ownership = await ProbeOwnership.start(e)
     emit(
         "mutation_started",
         side=side.value,
@@ -576,7 +707,10 @@ async def run_side(e, side, directory):
         await wait_account(e, symbol_flat, "CLOSE flat")
         emit("coordinator_close", side=side.value, result="passed")
     finally:
-        await cleanup(e, side, prefix)
+        try:
+            await cleanup(e, side, prefix, ownership=ownership)
+        finally:
+            ownership.restore()
 
 
 async def main(args):
@@ -665,6 +799,7 @@ async def observe_zone_stops(e, side):
             and o.parent_order_link_id == parent
         ]
 
+    ownership = await ProbeOwnership.start(e)
     emit("mutation_started", side=side.value, scenario="independent_zone_stop")
     try:
         for index, parent in enumerate(parents):
@@ -772,7 +907,10 @@ async def observe_zone_stops(e, side):
             activation_proven=False,
         )
     finally:
-        await cleanup(e, side, prefix)
+        try:
+            await cleanup(e, side, prefix, ownership=ownership)
+        finally:
+            ownership.restore()
 
 
 if __name__ == "__main__":
