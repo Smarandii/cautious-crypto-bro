@@ -159,6 +159,15 @@ class BybitClient:
 
                 response.raise_for_status()
             except httpx.HTTPError as exc:
+                # Zen of Python: "In the face of ambiguity, refuse the temptation
+                # to guess." A timed-out POST may already be committed.
+                if (
+                    method == "GET"
+                    and isinstance(exc, httpx.TimeoutException)
+                    and attempt == 0
+                ):
+                    logger.warning("Bybit read request timed out; retrying once")
+                    continue
                 raise TradeExecutionError(f"Bybit HTTP request failed: {exc}") from exc
 
             data = self._response_data(response)
