@@ -10,6 +10,35 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.9] - 2026-10-27
+
+Probe verification checkpoint for the native process-loss rehearsal.
+
+### Fixed
+
+- Give the run-owned Demo rehearsal's ownership verification bounded
+  read-only convergence while an execution-versus-position read round can
+  still lag (#198). A fresh-process recovery may now repeat the
+  conservation read at most twice more instead of failing immediately on
+  read-visibility delay, while identity, foreign-execution, unexpected
+  side and already-submitted cleanup guards keep failing closed on the
+  first attempt and the conservation equality stays exact. Delayed and
+  exhausted rounds are recorded only in the private rehearsal journal.
+  Production planning, sizing and service behavior are unchanged.
+
+### Upgrade, validation and limitations
+
+- Schema 13 is unchanged; scripts and tests only, so there is no state
+  migration and redeploying the previous image fully rolls back. Validate
+  the probe subprocess/adapter harness, full unit suite and the exact
+  deployed revision, Demo authentication, supervision health and native
+  stop protection before and after deployment.
+- The bounded native LONG and SHORT process-loss rehearsal itself remains
+  pending: redeploy this image, then rerun the exclusive rehearsal under
+  current settings. The convergence-check CI evidence (#190 acceptance)
+  covers adapter behavior, not a new native observation; #190, #139 and
+  #123 stay open.
+
 ## [2.2.8] - 2026-10-27
 
 ### Fixed
