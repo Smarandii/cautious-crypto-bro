@@ -63,9 +63,33 @@ def pair_observations_verified(records: list[dict]) -> bool:
     return seen == {"LONG", "SHORT"}
 
 
+def recovery_observations_verified(records: list[dict]) -> bool:
+    observed = [
+        r for r in records if r.get("check") == "zone_process_recovery_observation"
+    ]
+    return (
+        len(observed) == 2
+        and {r.get("side") for r in observed} == {"LONG", "SHORT"}
+        and all(
+            r.get("worker_exit_code") == 86
+            and r.get("original_pairs_preserved") is True
+            and r.get("recovered_from_journal") is True
+            and r.get("entry_submission_replayed") is False
+            and r.get("activation_proven") is False
+            for r in observed
+        )
+    )
+
+
 def run_suite(
-    repo: Path, *, zone_protection: bool = False, zone_pair_cancellation: bool = False
+    repo: Path,
+    *,
+    zone_protection: bool = False,
+    zone_pair_cancellation: bool = False,
+    zone_process_recovery: bool = False,
 ) -> int:
+    if zone_process_recovery and (zone_protection or zone_pair_cancellation):
+        raise ValueError("Choose a single zone observation mode")
     zone_protection = zone_protection or zone_pair_cancellation
 
     def command(*args: str) -> str:
@@ -143,6 +167,7 @@ def run_suite(
                     "--execute-demo",
                     *(["--zone-protection"] if zone_protection else []),
                     *(["--zone-pair-cancellation"] if zone_pair_cancellation else []),
+                    *(["--zone-process-recovery"] if zone_process_recovery else []),
                 ],
                 cwd=repo,
                 env=os.environ | {"CCB_IMAGE": image},
@@ -187,6 +212,8 @@ def run_suite(
                 raise RuntimeError("Suite exited without a passing result")
             if zone_pair_cancellation and not pair_observations_verified(records):
                 raise RuntimeError("Paired cancellation observations are incomplete")
+            if zone_process_recovery and not recovery_observations_verified(records):
+                raise RuntimeError("Process recovery observations are incomplete")
     except (Exception, KeyboardInterrupt) as exc:
         exit_code = 1
         print(f"Bybit Demo E2E failed: {exc}", file=sys.stderr)
@@ -216,15 +243,21 @@ def main() -> int:
         action="store_true",
         help="Place small real Bybit Demo test orders",
     )
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
         "--zone-protection",
         action="store_true",
         help="Observe parent-linked partial stops after an independent exit",
     )
-    parser.add_argument(
+    modes.add_argument(
         "--zone-pair-cancellation",
         action="store_true",
         help="Observe exact paired-child cancellation after zone A closes",
+    )
+    modes.add_argument(
+        "--zone-process-recovery",
+        action="store_true",
+        help="Observe native protection after abrupt worker exit and journal recovery",
     )
     args = parser.parse_args()
     if not args.execute_demo:
@@ -233,6 +266,7 @@ def main() -> int:
         Path(__file__).resolve().parents[1],
         zone_protection=args.zone_protection,
         zone_pair_cancellation=args.zone_pair_cancellation,
+        zone_process_recovery=args.zone_process_recovery,
     )
 
 

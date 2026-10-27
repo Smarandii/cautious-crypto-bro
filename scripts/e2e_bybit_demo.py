@@ -169,6 +169,49 @@ class ProbeOwnership:
         exchange._client.private_post = owner.submit
         return owner
 
+    @classmethod
+    async def recover(cls, exchange, journal_path, side, *, started_after_ms):
+        """Reload only this rehearsal's journal after its worker is terminal."""
+        data = json.loads(journal_path.read_text(encoding="utf-8"))
+        require(isinstance(data, dict), "Invalid ownership journal")
+        require(
+            type(data.get("version")) is int
+            and data.get("version") == 1
+            and data.get("symbol") == SYMBOL,
+            "Unsupported ownership journal",
+        )
+        started = data.get("started_ms")
+        require(
+            type(started) is int
+            and started_after_ms
+            <= started
+            <= int(datetime.now(UTC).timestamp() * 1000),
+            "Ownership journal is outside this rehearsal",
+        )
+        for field in ("submitted_links", "order_ids"):
+            values = data.get(field)
+            require(
+                isinstance(values, list)
+                and all(isinstance(value, str) and value for value in values)
+                and len(values) == len(set(values)),
+                "Invalid ownership identities",
+            )
+        require(
+            type(data.get("cleanup_close_submitted")) is bool, "Invalid cleanup state"
+        )
+        require(
+            isinstance(data.get("observations"), dict), "Invalid observation evidence"
+        )
+        owner = cls(exchange, journal_path)
+        owner.started_ms = started
+        owner.links = set(data["submitted_links"])
+        owner.order_ids = set(data["order_ids"])
+        owner.close_submitted = data["cleanup_close_submitted"]
+        owner.observations = data["observations"]
+        await owner.verify(await exchange.account_state(), side)
+        exchange._client.private_post = owner.submit
+        return owner
+
     def restore(self):
         self.exchange._client.private_post = self.original_post
 
@@ -726,6 +769,16 @@ async def main(args):
             args.execute_demo,
             "Explicit --execute-demo required; use orchestration script",
         )
+        require(
+            not (
+                getattr(args, "zone_process_recovery", False)
+                and (
+                    getattr(args, "zone_protection", False)
+                    or getattr(args, "zone_pair_cancellation", False)
+                )
+            ),
+            "Choose a single zone observation mode",
+        )
     e = executor()
     try:
         if args.resume_db:
@@ -743,6 +796,24 @@ async def main(args):
             args.execute_demo,
             "Explicit --execute-demo required; use orchestration script",
         )
+        if getattr(args, "zone_recovery_worker", None):
+            directory = os.environ.get("CCB_PROBE_EVIDENCE_DIR")
+            require(bool(directory), "Persistent worker evidence required")
+            journal = args.ownership_journal
+            require(
+                journal is not None
+                and journal.resolve().parent == Path(directory).resolve()
+                and not journal.exists(),
+                "Worker requires a new journal in this run's evidence directory",
+            )
+            await observe_zone_stops(
+                e,
+                Side(args.zone_recovery_worker),
+                paired_cancellation=True,
+                crash_after_entries=True,
+                journal_path=journal,
+            )
+            raise AssertionError("Worker did not exit at its checkpoint")
         account = await e.account_state()
         require(
             symbol_flat(account),
@@ -758,7 +829,9 @@ async def main(args):
                 args, "zone_pair_cancellation", False
             )
             for side in (Side.LONG, Side.SHORT):
-                if zone_mode:
+                if getattr(args, "zone_process_recovery", False):
+                    await observe_zone_process_recovery(side)
+                elif zone_mode:
                     await observe_zone_stops(
                         e,
                         side,
@@ -773,7 +846,7 @@ async def main(args):
             result="passed",
             coverage=(
                 "native independent-exit stop observation; no activation proof"
-                if zone_mode
+                if zone_mode or getattr(args, "zone_process_recovery", False)
                 else "real exchange plus labeled application fault injection"
             ),
             not_live_tested=[
@@ -1001,7 +1074,9 @@ def zone_pairs_ready(account, parents):
     )
 
 
-async def observe_zone_stops(e, side, *, paired_cancellation=False):
+async def observe_zone_stops(
+    e, side, *, paired_cancellation=False, crash_after_entries=False, journal_path=None
+):
     """Observe native behavior; a successful observation is not activation proof."""
     require(symbol_flat(await e.account_state()), "Zone probe symbol must be flat")
     context = await e.market_context(SYMBOL)
@@ -1031,7 +1106,7 @@ async def observe_zone_stops(e, side, *, paired_cancellation=False):
             and o.parent_order_link_id == parent
         ]
 
-    ownership = await ProbeOwnership.start(e)
+    ownership = await ProbeOwnership.start(e, journal_path=journal_path)
     emit("mutation_started", side=side.value, scenario="independent_zone_stop")
     try:
         for index, parent in enumerate(parents):
@@ -1078,6 +1153,14 @@ async def observe_zone_stops(e, side, *, paired_cancellation=False):
             else None
         )
         ownership.record_observation("zone_entries", pair_evidence(before, parents))
+        if crash_after_entries:
+            require(
+                pairs is not None, "Recovery worker requires native protection pairs"
+            )
+            emit("zone_recovery_checkpoint", side=side.value, journal_flushed=True)
+            # Deliberately skip Python finally/cleanup; the confirmed-dead worker's
+            # known journal is the only ownership input to the recovery context.
+            os._exit(86)
         before_ids = [children(before, parent)[0].order_id for parent in parents]
         require(before_ids[0] != before_ids[1], "Zones share one stop identity")
         response = await asyncio.to_thread(
@@ -1153,11 +1236,131 @@ async def observe_zone_stops(e, side, *, paired_cancellation=False):
             ownership.restore()
 
 
+async def observe_zone_process_recovery(side):
+    directory = os.environ.get("CCB_PROBE_EVIDENCE_DIR")
+    require(bool(directory), "Persistent recovery evidence required")
+    directory = Path(directory)
+    journal = directory / ("ownership-" + uuid4().hex + ".json")
+    started = int(datetime.now(UTC).timestamp() * 1000)
+    worker = None
+    e = None
+    owner = None
+    emit("mutation_started", side=side.value, scenario="zone_process_recovery")
+    try:
+        worker = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--execute-demo",
+            "--zone-recovery-worker",
+            side.value,
+            "--ownership-journal",
+            str(journal),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            output, error = await asyncio.wait_for(worker.communicate(), timeout=90)
+        except BaseException:
+            if worker.returncode is None:
+                worker.kill()
+                await worker.wait()
+            raise
+        (directory / (journal.stem + ".worker-stderr.log")).write_bytes(error)
+        records = [
+            json.loads(line)
+            for line in output.decode().splitlines()
+            if line.startswith("{")
+        ]
+        for record in records:
+            print(json.dumps(record), flush=True)
+        require(
+            worker.returncode == 86,
+            "Worker did not terminate at the abrupt-exit checkpoint",
+        )
+        terminal_observed_at = datetime.now(UTC).isoformat()
+        absent_since = asyncio.get_running_loop().time()
+        require(
+            any(
+                r.get("check") == "zone_recovery_checkpoint"
+                and r.get("journal_flushed") is True
+                and r.get("side") == side.value
+                for r in records
+            ),
+            "Worker checkpoint receipt missing",
+        )
+        await asyncio.sleep(3)
+        minimum_absence = asyncio.get_running_loop().time() - absent_since
+        e = executor()
+        owner = await ProbeOwnership.recover(e, journal, side, started_after_ms=started)
+        original = owner.observations.get("zone_entries")
+        require(isinstance(original, dict), "Original protection snapshot missing")
+        children = original.get("children", [])
+        require(
+            len(children) == 4 and len({o["order_id"] for o in children}) == 4,
+            "Original protection identities incomplete",
+        )
+        parents = {o["parent_link"] for o in children}
+        require(
+            len(parents) == 2 and parents <= owner.links,
+            "Original parent identities incomplete",
+        )
+        account = await e.account_state()
+        await owner.verify(account, side)
+        recovered = pair_evidence(account, parents)
+        require(
+            recovered["net_quantity"] == original["net_quantity"]
+            and sorted(recovered["children"], key=lambda o: o["order_id"])
+            == sorted(children, key=lambda o: o["order_id"]),
+            "Original native protection changed after worker exit",
+        )
+        owner.record_observation("after_worker_exit", recovered)
+        owner.record_observation(
+            "worker_termination",
+            {
+                "exit_code": worker.returncode,
+                "terminal_observed_at": terminal_observed_at,
+                "minimum_owner_absent_seconds": minimum_absence,
+            },
+        )
+        emit(
+            "zone_process_recovery_observation",
+            side=side.value,
+            worker_exit_code=worker.returncode,
+            original_pairs_preserved=True,
+            recovered_from_journal=True,
+            entry_submission_replayed=False,
+            activation_proven=False,
+        )
+    finally:
+        if worker is not None and worker.returncode is None:
+            worker.kill()
+            await worker.wait()
+        if e is None:
+            e = executor()
+        try:
+            if owner is None and journal.exists():
+                owner = await ProbeOwnership.recover(
+                    e, journal, side, started_after_ms=started
+                )
+            await cleanup(
+                e, side, "ccb-recover-" + uuid4().hex[:16] + "-", ownership=owner
+            )
+        finally:
+            if owner is not None:
+                owner.restore()
+            e.close()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute-demo", action="store_true")
     parser.add_argument("--zone-protection", action="store_true")
     parser.add_argument("--zone-pair-cancellation", action="store_true")
+    parser.add_argument("--zone-process-recovery", action="store_true")
+    parser.add_argument(
+        "--zone-recovery-worker", choices=["LONG", "SHORT"], help=argparse.SUPPRESS
+    )
+    parser.add_argument("--ownership-journal", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--resume-db", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)

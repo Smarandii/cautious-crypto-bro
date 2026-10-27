@@ -88,6 +88,23 @@ coverage; this native rehearsal received acknowledgments in both cases.
 
 ## Run-owned cleanup evidence
 
+For the bounded #190 process-loss rehearsal, use the same runner with
+`--execute-demo --zone-process-recovery`. A worker flushes two entries and four
+exact parent-linked native children to its run's journal, then deliberately exits
+with code 86 without executing Python cleanup. The orchestrator confirms that
+worker is terminal, waits at least three seconds and opens a new adapter context
+in the other process. It reloads only that known run's journal, checks executions,
+net exposure and every original child identity/quantity/trigger, then performs
+attributable cleanup. The saved cleanup-close flag prevents replay of an
+unresolved close. Both side receipts and independently verified cleanup remain
+required for success and app resume respectively.
+
+Malformed or foreign evidence remains unresolved. This is not an operator command
+for adopting arbitrary historical journals, nor a guarantee against host power
+loss, exchange-side races or a complete independent-zone offline lifecycle.
+Synthetic subprocess/adapter tests verify this recovery path; native conclusions
+require a separate exclusive Demo run. No #190 native result is claimed here yet.
+
 For #168, use `--execute-demo --zone-pair-cancellation` with the same runner.
 This attaches distinct TP/SL pairs to A and B, confirms A's independent reduction,
 then cancels A's original TP once. It records whether A's original SL retires or
