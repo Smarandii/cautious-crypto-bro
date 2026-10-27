@@ -16,7 +16,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from analyze_signal_followthrough import load_market_candles  # noqa: E402
 
-from cautious_crypto_bro.forensic_pnl import reconcile, summarize  # noqa: E402
+from cautious_crypto_bro.forensic_pnl import (  # noqa: E402
+    LONG_FULL_RISK_STARTED_AT,
+    participation_sizing_cohorts,
+    reconcile,
+    summarize,
+)
 
 REVIEW_TARGET_PER_ARM = 20
 BOOTSTRAP_SAMPLES = 10_000
@@ -269,7 +274,21 @@ def report(bundle: Path) -> None:
         return
 
     market_candles_by_symbol = load_market_candles(bundle)
+    print(f"long_participation_sizing_cutover={LONG_FULL_RISK_STARTED_AT}")
+    for cohort, rows in participation_sizing_cohorts(assignments).items():
+        print(f"long_participation_sizing_cohort={cohort}")
+        _report_cohort(
+            rows, positions, market_candles_by_symbol, reviewable=cohort != "unknown"
+        )
 
+
+def _report_cohort(
+    assignments: list[dict],
+    positions: dict[str, dict],
+    market_candles_by_symbol: dict[str, list[dict]],
+    *,
+    reviewable: bool,
+) -> None:
     by_arm = {
         arm: [item for item in assignments if item.get("arm") == arm]
         for arm in ("take", "skip")
@@ -292,6 +311,8 @@ def report(bundle: Path) -> None:
             value = 0.0
         else:
             unresolved_take += 1
+            continue
+        if not reviewable:
             continue
         timestamp = datetime.fromisoformat(
             str(assignment["created_at"]).replace("Z", "+00:00")
@@ -329,7 +350,8 @@ def report(bundle: Path) -> None:
     _report_momentum_strata(assignments, positions, market_candles_by_symbol)
 
     ready = (
-        unresolved_take == 0
+        reviewable
+        and unresolved_take == 0
         and not invalid_skip
         and not invalid_take
         and len(by_arm["take"]) >= REVIEW_TARGET_PER_ARM

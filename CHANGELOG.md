@@ -10,6 +10,30 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.7] - 2026-10-27
+
+### Fixed
+
+- Separate LONG participation review at the verified 2.2.6 sizing cutover
+  (#201). Historical completed trades no longer supply the new cohort's sample
+  target or inflate its dollar averages. CLI output labels each cohort; the
+  dashboard shows current-cohort readiness and retains historical results in
+  its export. Unknown creation times remain visible and never establish ready
+  status. Correct the dashboard's outdated fixed 0.10x LONG-sizing caption.
+
+### Upgrade, validation and limitations
+
+- Trading settings, saved policies and schema 13 are unchanged. Use a stopped,
+  restore-verified state backup and verify the exact deployed revision,
+  authentication, supervision and native stops. Rollback retains current state;
+  do not overwrite newer state or revert the 2.2.6 sizing configuration.
+- Regression coverage uses real forensic reconciliation and SQLite consumers
+  across historical/current samples, the exact timezone-normalized cutover,
+  invalid/missing times and existing unresolved/invalid assignment gates.
+- This fixes participation review only. Other cross-cohort historical research
+  remains descriptive; profitability review (#183), independent-zone execution
+  (#123/#139) and native process-loss proof (#190/#198) remain unfinished.
+
 ## [2.2.6] - 2026-10-27
 
 Operator-directed Bybit Demo LONG sizing checkpoint.

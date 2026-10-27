@@ -7,6 +7,7 @@ import random
 import statistics
 import zipfile
 from collections import defaultdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 
@@ -26,6 +27,34 @@ DEMO_ENTRY_TTL_REVIEW_CASES = 20
 DEMO_PAYOFF_EXIT_PROFILE = "payoff_early_trail"
 DEMO_LONG_EXIT_AB_TREATMENT_PROFILE = "payoff_early_tight_trail_long_ab_015"
 DEMO_LONG_EXIT_AB_CONTROL_PROFILE = "payoff_early_tight_trail_long_ab_020_control"
+# Deployment of v2.2.6/#199; use plan creation, not eventual fill/close time.
+LONG_FULL_RISK_STARTED_AT = "2026-10-27T17:06:35+00:00"
+
+
+def participation_sizing_cohorts(assignments: list[dict]) -> dict[str, list[dict]]:
+    """Keep the verified sizing cutover separate, including its cap-limited plans."""
+    boundary = datetime.fromisoformat(LONG_FULL_RISK_STARTED_AT)
+    cohorts: dict[str, list[dict]] = {
+        "pre_cutover": [],
+        "unknown": [],
+        "full_baseline_risk": [],
+    }
+    for assignment in assignments:
+        try:
+            created = datetime.fromisoformat(
+                str(assignment.get("created_at", "")).replace("Z", "+00:00")
+            )
+            if created.tzinfo is None:
+                raise ValueError("Assignment creation time needs a timezone")
+            cohort = (
+                "full_baseline_risk"
+                if created.astimezone(UTC) >= boundary
+                else "pre_cutover"
+            )
+        except (ValueError, TypeError):
+            cohort = "unknown"
+        cohorts[cohort].append(assignment)
+    return cohorts
 
 
 def jsonl(archive: zipfile.ZipFile, root: str, name: str) -> list[dict]:

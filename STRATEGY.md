@@ -159,6 +159,17 @@ expectancy in R, payoff ratio, costs and uncertainty; exclude untracked probe
 trades. #183 remains open. Rollback restores the multiplier to 0.10 for future
 plans; it does not rewrite saved plans or close positions.
 
+Participation reports partition assignments by plan creation at the verified
+2.2.6 cutover, `2026-10-27T17:06:35Z` (#201). Plans created earlier remain in
+`pre_cutover`, even if they fill later; subsequent plans, including cap-limited
+ones, belong to `full_baseline_risk`. The CLI prints separate labeled blocks;
+the dashboard's current participation fields refer to the latter cohort and
+retain historical results in `sizing_cohorts`. Each cohort must independently
+meet the existing 20-per-arm, 20-completed-take and resolution/validity gates.
+Missing, malformed or timezone-free creation times are visible as `unknown`
+and cannot establish review readiness. This boundary separates the known sizing
+change; it does not eliminate market-regime differences or certify an edge.
+
 ## Demo portfolio stop-risk cap experiment
 
 New Demo plans are limited by a $400 total open stop-risk cap. Planning estimates
