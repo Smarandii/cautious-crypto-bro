@@ -251,6 +251,169 @@ def test_probe_refuses_missing_persistent_evidence_before_exchange_read(monkeypa
     exchange.account_state.assert_not_called()
 
 
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+@pytest.mark.parametrize(
+    "outcome", ["retired", "retained", "lost_ack", "b_changed", "late_a_changed"]
+)
+def test_paired_cancellation_observes_terminal_children_without_touching_b(
+    tmp_path, side, outcome, capsys
+):
+    async def run():
+        parents = ["entry-a", "entry-b"]
+        stops = (
+            [Decimal("90"), Decimal("80")]
+            if side is Side.LONG
+            else [Decimal("110"), Decimal("120")]
+        )
+        targets = (
+            [Decimal("110"), Decimal("120")]
+            if side is Side.LONG
+            else [Decimal("90"), Decimal("80")]
+        )
+        orders = [
+            SimpleNamespace(
+                symbol=demo.SYMBOL,
+                kind=kind,
+                parent_order_link_id=parent,
+                order_link_id="",
+                order_id=f"{parent}-{kind}",
+                remaining_quantity=Decimal(index + 1),
+                trigger_price=(stops if kind == "SL" else targets)[index],
+            )
+            for index, parent in enumerate(parents)
+            for kind in ("TP", "SL")
+        ]
+        fills = []
+        active = False
+        cancels = []
+        post_cancel_reads = 0
+
+        def post(path, params):
+            order_id = f"submitted-{len(fills)}"
+            fills.append(
+                {
+                    "execId": order_id,
+                    "orderId": order_id,
+                    "orderLinkId": params["orderLinkId"],
+                    "symbol": demo.SYMBOL,
+                    "side": params["side"],
+                    "execQty": params["qty"],
+                    "execType": "Trade",
+                }
+            )
+            return {"result": {"orderId": order_id}}
+
+        def history(path, params):
+            order_id = params["orderId"]
+            return {
+                "result": {
+                    "list": [
+                        {
+                            "orderId": order_id,
+                            "orderStatus": "Untriggered"
+                            if any(o.order_id == order_id for o in orders)
+                            else "Cancelled",
+                        }
+                    ]
+                }
+            }
+
+        async def account():
+            nonlocal post_cancel_reads
+            if cancels:
+                post_cancel_reads += 1
+                if outcome == "late_a_changed" and post_cancel_reads == 2:
+                    orders[:] = [
+                        SimpleNamespace(**{**vars(o), "trigger_price": Decimal("999")})
+                        if o.order_id == "entry-a-SL"
+                        else o
+                        for o in orders
+                    ]
+            return SimpleNamespace(
+                positions=[
+                    SimpleNamespace(symbol=demo.SYMBOL, side=side, size=Decimal("2"))
+                ]
+                if active
+                else [],
+                open_orders=list(orders) if active else [],
+            )
+
+        async def cancel(symbol, order_id):
+            cancels.append(order_id)
+            orders[:] = [
+                o
+                for o in orders
+                if o.order_id != order_id
+                and (
+                    outcome in {"retained", "late_a_changed"}
+                    or o.order_id != "entry-a-SL"
+                )
+            ]
+            if outcome == "b_changed":
+                orders[:] = [o for o in orders if o.order_id != "entry-b-SL"]
+            if outcome == "lost_ack":
+                raise TimeoutError("Acknowledgment lost after cancellation")
+
+        exchange = SimpleNamespace(
+            account_state=account,
+            cancel_order=cancel,
+            _client=SimpleNamespace(
+                private_post=post,
+                private_get=history,
+                paginate_private_list=lambda *_: list(fills),
+            ),
+        )
+        owner = await demo.ProbeOwnership.start(
+            exchange, journal_path=tmp_path / "pair-owner.json"
+        )
+        try:
+            entry_side = "Buy" if side is Side.LONG else "Sell"
+            for link, quantity, direction in [
+                (parents[0], "1", entry_side),
+                (parents[1], "2", entry_side),
+                ("exit-a", "1", "Sell" if side is Side.LONG else "Buy"),
+            ]:
+                exchange._client.private_post(
+                    "/v5/order/create",
+                    {
+                        "symbol": demo.SYMBOL,
+                        "orderLinkId": link,
+                        "side": direction,
+                        "qty": quantity,
+                    },
+                )
+            active = True
+            snapshot = demo.zone_pair_snapshot(
+                await account(), parents, [Decimal("1"), Decimal("2")], stops, targets
+            )
+            if outcome in {"b_changed", "late_a_changed"}:
+                with pytest.raises(
+                    AssertionError,
+                    match="Remaining zone protection changed"
+                    if outcome == "b_changed"
+                    else "A peer stop changed during terminal confirmation",
+                ):
+                    await demo.observe_pair_cancellation(
+                        exchange, side, parents, snapshot, Decimal("2"), owner
+                    )
+            else:
+                await demo.observe_pair_cancellation(
+                    exchange, side, parents, snapshot, Decimal("2"), owner
+                )
+            assert cancels == ["entry-a-TP"]
+            assert len(fills) == 3
+        finally:
+            owner.restore()
+
+    asyncio.run(run())
+    if outcome not in {"b_changed", "late_a_changed"}:
+        result = json.loads(capsys.readouterr().out.strip())
+        assert result["a_peer_retired"] == (outcome != "retained")
+        assert result["cancellation_acknowledged"] == (outcome != "lost_ack")
+        assert result["b_original_pair_preserved"] is True
+        assert result["activation_proven"] is False
+
+
 def test_journal_write_failure_prevents_submission(tmp_path, monkeypatch):
     async def run():
         post = AsyncMock()

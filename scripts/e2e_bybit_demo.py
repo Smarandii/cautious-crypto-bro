@@ -58,6 +58,7 @@ class ProbeOwnership:
         self.links = set()
         self.order_ids = set()
         self.close_submitted = False
+        self.observations = {}
         self.original_post = exchange._client.private_post
         self.journal_path = journal_path
         self.journal_lock = threading.RLock()
@@ -71,6 +72,7 @@ class ProbeOwnership:
                 "submitted_links": sorted(self.links),
                 "order_ids": sorted(self.order_ids),
                 "cleanup_close_submitted": self.close_submitted,
+                "observations": self.observations,
             }
             temporary = self.journal_path.with_suffix("." + uuid4().hex + ".tmp")
             try:
@@ -169,6 +171,11 @@ class ProbeOwnership:
 
     def restore(self):
         self.exchange._client.private_post = self.original_post
+
+    def record_observation(self, name, payload):
+        with self.journal_lock:
+            self.observations[name] = payload
+            self.save()
 
 
 def emit(check, **values):
@@ -747,9 +754,18 @@ async def main(args):
             untouched_symbols=sorted({p.symbol for p in account.positions}),
         )
         with tempfile.TemporaryDirectory(prefix="ccb-e2e-") as directory:
+            zone_mode = getattr(args, "zone_protection", False) or getattr(
+                args, "zone_pair_cancellation", False
+            )
             for side in (Side.LONG, Side.SHORT):
-                if getattr(args, "zone_protection", False):
-                    await observe_zone_stops(e, side)
+                if zone_mode:
+                    await observe_zone_stops(
+                        e,
+                        side,
+                        paired_cancellation=getattr(
+                            args, "zone_pair_cancellation", False
+                        ),
+                    )
                 else:
                     await run_side(e, side, Path(directory))
         emit(
@@ -757,7 +773,7 @@ async def main(args):
             result="passed",
             coverage=(
                 "native independent-exit stop observation; no activation proof"
-                if getattr(args, "zone_protection", False)
+                if zone_mode
                 else "real exchange plus labeled application fault injection"
             ),
             not_live_tested=[
@@ -773,7 +789,219 @@ async def main(args):
         e.close()
 
 
-async def observe_zone_stops(e, side):
+def zone_children(account, parent, kind):
+    return [
+        order
+        for order in account.open_orders
+        if order.symbol == SYMBOL
+        and order.kind == kind
+        and order.parent_order_link_id == parent
+    ]
+
+
+def zone_pair_snapshot(account, parents, quantities, stops, targets):
+    snapshot = []
+    for parent, quantity, stop, target in zip(
+        parents, quantities, stops, targets, strict=True
+    ):
+        pair = {}
+        for kind, trigger in (("SL", stop), ("TP", target)):
+            orders = zone_children(account, parent, kind)
+            require(len(orders) == 1, "Ambiguous or missing parent-linked pair child")
+            order = orders[0]
+            require(
+                order.remaining_quantity == quantity and order.trigger_price == trigger,
+                "Pair child does not match its original allocation",
+            )
+            pair[kind] = order
+        snapshot.append(pair)
+    identities = [order.order_id for pair in snapshot for order in pair.values()]
+    require(
+        len(set(identities)) == len(identities), "Allocations share a child identity"
+    )
+    return snapshot
+
+
+def require_original_pair(account, parent, pair):
+    for kind, original in pair.items():
+        orders = zone_children(account, parent, kind)
+        require(
+            len(orders) == 1
+            and orders[0].order_id == original.order_id
+            and orders[0].remaining_quantity == original.remaining_quantity
+            and orders[0].trigger_price == original.trigger_price,
+            "Remaining zone protection changed",
+        )
+
+
+async def terminal_child(e, order_id):
+    deadline = asyncio.get_running_loop().time() + 15
+    while True:
+        response = await asyncio.to_thread(
+            e._client.private_get,
+            "/v5/order/history",
+            {"category": "linear", "symbol": SYMBOL, "orderId": order_id},
+        )
+        rows = [
+            row
+            for row in response.get("result", {}).get("list", [])
+            if row.get("orderId") == order_id
+        ]
+        require(len(rows) <= 1, "Ambiguous child history")
+        if rows and rows[0].get("orderStatus") in {
+            "Cancelled",
+            "Deactivated",
+            "Filled",
+        }:
+            return rows[0]["orderStatus"]
+        require(
+            asyncio.get_running_loop().time() < deadline,
+            "Child terminal state unverified",
+        )
+        await asyncio.sleep(0.3)
+
+
+def pair_evidence(account, parents):
+    live = position(account)
+    return {
+        "observed_at": datetime.now(UTC).isoformat(),
+        "net_quantity": str(live.size if live else 0),
+        "children": [
+            {
+                "order_id": o.order_id,
+                "parent_link": o.parent_order_link_id,
+                "kind": o.kind,
+                "remaining_quantity": str(o.remaining_quantity),
+                "trigger_price": str(o.trigger_price),
+            }
+            for o in account.open_orders
+            if o.symbol == SYMBOL and o.parent_order_link_id in parents
+        ],
+    }
+
+
+async def observe_pair_cancellation(
+    e, side, parents, snapshot, remaining_quantity, ownership
+):
+    account = await e.account_state()
+    await ownership.verify(account, side)
+    require(
+        position(account) is not None and position(account).size == remaining_quantity,
+        "B remainder changed before paired cancellation",
+    )
+    require_original_pair(account, parents[1], snapshot[1])
+    original_tp = snapshot[0]["TP"]
+    a_tps = zone_children(account, parents[0], "TP")
+    require(
+        len(a_tps) == 1 and a_tps[0].order_id == original_tp.order_id,
+        "A TP no longer available for the planned cancellation",
+    )
+    acknowledged = True
+    ownership.record_observation("before_pair_cancel", pair_evidence(account, parents))
+    try:
+        await e.cancel_order(SYMBOL, original_tp.order_id)
+    except (TradeExecutionError, TimeoutError):
+        acknowledged = False
+    # A missing acknowledgment never causes a second cancellation or new order.
+    status = await terminal_child(e, original_tp.order_id)
+    require(status in {"Cancelled", "Deactivated"}, "A TP filled during cancellation")
+    account = await e.account_state()
+    await ownership.verify(account, side)
+    require(
+        position(account) is not None and position(account).size == remaining_quantity,
+        "B remainder changed after paired cancellation",
+    )
+    require_original_pair(account, parents[1], snapshot[1])
+    original_sl = snapshot[0]["SL"]
+    a_stops = zone_children(account, parents[0], "SL")
+    require(
+        not a_stops
+        or (len(a_stops) == 1 and a_stops[0].order_id == original_sl.order_id),
+        "A peer stop identity changed",
+    )
+    peer_status = (
+        "Untriggered" if a_stops else await terminal_child(e, original_sl.order_id)
+    )
+    require(peer_status != "Filled", "A stale stop consumed remaining exposure")
+    final_account = await e.account_state()
+    await ownership.verify(final_account, side)
+    require(
+        position(final_account) is not None
+        and position(final_account).size == remaining_quantity,
+        "B remainder changed during terminal confirmation",
+    )
+    require_original_pair(final_account, parents[1], snapshot[1])
+    final_stops = zone_children(final_account, parents[0], "SL")
+    require(
+        not final_stops
+        or (
+            len(final_stops) == 1
+            and final_stops[0].order_id == original_sl.order_id
+            and final_stops[0].remaining_quantity == original_sl.remaining_quantity
+            and final_stops[0].trigger_price == original_sl.trigger_price
+        ),
+        "A peer stop changed during terminal confirmation",
+    )
+    if a_stops and not final_stops:
+        peer_status = await terminal_child(e, original_sl.order_id)
+        require(peer_status != "Filled", "A stale stop consumed remaining exposure")
+    require(not final_stops or bool(a_stops), "A terminal peer stop reappeared")
+    a_stops = final_stops
+    ownership.record_observation(
+        "after_pair_cancel", pair_evidence(final_account, parents)
+    )
+    ownership.record_observation(
+        "pair_terminal_history",
+        {
+            "a_tp_order_id": original_tp.order_id,
+            "a_tp_status": status,
+            "a_sl_order_id": original_sl.order_id,
+            "a_sl_status": peer_status,
+            "cancellation_acknowledged": acknowledged,
+        },
+    )
+    emit(
+        "paired_zone_cancellation_observation",
+        side=side.value,
+        cancellation_acknowledged=acknowledged,
+        a_tp_terminal=status,
+        a_peer_sl_status=peer_status,
+        a_peer_retired=not a_stops,
+        a_peer_quantity_units=sum(o.remaining_quantity for o in a_stops)
+        / original_sl.remaining_quantity,
+        b_original_pair_preserved=True,
+        activation_proven=False,
+    )
+
+
+def zone_entry_params(side, parent, quantity, stop, target=None):
+    params = {
+        "category": "linear",
+        "symbol": SYMBOL,
+        "side": "Buy" if side is Side.LONG else "Sell",
+        "orderType": "Market",
+        "qty": str(quantity),
+        "timeInForce": "IOC",
+        "positionIdx": 0,
+        "orderLinkId": parent,
+        "stopLoss": str(stop),
+        "tpslMode": "Partial",
+        "slOrderType": "Market",
+    }
+    if target is not None:
+        params.update(takeProfit=str(target), tpOrderType="Market")
+    return params
+
+
+def zone_pairs_ready(account, parents):
+    return all(
+        len(zone_children(account, parent, kind)) == 1
+        for parent in parents
+        for kind in ("TP", "SL")
+    )
+
+
+async def observe_zone_stops(e, side, *, paired_cancellation=False):
     """Observe native behavior; a successful observation is not activation proof."""
     require(symbol_flat(await e.account_state()), "Zone probe symbol must be flat")
     context = await e.market_context(SYMBOL)
@@ -788,6 +1016,10 @@ async def observe_zone_stops(e, side):
     stops = [
         rounded(context.market_price * (1 - sign * distance), context.tick_size)
         for distance in (D("0.05"), D("0.06"))
+    ]
+    targets = [
+        rounded(context.market_price * (1 + sign * distance), context.tick_size)
+        for distance in (D("0.08"), D("0.09"))
     ]
 
     def children(account, parent):
@@ -806,19 +1038,13 @@ async def observe_zone_stops(e, side):
             response = await asyncio.to_thread(
                 e._client.private_post,
                 "/v5/order/create",
-                {
-                    "category": "linear",
-                    "symbol": SYMBOL,
-                    "side": "Buy" if side is Side.LONG else "Sell",
-                    "orderType": "Market",
-                    "qty": str(quantities[index]),
-                    "timeInForce": "IOC",
-                    "positionIdx": 0,
-                    "orderLinkId": parent,
-                    "stopLoss": str(stops[index]),
-                    "tpslMode": "Partial",
-                    "slOrderType": "Market",
-                },
+                zone_entry_params(
+                    side,
+                    parent,
+                    quantities[index],
+                    stops[index],
+                    targets[index] if paired_cancellation else None,
+                ),
             )
             require(
                 bool(response.get("result", {}).get("orderId")),
@@ -841,7 +1067,17 @@ async def observe_zone_stops(e, side):
                 and stop_orders[0].trigger_price == stops[index],
                 "Native stop does not cover its entry allocation",
             )
-        before = await e.account_state()
+        before = await wait_account(
+            e,
+            lambda a: not paired_cancellation or zone_pairs_ready(a, parents),
+            "parent-linked protection pairs",
+        )
+        pairs = (
+            zone_pair_snapshot(before, parents, quantities, stops, targets)
+            if paired_cancellation
+            else None
+        )
+        ownership.record_observation("zone_entries", pair_evidence(before, parents))
         before_ids = [children(before, parent)[0].order_id for parent in parents]
         require(before_ids[0] != before_ids[1], "Zones share one stop identity")
         response = await asyncio.to_thread(
@@ -906,6 +1142,10 @@ async def observe_zone_stops(e, side):
             else 0,
             activation_proven=False,
         )
+        if pairs is not None:
+            await observe_pair_cancellation(
+                e, side, parents, pairs, quantities[1], ownership
+            )
     finally:
         try:
             await cleanup(e, side, prefix, ownership=ownership)
@@ -917,6 +1157,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute-demo", action="store_true")
     parser.add_argument("--zone-protection", action="store_true")
+    parser.add_argument("--zone-pair-cancellation", action="store_true")
     parser.add_argument("--resume-db", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
