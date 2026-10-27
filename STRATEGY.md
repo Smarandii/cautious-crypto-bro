@@ -236,9 +236,11 @@ the normal SQLite state backup. It contains private source/account context; do n
 publish the database or raw decision rows. Images and credentials are not copied.
 
 `scripts/report_source_coverage.py --database PATH --hours 24` reads SQLite only
-and prints aggregate dispositions and linked record statuses. Its window is source
-processing time, not publication time. Unknown historical evidence is explicit;
-no extraction is backfilled on upgrade. `audit_recent_signals.py` prefers original
+and prints aggregate dispositions, linked record statuses and grouped terminal
+planning-rejection reasons (minimum size/fixed exits, price geometry, portfolio
+risk cap or other) without source text. Its window is source processing time, not
+publication time. Unknown historical evidence is explicit; no extraction is
+backfilled on upgrade. `audit_recent_signals.py` prefers original
 stored decisions without reconstructing context or re-normalizing them with new
 code. `--fresh` explicitly requests a new evaluation. Old cache-based fallbacks
 remain labeled separately and do not prove an original production decision.
