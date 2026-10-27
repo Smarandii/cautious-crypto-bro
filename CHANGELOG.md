@@ -10,6 +10,50 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.5] - 2026-10-27
+
+Bybit Demo exchange-outage diagnosis and safe-read resilience checkpoint.
+
+### Fixed
+
+- Report sanitized timeout, connection, HTTP-status, invalid-response and Bybit
+  rejection causes in startup and running supervision notices. IP-allowlist
+  instructions and public-IP lookup now require a confirmed 10010 rejection;
+  unrelated read failures no longer suggest an IP change (#192/#194).
+- Retry a timed-out private GET once within the existing two-attempt budget,
+  regenerating signed headers. Persistent failures still escalate; application
+  rejections such as 10010 are not treated as timeouts. A POST timeout remains
+  one submission because its outcome can be uncertain. Explicit timestamp
+  rejection retains its clock-resynchronization behavior (#193/#195).
+
+### Added
+
+- An opt-in bounded process-loss probe: a worker flushes exact entry/protection
+  evidence before abrupt exit, and a separate context reloads its known journal
+  for verification and attributable cleanup without entry replay (#190/#191).
+  Synthetic subprocess/adapter tests pass; native LONG/SHORT process-loss
+  observations remain pending. This is not a generic historical-journal recovery
+  command or an independent-zone offline-safety guarantee.
+
+### Upgrade, validation and limitations
+
+- Schema 13 and risk/trading settings remain unchanged. Take a stopped-writer,
+  restore-verified state backup before deployment. Retain the previous image for
+  rollback with current state preserved; reconcile exchange changes and never
+  lower SQLite `user_version`.
+- Focused validation includes 76 combined alert/read integration cases and 91
+  probe/runner/subprocess cases, plus normal CI, type, lint and container checks.
+  Candidate images are built from canonical committed archives and source hashes
+  are checked. Verify the exact release revision, authenticated Bybit reads,
+  Telegram startup, supervision and native stops before tagging.
+- One timed-out private read can incur one additional existing 10-second attempt;
+  health thresholds and mutation retries are unchanged. Clock synchronization
+  retains its existing separate budget. No live fault injection or test Telegram
+  messages were used to validate the outage fixes.
+- Multi-zone activation remains disabled under #123/#139. Native #190 recovery
+  proof, coverage policy #179 and profitability review #183 remain unfinished.
+  This release certifies neither mainnet operation nor a profitable edge.
+
 ## [2.2.4] - 2026-10-27
 
 Demo probe and profitability-review reporting checkpoint above `v2.2.3`.
