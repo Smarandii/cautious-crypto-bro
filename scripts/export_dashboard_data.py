@@ -42,9 +42,11 @@ from cautious_crypto_bro.forensic_pnl import (  # noqa: E402
     DEMO_PAYOFF_EXIT_PROFILE,
     LIVE_LONG_RISK_EXIT_PROFILE,
     LIVE_LONG_RISK_STARTED_AT,
+    LONG_FULL_RISK_STARTED_AT,
     PROSPECTIVE_SHADOW_REVIEW_CASES,
     bootstrap_performance_intervals,
     jsonl,
+    participation_sizing_cohorts,
     read_open_entry_orders_snapshot,
     read_open_positions_snapshot,
     reconcile,
@@ -564,7 +566,7 @@ def _demo_long_participation_experiment(
     for row in database.execute(
         """
         SELECT plans.intent_id, plans.payload_json, plans.bybit_order_ids_json,
-               intents.status, intents.approval_mode
+               intents.status, intents.approval_mode, plans.created_at
         FROM execution_plans AS plans
         JOIN intents USING (intent_id)
         """
@@ -583,9 +585,38 @@ def _demo_long_participation_experiment(
                     "order_ids": json.loads(row[2] or "[]"),
                     "status": row[3],
                     "approval_mode": row[4],
+                    "created_at": row[5],
                 }
             )
 
+    grouped = participation_sizing_cohorts(assignments)
+    cohorts = {
+        name: _participation_cohort(
+            rows,
+            positions,
+            skip_fraction=skip_fraction,
+            forensic_available=forensic_available,
+            reviewable=name != "unknown",
+        )
+        for name, rows in grouped.items()
+    }
+    return {
+        **cohorts["full_baseline_risk"],
+        "sizing_cohort": "full_baseline_risk",
+        "sizing_cutover": LONG_FULL_RISK_STARTED_AT,
+        "sizing_cohorts": cohorts,
+        "unknown_time_assignment_count": len(grouped["unknown"]),
+    }
+
+
+def _participation_cohort(
+    assignments: list[dict],
+    positions: list[dict],
+    *,
+    skip_fraction: float,
+    forensic_available: bool,
+    reviewable: bool,
+) -> dict[str, object]:
     take = [item for item in assignments if item["arm"] == "take"]
     skip = [item for item in assignments if item["arm"] == "skip"]
     take_ids = {item["intent_id"] for item in take}
@@ -615,7 +646,8 @@ def _demo_long_participation_experiment(
         else "awaiting_forensic_data"
         if not forensic_available
         else "ready_for_review"
-        if len(take) >= 20
+        if reviewable
+        and len(take) >= 20
         and len(skip) >= 20
         and len(complete_take) >= 20
         and unresolved_take == 0
@@ -649,7 +681,8 @@ def _demo_long_participation_experiment(
         "comparison_note": (
             "Skip arm is zero exposure by design. Do not compare arm expectancy "
             "until take assignments are resolved, the per-arm review target is met, "
-            "and at least 20 take positions are fully reconciled."
+            "and at least 20 take positions are fully reconciled within the same "
+            "sizing cohort. Historical and unknown-time assignments are separate."
         ),
     }
 

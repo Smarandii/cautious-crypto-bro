@@ -848,7 +848,7 @@ def test_participation_dashboard_counts_skips_without_claiming_an_edge() -> None
         """
         CREATE TABLE intents (intent_id TEXT, status TEXT, approval_mode TEXT);
         CREATE TABLE execution_plans (
-            intent_id TEXT, payload_json TEXT, bybit_order_ids_json TEXT
+            intent_id TEXT, payload_json TEXT, bybit_order_ids_json TEXT, created_at TEXT
         );
         """
     )
@@ -863,7 +863,7 @@ def test_participation_dashboard_counts_skips_without_claiming_an_edge() -> None
             (intent_id, status, approval_mode),
         )
         database.execute(
-            "INSERT INTO execution_plans VALUES (?, ?, ?)",
+            "INSERT INTO execution_plans VALUES (?, ?, ?, ?)",
             (
                 intent_id,
                 json.dumps(
@@ -873,6 +873,7 @@ def test_participation_dashboard_counts_skips_without_claiming_an_edge() -> None
                     }
                 ),
                 order_ids,
+                "2026-10-28T10:00:00+00:00",
             ),
         )
 
@@ -912,7 +913,7 @@ def test_participation_review_requires_completed_positions_not_only_resolved_ass
         """
         CREATE TABLE intents (intent_id TEXT, status TEXT, approval_mode TEXT);
         CREATE TABLE execution_plans (
-            intent_id TEXT, payload_json TEXT, bybit_order_ids_json TEXT
+            intent_id TEXT, payload_json TEXT, bybit_order_ids_json TEXT, created_at TEXT
         );
         """
     )
@@ -927,7 +928,7 @@ def test_participation_review_requires_completed_positions_not_only_resolved_ass
                 (intent_id, status, approval_mode),
             )
             database.execute(
-                "INSERT INTO execution_plans VALUES (?, ?, ?)",
+                "INSERT INTO execution_plans VALUES (?, ?, ?, ?)",
                 (
                     intent_id,
                     json.dumps(
@@ -937,6 +938,7 @@ def test_participation_review_requires_completed_positions_not_only_resolved_ass
                         }
                     ),
                     None,
+                    "2026-10-28T10:00:00+00:00",
                 ),
             )
 

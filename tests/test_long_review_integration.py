@@ -16,28 +16,36 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.parametrize(
-    "completed,invalid,unresolved,expected",
+    "completed,invalid,unresolved,historical,expected,current_time",
     [
-        (19, False, False, "collecting"),
-        (20, False, False, "ready_for_review"),
-        (20, True, False, "collecting"),
-        (20, False, True, "collecting"),
+        (19, False, False, 0, "collecting", "2026-10-28T10:00:00+00:00"),
+        (20, False, False, 0, "ready_for_review", "2026-10-28T10:00:00+00:00"),
+        (20, True, False, 0, "collecting", "2026-10-28T10:00:00+00:00"),
+        (20, False, True, 0, "collecting", "2026-10-28T10:00:00+00:00"),
+        (19, False, False, 20, "collecting", "2026-10-28T10:00:00+00:00"),
+        (20, False, False, 20, "ready_for_review", "2026-10-27T19:06:35+02:00"),
+        (20, False, False, 20, "collecting", "not-a-date"),
+        (20, False, False, 20, "collecting", None),
     ],
 )
 def test_review_requires_complete_valid_and_resolved_sample(
-    tmp_path, capsys, completed, invalid, unresolved, expected
+    tmp_path, capsys, completed, invalid, unresolved, historical, expected, current_time
 ):
     assignments, intents, fills, closes = [], [], [], []
     with sqlite3.connect(":memory:") as database:
         database.executescript(
             "CREATE TABLE intents (intent_id TEXT, status TEXT, approval_mode TEXT);"
             "CREATE TABLE execution_plans "
-            "(intent_id TEXT, payload_json TEXT, bybit_order_ids_json TEXT);"
+            "(intent_id TEXT, payload_json TEXT, bybit_order_ids_json TEXT, created_at TEXT);"
         )
         for arm in ("take", "skip"):
-            for index in range(20 + int(unresolved and arm == "take")):
+            for index in range(20 + int(unresolved and arm == "take") + historical):
+                old = index >= 20 + int(unresolved and arm == "take")
                 intent_id = f"{arm}-{index}"
-                executed = arm == "take" and (index < completed or index == 20)
+                created_at = "2026-10-09T10:00:00+00:00" if old else current_time
+                executed = arm == "take" and (
+                    old or index < completed or (unresolved and index == 20)
+                )
                 status = (
                     "EXECUTED" if executed else "FAILED" if arm == "take" else "SKIPPED"
                 )
@@ -49,7 +57,7 @@ def test_review_requires_complete_valid_and_resolved_sample(
                     {
                         "intent_id": intent_id,
                         "arm": arm,
-                        "created_at": f"2026-10-{9 + index % 2:02d}T10:00:00+00:00",
+                        "created_at": created_at,
                         "status": status,
                         "approval_mode": approval,
                         "bybit_order_ids": order_ids,
@@ -60,7 +68,7 @@ def test_review_requires_complete_valid_and_resolved_sample(
                     (intent_id, status, approval),
                 )
                 database.execute(
-                    "INSERT INTO execution_plans VALUES (?, ?, ?)",
+                    "INSERT INTO execution_plans VALUES (?, ?, ?, ?)",
                     (
                         intent_id,
                         json.dumps(
@@ -72,9 +80,10 @@ def test_review_requires_complete_valid_and_resolved_sample(
                             }
                         ),
                         json.dumps(order_ids),
+                        created_at,
                     ),
                 )
-                if arm != "take" or index >= completed:
+                if arm != "take" or (not old and index >= completed):
                     continue
                 symbol = f"TEST{index}USDT"
                 intents.append(
@@ -123,16 +132,30 @@ def test_review_requires_complete_valid_and_resolved_sample(
                     "".join(json.dumps(row) + "\n" for row in records),
                 )
         positions = analysis.reconcile(bundle)
-        assert len(positions) == completed and all(p["complete"] for p in positions)
-        analysis.report(bundle)
-        output = capsys.readouterr().out
-        assert f"long_participation_take_completed={completed}" in output
-        assert "long_participation_review_target_completed_takes=20" in output
-        assert f"long_participation_status={expected}/" in output
+        assert len(positions) == completed + historical and all(
+            p["complete"] for p in positions
+        )
         result = dashboard._demo_long_participation_experiment(
             database, positions, skip_fraction=0.5, forensic_available=True
         )
         assert result["status"] == expected
-        assert result["take_completed_position_count"] == completed
+        expected_completed = (
+            completed if current_time not in (None, "not-a-date") else 0
+        )
+        assert result["take_completed_position_count"] == expected_completed
+        assert (
+            result["sizing_cohorts"]["pre_cutover"]["take_completed_position_count"]
+            == historical
+        )
+        assert result["unknown_time_assignment_count"] == (
+            40 if current_time in (None, "not-a-date") else 0
+        )
         assert result["review_target_completed_take_positions"] == 20
         assert result["take_unresolved_count"] == int(unresolved)
+        analysis.report(bundle)
+        output = capsys.readouterr().out.split(
+            "long_participation_sizing_cohort=full_baseline_risk\n"
+        )[1]
+        assert f"long_participation_take_completed={expected_completed}" in output
+        assert "long_participation_review_target_completed_takes=20" in output
+        assert f"long_participation_status={expected}/" in output
