@@ -58,6 +58,18 @@ protection is safe. No mainnet option exists.
 
 ## Run-owned cleanup evidence
 
+For #168, use `--execute-demo --zone-pair-cancellation` with the same runner.
+This attaches distinct TP/SL pairs to A and B, confirms A's independent reduction,
+then cancels A's original TP once. It records whether A's original SL retires or
+remains open, checks B's original pair and remaining quantity, and retains exact
+identities and terminal history in the private ownership journal. Lost cancellation
+acknowledgments are reconciled without resubmitting. Both LONG and SHORT receipts
+are required. Missing observation evidence fails the suite; verified flat cleanup
+still permits app resume. Arrange an exclusive Demo window with the runtime owner
+before invoking it. This mode does not enable multi-zone trading or prove restart,
+late-fill or offline safety. Synthetic adapter tests validate probe wiring only;
+native exchange conclusions require actual Demo receipts.
+
 The runner mounts its private evidence directory at `/probe-evidence` and supplies
 `CCB_PROBE_EVIDENCE_DIR`. Each case starts only from a flat test symbol and writes
 an ownership journal there. Exact submitted order links are flushed before the

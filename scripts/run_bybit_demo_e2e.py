@@ -38,7 +38,36 @@ def cleanup_verified(result_path: Path) -> bool:
     return not pending
 
 
-def run_suite(repo: Path, *, zone_protection: bool = False) -> int:
+def pair_observations_verified(records: list[dict]) -> bool:
+    seen = set()
+    for record in records:
+        if record.get("check") != "paired_zone_cancellation_observation":
+            continue
+        side = record.get("side")
+        if side not in {"LONG", "SHORT"} or side in seen:
+            return False
+        valid = (
+            record.get("b_original_pair_preserved") is True
+            and record.get("activation_proven") is False
+            and isinstance(record.get("cancellation_acknowledged"), bool)
+            and record.get("a_tp_terminal") in {"Cancelled", "Deactivated"}
+            and record.get("a_peer_sl_status")
+            in {"Untriggered", "Cancelled", "Deactivated"}
+            and isinstance(record.get("a_peer_retired"), bool)
+            and record["a_peer_retired"]
+            == (record["a_peer_sl_status"] != "Untriggered")
+        )
+        if not valid:
+            return False
+        seen.add(side)
+    return seen == {"LONG", "SHORT"}
+
+
+def run_suite(
+    repo: Path, *, zone_protection: bool = False, zone_pair_cancellation: bool = False
+) -> int:
+    zone_protection = zone_protection or zone_pair_cancellation
+
     def command(*args: str) -> str:
         return subprocess.run(
             args,
@@ -113,6 +142,7 @@ def run_suite(repo: Path, *, zone_protection: bool = False) -> int:
                     "/app/scripts/e2e_bybit_demo.py",
                     "--execute-demo",
                     *(["--zone-protection"] if zone_protection else []),
+                    *(["--zone-pair-cancellation"] if zone_pair_cancellation else []),
                 ],
                 cwd=repo,
                 env=os.environ | {"CCB_IMAGE": image},
@@ -155,6 +185,8 @@ def run_suite(repo: Path, *, zone_protection: bool = False) -> int:
                 for r in records
             ):
                 raise RuntimeError("Suite exited without a passing result")
+            if zone_pair_cancellation and not pair_observations_verified(records):
+                raise RuntimeError("Paired cancellation observations are incomplete")
     except (Exception, KeyboardInterrupt) as exc:
         exit_code = 1
         print(f"Bybit Demo E2E failed: {exc}", file=sys.stderr)
@@ -189,11 +221,18 @@ def main() -> int:
         action="store_true",
         help="Observe parent-linked partial stops after an independent exit",
     )
+    parser.add_argument(
+        "--zone-pair-cancellation",
+        action="store_true",
+        help="Observe exact paired-child cancellation after zone A closes",
+    )
     args = parser.parse_args()
     if not args.execute_demo:
         parser.error("Requires --execute-demo; this suite places Bybit Demo orders")
     return run_suite(
-        Path(__file__).resolve().parents[1], zone_protection=args.zone_protection
+        Path(__file__).resolve().parents[1],
+        zone_protection=args.zone_protection,
+        zone_pair_cancellation=args.zone_pair_cancellation,
     )
 
 
