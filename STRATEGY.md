@@ -99,7 +99,7 @@ concentration, and uncertainty before deciding whether to keep or promote it.
 
 For a cleaner prospective comparison, Compose assigns newly planned LONGs 50/50
 by a stable SHA-256 bucket of intent ID: control uses the same tight-trail policy
-at +0.20R; treatment uses +0.15R. Both retain the same 0.10x LONG risk, 0.05R
+at +0.20R; treatment uses +0.15R. Both use the same LONG risk multiplier, 0.05R
 trail distance, entry/target rules, portfolio cap, and 240-minute entry TTL.
 Plans persist distinct tags (`payoff_early_tight_trail_long_ab_020_control` and
 `payoff_early_tight_trail_long_ab_015`); SHORT behavior is unchanged and is not
@@ -139,6 +139,26 @@ plans, including the open XRP LONG at 0.25x, keep their frozen sizing and exits.
 Evaluate LONG risk in dollars and risk-weighted return; do not combine different
 risk multipliers when comparing dollar average wins/losses.
 
+Version 2.2.6 restores Compose's LONG multiplier from 0.10 to 1.0 at the
+operator's request (#199). With the current 1% base policy, newly planned LONGs
+therefore receive 1% rather than 0.1% of the live wallet as their nominal stop-risk
+budget, before remaining portfolio capacity and exchange rounding. SHORTs already
+use base risk. Existing plans and positions retain their frozen policies; this
+does not resize pending entries. The $400 combined stop-risk cap, native protection,
+exit rules, leverage and randomized participation/control assignments remain.
+
+This is a new operator-directed Demo sizing cohort, not an evidence-based
+profitability promotion or a guarantee of tenfold realized profit. Preserve the
+pre-cutover forensic snapshot and deployment timestamp. Separate old 0.1% LONGs
+from new 1% LONGs using each plan's saved risk and creation time; cap-limited plans
+can have intermediate risk percentages. Keep exit/control and participation arms
+separate within each sizing cohort. Pooled participation reports spanning this
+cutover are descriptive only: do not use their dollar means or intervals as a
+single unchanged-risk experiment. Review complete reconciled positions, net
+expectancy in R, payoff ratio, costs and uncertainty; exclude untracked probe
+trades. #183 remains open. Rollback restores the multiplier to 0.10 for future
+plans; it does not rewrite saved plans or close positions.
+
 ## Demo portfolio stop-risk cap experiment
 
 New Demo plans are limited by a $400 total open stop-risk cap. Planning estimates
@@ -153,7 +173,7 @@ skipping new signals at zero capacity. At that snapshot, the new limit allowed
 at most $33.83 additional stop risk; future plans remain bounded by live
 remaining capacity. This is an operational data-collection adjustment, not an
 evidence-based profitability improvement. Evaluate the cap separately from the
-0.10x LONG and payoff-profile cohorts.
+LONG sizing and payoff-profile cohorts.
 
 ## Demo entry freshness experiment
 
