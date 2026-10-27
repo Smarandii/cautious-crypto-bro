@@ -10,6 +10,25 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-10-27
+
+Coverage, extraction and repository-hardening maintenance on top of `v2.1.1`.
+This remains a Bybit Demo release; it does not certify mainnet operation or
+profitable edge, and it does not enable multi-zone execution.
+
+### Upgrade and validation
+
+- No SQLite schema change is introduced; schema 13 remains current. Stop the app
+  and take a complete restore-verified state backup before the version-only
+  deployment. Rollback is an image rollback to `v2.1.1`; preserve the current
+  database, reconcile exchange changes and never lower `user_version`.
+- CI, CodeQL, container scanning, package build/install checks and the release
+  tag/version/changelog gate protect this release. Exact merged-revision and
+  local Bybit Demo/Telegram deployment evidence is recorded on the release issue.
+- Multi-zone execution remains unfinished under #123. Native quantity-scoped
+  protection and run-owned cleanup remain required; #169 must be verified before
+  any #168 rehearsal. Mainnet remains unimplemented and is not enabled.
+
 ### Fixed
 
 - Apply the configured entry-order TTL to legacy Strategy V2 plans that were
@@ -19,6 +38,20 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 - Reject promotional and performance-recap cards as live OPEN evidence. ROI
   tables, QR/referral branding and historical recap panels must not become
   entries; an empty caption with only promotional images is non-actionable.
+
+### Changed
+
+- Run the test suite in parallel by default with `pytest-xdist`, keep the
+  coverage gate, document the `-n 0` serial escape hatch and raise the state
+  backup subprocess timeout from 15 to 60 seconds.
+- Report required container checks on every pull request, including changes that
+  do not touch container paths.
+
+### Documentation
+
+- Record the 26-group opportunity-coverage audit, the paired promotional/live
+  screenshot image replay and the post-deploy coverage window without committing
+  private images, source captions or exchange identities.
 
 ## [2.1.1] - 2026-10-26
 
