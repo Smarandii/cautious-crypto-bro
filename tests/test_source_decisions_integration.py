@@ -16,6 +16,7 @@ from cautious_crypto_bro.openrouter import IntentExtractor
 from cautious_crypto_bro.source_coverage import (
     coverage_summary,
     decision_disposition,
+    planning_rejection_kind,
     production_decision,
     record_disposition_status,
 )
@@ -27,6 +28,35 @@ from cautious_crypto_bro.storage.schema import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (
+            "BTCUSDT: ExecutionPlanningError: Primary V2 entry is too small to "
+            "support any fixed partial exit",
+            "minimum_size_or_fixed_exit",
+        ),
+        (
+            "BTCUSDT: ExecutionPlanningError: E2 risk allocation rounds below "
+            "Bybit minimum quantity",
+            "minimum_size_or_fixed_exit",
+        ),
+        (
+            "BTCUSDT: ExecutionPlanningError: Rounded LONG take-profit geometry "
+            "is invalid",
+            "price_geometry",
+        ),
+        (
+            "BTCUSDT: portfolio stop-risk cap: no capacity",
+            "portfolio_risk_cap",
+        ),
+        ("unexpected planning failure", "other"),
+    ],
+)
+def test_planning_rejection_kind_is_aggregate_and_non_identifying(error, expected):
+    assert planning_rejection_kind(error) == expected
 
 
 @pytest.mark.parametrize(
@@ -162,6 +192,10 @@ def test_original_decisions_survive_restart_without_model_or_cache(
         )
         assert summary["dispositions"] == {expected: 1}
         assert summary["missing_original_decisions"] == 0
+        if case == "planning":
+            assert sum(summary["planning_rejection_reasons"].values()) == 1
+        else:
+            assert summary["planning_rejection_reasons"] == {}
         assert "Enter now" not in json.dumps(summary)
         assert source.channel_title not in json.dumps(summary)
 

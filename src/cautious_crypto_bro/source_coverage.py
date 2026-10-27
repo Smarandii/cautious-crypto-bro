@@ -38,6 +38,22 @@ def record_disposition_status(status: str, approval_mode: str) -> str:
     return status
 
 
+def planning_rejection_kind(error: str) -> str:
+    """Classify a terminal planning rejection without retaining source text."""
+    text = error.lower()
+    if (
+        "too small to support any fixed partial exit" in text
+        or "below bybit minimum quantity" in text
+        or "minimum order" in text
+    ):
+        return "minimum_size_or_fixed_exit"
+    if "geometry is invalid" in text:
+        return "price_geometry"
+    if "portfolio stop-risk cap" in text:
+        return "portfolio_risk_cap"
+    return "other"
+
+
 def decision_disposition(
     decision: dict | None,
     source_status: str,
@@ -106,6 +122,7 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
         )
         sources = list(await cursor.fetchall())
         dispositions: Counter[str] = Counter()
+        rejection_reasons: Counter[str] = Counter()
         statuses: Counter[str] = Counter()
         source_statuses: Counter[str] = Counter()
         approval_modes: Counter[str] = Counter()
@@ -143,12 +160,25 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
             )
             missing += disposition == "UNKNOWN"
             dispositions[disposition] += 1
+            if decision is not None and disposition in {
+                "PLANNING_REJECTED",
+                "PARTIAL_PLANNING_FAILURE",
+            }:
+                planning = decision.get("planning") or {}
+                errors = (
+                    planning.get("rejections")
+                    if "rejections" in planning
+                    else planning.get("errors")
+                )
+                for error in errors or []:
+                    rejection_reasons[planning_rejection_kind(str(error))] += 1
         return {
             "window_basis": "source processing updated_at (not publication time)",
             "sources": len(sources),
             "missing_original_decisions": missing,
             "source_statuses": dict(sorted(source_statuses.items())),
             "dispositions": dict(sorted(dispositions.items())),
+            "planning_rejection_reasons": dict(sorted(rejection_reasons.items())),
             "linked_record_statuses": dict(sorted(statuses.items())),
             "planning_candidate_statuses": dict(sorted(candidate_counts.items())),
             "linked_approval_modes": dict(sorted(approval_modes.items())),
