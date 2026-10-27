@@ -86,6 +86,35 @@ recovery or offline allocation safety. No multi-zone activation is justified;
 #139 and #123 remain open. Lost-acknowledgment handling has synthetic regression
 coverage; this native rehearsal received acknowledgments in both cases.
 
+## Run-owned process-loss receipts — 2026-10-27 (advanced)
+
+Deployed revision c5938ec (v2.2.9 release, healthy, unchanged env configuration)
+completed `--execute-demo --zone-process-recovery` for both sides under the older
+exclusive runner boundary. Both cases started flat and unowned on DOGEUSDT; each
+worker flushed two unequal entries and four exact parent-linked TP/SL children
+before its abrupt exit.
+
+| Case | Worker checkpoint exit | Recovery ownership | Original protection | Entry replay | Native convergence on lag |
+| --- | --- | --- | --- | --- | --- |
+| LONG | 86 | journaled, verified | Preserved | None | Instant (post-lag); terminal cleanup verify took a fail-closed bounded window later |
+| SHORT | 86 | journaled, verified | Preserved | None | Converged on bounded fresh read 2 |
+
+The SHORT case exercised #198's bounded convergence live: the first fresh
+execution read lagged the position read, the verification refused to guess, and
+the second fresh read reconciled before any mutation. The LONG case verified on
+its first read at recovery, then hit the close-fill execution-read lag during
+terminal cleanup verification, exhausted three bounded reads fail-closed while
+private exhaustion evidence was retained, and the cleanup loop's own bounded
+retry then verified flat. Cleanup submitted one attributable reduce-only close
+per side and verified no test-symbol position or orders remained; the normal
+application resumed without restart and stayed healthy. Private run journals and
+receipts stayed under local audit artifacts; no private identities are published.
+
+Limitations remain exactly those of the earlier receipts: this proves the
+bounded process-loss case for both sides on this revision; exit races, late
+fills, amendments and complete offline allocation semantics stay #139 gates and
+#123 stays unactivated.
+
 ## Run-owned cleanup evidence
 
 For the bounded #190 process-loss rehearsal, use the same runner with
