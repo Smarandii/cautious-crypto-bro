@@ -10,6 +10,35 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.6] - 2026-10-27
+
+Operator-directed Bybit Demo LONG sizing checkpoint.
+
+### Changed
+
+- Restore the Compose LONG risk multiplier from 0.10 to 1.0 for new plans
+  (#199). With the current 1% base risk, nominal LONG stop risk increases from
+  0.1% to 1% of live wallet balance before portfolio capacity and rounding.
+  SHORT sizing, the 400-USDT portfolio cap, leverage, exits and randomized
+  participation/control settings are unchanged. Existing plans and positions
+  keep their frozen policies.
+- Document the sizing-cohort boundary and prohibit interpreting pooled dollar
+  outcomes across the cutover as an unchanged-risk experiment. Larger sizing
+  scales losses too and does not establish positive expectancy or guarantee
+  tenfold realized profits.
+
+### Upgrade, validation and limitations
+
+- Schema 13 is unchanged. Preserve a private pre-cutover forensic snapshot and
+  stopped-writer, restore-verified state backup. Validate focused planning,
+  service and portfolio-cap tests, normal CI and resolved Compose settings;
+  verify the exact deployed revision, Demo authentication and native stops.
+- Roll back the image/configuration with current state retained and restore
+  LONG multiplier 0.10 for future plans. Do not overwrite newer state or alter
+  existing plans merely to reverse this sizing change.
+- Mainnet, profitability review (#183), complete independent-zone execution
+  (#123/#139) and native process-loss proof (#190/#198) remain unfinished.
+
 ## [2.2.5] - 2026-10-27
 
 Bybit Demo exchange-outage diagnosis and safe-read resilience checkpoint.
