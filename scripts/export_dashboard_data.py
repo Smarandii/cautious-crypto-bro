@@ -45,8 +45,9 @@ from cautious_crypto_bro.forensic_pnl import (  # noqa: E402
     LONG_FULL_RISK_STARTED_AT,
     PROSPECTIVE_SHADOW_REVIEW_CASES,
     bootstrap_performance_intervals,
+    exit_sizing_cohorts,
     jsonl,
-    participation_sizing_cohorts,
+    long_sizing_cohorts,
     read_open_entry_orders_snapshot,
     read_open_positions_snapshot,
     reconcile,
@@ -507,12 +508,10 @@ def _demo_exit_experiment(
     profile: str,
     forensic_available: bool,
 ) -> dict[str, object]:
-    active = profile != "baseline"
-    planned_count = 0
-    executed_count = 0
+    plans = []
     for row in database.execute(
         """
-        SELECT plans.payload_json, intents.status
+        SELECT plans.payload_json, intents.status, plans.created_at
         FROM execution_plans AS plans
         LEFT JOIN intents USING (intent_id)
         """
@@ -523,27 +522,57 @@ def _demo_exit_experiment(
         except (KeyError, TypeError, json.JSONDecodeError):
             continue
         if strategy.get("exit_profile") == profile:
-            planned_count += 1
-            executed_count += row[1] == "EXECUTED"
+            plans.append(
+                {"side": plan.get("side"), "created_at": row[2], "status": row[1]}
+            )
 
-    filled = [
-        position for position in positions if position.get("exit_profile") == profile
-    ]
+    plan_groups = exit_sizing_cohorts(plans)
+    position_groups = exit_sizing_cohorts(
+        [p for p in positions if p.get("exit_profile") == profile]
+    )
+    cohorts = {
+        name: _exit_cohort(
+            plan_groups[name],
+            rows,
+            profile=profile,
+            forensic_available=forensic_available,
+            reviewable=name != "unknown",
+        )
+        for name, rows in position_groups.items()
+    }
+    return {
+        **cohorts["full_baseline_risk"],
+        "sizing_cohort": "full_baseline_risk",
+        "sizing_cutover": LONG_FULL_RISK_STARTED_AT,
+        "sizing_cohorts": cohorts,
+        "unknown_time_plan_count": len(plan_groups["unknown"]),
+        "comparison_note": "Review each LONG sizing epoch and exit arm independently; SHORT sizing was unchanged and is reported separately.",
+    }
+
+
+def _exit_cohort(
+    plans: list[dict],
+    filled: list[dict],
+    *,
+    profile: str,
+    forensic_available: bool,
+    reviewable: bool,
+) -> dict[str, object]:
     complete = [position for position in filled if position.get("complete") is True]
     status = (
         "inactive"
-        if not active
+        if profile == "baseline"
         else "awaiting_forensic_data"
         if not forensic_available
         else "ready_for_review"
-        if len(complete) >= DEMO_EXIT_PROFILE_REVIEW_CASES
+        if reviewable and len(complete) >= DEMO_EXIT_PROFILE_REVIEW_CASES
         else "collecting"
     )
     return {
-        "active": active,
+        "active": profile != "baseline",
         "profile": profile,
-        "planned_count": planned_count,
-        "executed_plan_count": executed_count,
+        "planned_count": len(plans),
+        "executed_plan_count": sum(p["status"] == "EXECUTED" for p in plans),
         "filled_position_count": len(filled) if forensic_available else None,
         "completed_position_count": len(complete) if forensic_available else None,
         "review_target_completed_positions": DEMO_EXIT_PROFILE_REVIEW_CASES,
@@ -589,7 +618,7 @@ def _demo_long_participation_experiment(
                 }
             )
 
-    grouped = participation_sizing_cohorts(assignments)
+    grouped = long_sizing_cohorts(assignments)
     cohorts = {
         name: _participation_cohort(
             rows,

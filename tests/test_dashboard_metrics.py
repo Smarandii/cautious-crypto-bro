@@ -402,6 +402,7 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
                 "net_r": 0.2,
                 "side": "LONG",
                 "start": "2026-10-08T08:51:00+00:00",
+                "created_at": "2026-10-08T08:51:00+00:00",
                 "risk_per_trade_pct": "0.10",
                 "exit_profile": "payoff_early_trail",
             },
@@ -410,6 +411,7 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
                 "net_pnl": 900.0,
                 "net_r": 9.0,
                 "start": "2026-10-08T08:52:00+00:00",
+                "created_at": "2026-10-08T08:52:00+00:00",
                 "risk_per_trade_pct": "0.10",
                 "exit_profile": "payoff_early_trail",
             },
@@ -419,6 +421,7 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
                 "net_r": 0.3,
                 "side": "LONG",
                 "start": "2026-10-08T08:53:00+00:00",
+                "created_at": "2026-10-08T08:53:00+00:00",
                 "risk_per_trade_pct": "0.10",
                 "exit_profile": "payoff_early_tight_trail_long_015",
             },
@@ -486,7 +489,9 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
     assert portfolio_risk["cap_usdt"] == 35.0
     assert portfolio_risk["cap_exceeded"] is True
     assert snapshot["account_open_positions"]["as_of"] == "2026-10-07T21:34:00+00:00"
-    exit_experiment = snapshot["risk"]["demo_exit_experiment"]
+    current_exit = snapshot["risk"]["demo_exit_experiment"]
+    assert current_exit["completed_position_count"] == 0
+    exit_experiment = current_exit["sizing_cohorts"]["pre_cutover"]
     assert exit_experiment["active"] is True
     assert exit_experiment["planned_count"] == 1
     assert exit_experiment["executed_plan_count"] == 1
@@ -537,7 +542,9 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
         demo_long_risk_multiplier=0.10,
         demo_exit_profile="payoff_early_tight_trail_long_015",
     )
-    long_015_experiment = long_015_snapshot["risk"]["demo_exit_experiment"]
+    long_015_current = long_015_snapshot["risk"]["demo_exit_experiment"]
+    assert long_015_current["completed_position_count"] == 0
+    long_015_experiment = long_015_current["sizing_cohorts"]["pre_cutover"]
     assert long_015_experiment["active"] is True
     assert long_015_experiment["profile"] == "payoff_early_tight_trail_long_015"
     assert long_015_experiment["planned_count"] == 1
@@ -582,6 +589,7 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
             "net_r": 0.2,
             "side": "LONG",
             "start": "2026-10-09T11:01:00+00:00",
+            "created_at": "2026-10-09T11:01:00+00:00",
             "risk_per_trade_pct": "0.10",
             "exit_profile": "payoff_early_tight_trail_long_ab_020_control",
         },
@@ -591,6 +599,7 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
             "net_r": -0.2,
             "side": "LONG",
             "start": "2026-10-09T11:02:00+00:00",
+            "created_at": "2026-10-09T11:02:00+00:00",
             "risk_per_trade_pct": "0.10",
             "exit_profile": "payoff_early_tight_trail_long_ab_015",
         },
@@ -614,10 +623,14 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
     arms = randomized_snapshot["risk"]["demo_exit_experiment"]["randomized_long_ab"]
     assert arms["active"] is True
     assert arms["control_fraction"] == 0.5
-    assert arms["control"]["completed_position_count"] == 1
-    assert arms["control"]["performance"]["expectancy_r"] == 0.2
-    assert arms["treatment"]["completed_position_count"] == 1
-    assert arms["treatment"]["performance"]["expectancy_r"] == -0.2
+    assert arms["control"]["completed_position_count"] == 0
+    assert arms["treatment"]["completed_position_count"] == 0
+    historical_control = arms["control"]["sizing_cohorts"]["pre_cutover"]
+    historical_treatment = arms["treatment"]["sizing_cohorts"]["pre_cutover"]
+    assert historical_control["completed_position_count"] == 1
+    assert historical_control["performance"]["expectancy_r"] == 0.2
+    assert historical_treatment["completed_position_count"] == 1
+    assert historical_treatment["performance"]["expectancy_r"] == -0.2
 
     without_forensic_bundle = export_dashboard_data.build_snapshot(
         database,

@@ -483,7 +483,14 @@ def test_prospective_demo_exit_profile_reports_side_and_source_costs(capsys) -> 
     )
 
     output = capsys.readouterr().out
-    assert "completed_positions=3" in output
+    unknown = output.split("prospective_demo_exit_profile_sizing_cohort=unknown\n")[
+        1
+    ].split("prospective_demo_exit_profile_sizing_cohort=")[0]
+    shorts = output.split(
+        "prospective_demo_exit_profile_sizing_cohort=unaffected_shorts\n"
+    )[1].split("prospective_demo_exit_profile_sizing_cohort=")[0]
+    assert "completed_positions=1" in unknown
+    assert "completed_positions=2" in shorts
     assert "prospective_demo_exit_profile_side_LONG_metrics" in output
     assert "prospective_demo_exit_profile_side_SHORT_costs" in output
     assert "prospective_demo_exit_profile_source_side_101_LONG_metrics" in output

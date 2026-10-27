@@ -25,6 +25,7 @@ from cautious_crypto_bro.forensic_pnl import (  # noqa: E402,F401
     LIVE_LONG_RISK_EXIT_PROFILE,
     LIVE_LONG_RISK_MULTIPLIER,
     LIVE_LONG_RISK_STARTED_AT,
+    LONG_FULL_RISK_STARTED_AT,
     LONG_RISK_CURVE_FROZEN_AFTER,
     LONG_RISK_CURVE_MULTIPLIERS,
     LONG_RISK_SHADOW_FROZEN_AFTER,
@@ -37,6 +38,7 @@ from cautious_crypto_bro.forensic_pnl import (  # noqa: E402,F401
     bootstrap_performance_intervals,
     concentration_summary,
     cost_summary,
+    exit_sizing_cohorts,
     jsonl,
     position_side,
     read_open_entry_orders_snapshot,
@@ -248,10 +250,17 @@ def report_prospective_demo_exit_profile(
     filled = [
         position for position in positions if position.get("exit_profile") == profile
     ]
+    print(f"prospective_demo_exit_profile_sizing_cutover={LONG_FULL_RISK_STARTED_AT}")
+    for cohort, rows in exit_sizing_cohorts(filled).items():
+        print(f"prospective_demo_exit_profile_sizing_cohort={cohort}")
+        _report_exit_cohort(rows, profile=profile, reviewable=cohort != "unknown")
+
+
+def _report_exit_cohort(filled: list[dict], *, profile: str, reviewable: bool) -> None:
     complete = [position for position in filled if position.get("complete")]
     status = (
         "ready_for_review"
-        if len(complete) >= DEMO_EXIT_PROFILE_REVIEW_CASES
+        if reviewable and len(complete) >= DEMO_EXIT_PROFILE_REVIEW_CASES
         else "collecting"
     )
     print(f"prospective_demo_exit_profile={profile}")

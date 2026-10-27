@@ -18,7 +18,7 @@ from analyze_signal_followthrough import load_market_candles  # noqa: E402
 
 from cautious_crypto_bro.forensic_pnl import (  # noqa: E402
     LONG_FULL_RISK_STARTED_AT,
-    participation_sizing_cohorts,
+    long_sizing_cohorts,
     reconcile,
     summarize,
 )
@@ -275,7 +275,7 @@ def report(bundle: Path) -> None:
 
     market_candles_by_symbol = load_market_candles(bundle)
     print(f"long_participation_sizing_cutover={LONG_FULL_RISK_STARTED_AT}")
-    for cohort, rows in participation_sizing_cohorts(assignments).items():
+    for cohort, rows in long_sizing_cohorts(assignments).items():
         print(f"long_participation_sizing_cohort={cohort}")
         _report_cohort(
             rows, positions, market_candles_by_symbol, reviewable=cohort != "unknown"
