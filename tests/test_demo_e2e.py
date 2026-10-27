@@ -252,7 +252,9 @@ def test_probe_refuses_missing_persistent_evidence_before_exchange_read(monkeypa
 
 
 @pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
-@pytest.mark.parametrize("outcome", ["retired", "retained", "lost_ack", "b_changed"])
+@pytest.mark.parametrize(
+    "outcome", ["retired", "retained", "lost_ack", "b_changed", "late_a_changed"]
+)
 def test_paired_cancellation_observes_terminal_children_without_touching_b(
     tmp_path, side, outcome, capsys
 ):
@@ -284,6 +286,7 @@ def test_paired_cancellation_observes_terminal_children_without_touching_b(
         fills = []
         active = False
         cancels = []
+        post_cancel_reads = 0
 
         def post(path, params):
             order_id = f"submitted-{len(fills)}"
@@ -316,6 +319,16 @@ def test_paired_cancellation_observes_terminal_children_without_touching_b(
             }
 
         async def account():
+            nonlocal post_cancel_reads
+            if cancels:
+                post_cancel_reads += 1
+                if outcome == "late_a_changed" and post_cancel_reads == 2:
+                    orders[:] = [
+                        SimpleNamespace(**{**vars(o), "trigger_price": Decimal("999")})
+                        if o.order_id == "entry-a-SL"
+                        else o
+                        for o in orders
+                    ]
             return SimpleNamespace(
                 positions=[
                     SimpleNamespace(symbol=demo.SYMBOL, side=side, size=Decimal("2"))
@@ -331,7 +344,10 @@ def test_paired_cancellation_observes_terminal_children_without_touching_b(
                 o
                 for o in orders
                 if o.order_id != order_id
-                and (outcome == "retained" or o.order_id != "entry-a-SL")
+                and (
+                    outcome in {"retained", "late_a_changed"}
+                    or o.order_id != "entry-a-SL"
+                )
             ]
             if outcome == "b_changed":
                 orders[:] = [o for o in orders if o.order_id != "entry-b-SL"]
@@ -370,9 +386,12 @@ def test_paired_cancellation_observes_terminal_children_without_touching_b(
             snapshot = demo.zone_pair_snapshot(
                 await account(), parents, [Decimal("1"), Decimal("2")], stops, targets
             )
-            if outcome == "b_changed":
+            if outcome in {"b_changed", "late_a_changed"}:
                 with pytest.raises(
-                    AssertionError, match="Remaining zone protection changed"
+                    AssertionError,
+                    match="Remaining zone protection changed"
+                    if outcome == "b_changed"
+                    else "A peer stop changed during terminal confirmation",
                 ):
                     await demo.observe_pair_cancellation(
                         exchange, side, parents, snapshot, Decimal("2"), owner
@@ -387,7 +406,7 @@ def test_paired_cancellation_observes_terminal_children_without_touching_b(
             owner.restore()
 
     asyncio.run(run())
-    if outcome != "b_changed":
+    if outcome not in {"b_changed", "late_a_changed"}:
         result = json.loads(capsys.readouterr().out.strip())
         assert result["a_peer_retired"] == (outcome != "retained")
         assert result["cancellation_acknowledged"] == (outcome != "lost_ack")
