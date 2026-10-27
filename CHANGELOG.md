@@ -10,6 +10,43 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.4] - 2026-10-27
+
+Demo probe and profitability-review reporting checkpoint above `v2.2.3`.
+
+### Fixed
+
+- Require at least 20 fully reconciled take positions before LONG participation
+  reports signal readiness, in addition to adequate per-arm assignments, valid
+  records and no unresolved takes. Failed-before-fill assignments remain zero
+  outcomes for intention-to-treat accounting. Expose the completed-position
+  target in analyzer output and dashboard data (#185/#186).
+
+### Added
+
+- An opt-in, run-owned paired TP cancellation probe with exact private identity
+  journals, independent cleanup verification and required LONG/SHORT receipts
+  (#184). Both native cases observed A's TP and SL deactivate after its exact TP
+  was canceled, while B's original pair, triggers and quantity were preserved.
+  Terminal cleanup and app resume were verified (#168/#187).
+
+### Upgrade, validation and limitations
+
+- Schema 13 and trading settings remain unchanged. Take a stopped-writer,
+  restore-verified state backup before deployment. Rollback uses the retained
+  `v2.2.3` image with current state preserved; reconcile exchange changes and
+  never lower SQLite `user_version`.
+- Local validation: 61 probe/runner/adapter cases and 28 reporting/integration
+  cases, plus CI, lint, type and container checks. Native LONG/SHORT observations
+  and private journals were independently checked on the unchanged trading
+  behavior. The release revision must pass exact-source, authentication,
+  supervision, Telegram startup and native-stop verification before tagging.
+- This does not prove exit-to-retirement races, late/partial fills, amendments,
+  restart or offline allocation safety. Multi-zone execution remains disabled
+  under #123/#139. Coverage policy #179 and profitability review #183 remain
+  open; the latest preflight has only 19 take assignments and 27 skips. No risk
+  policy changes, mainnet certification or profitable edge are claimed.
+
 ## [2.2.3] - 2026-10-27
 
 Coverage-reporting and Demo-probe safety patch on top of `v2.2.2`. This remains
