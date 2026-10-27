@@ -1,6 +1,6 @@
 # Remaining work
 
-Strategy V2 is implemented; package version and release tag are v2.2.2. The
+Strategy V2 is implemented; package version and release tag are v2.2.3. The
 independent-zone feature remains unreleased under #123.
 Current behavior lives in [STRATEGY.md](STRATEGY.md).
 
