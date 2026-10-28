@@ -29,6 +29,9 @@ DEMO_LONG_EXIT_AB_TREATMENT_PROFILE = "payoff_early_tight_trail_long_ab_015"
 DEMO_LONG_EXIT_AB_CONTROL_PROFILE = "payoff_early_tight_trail_long_ab_020_control"
 # Deployment of v2.2.6/#199; use plan creation, not eventual fill/close time.
 LONG_FULL_RISK_STARTED_AT = "2026-10-27T17:06:35+00:00"
+# Operator-approved 400 USDT -> 4000 USDT stop-risk cap (v2.2.10/#207), measured
+# from the deployed 2.2.10 application container start; plan creation decides.
+PORTFOLIO_CAP_4000_STARTED_AT = "2026-10-27T20:11:55+00:00"
 
 
 def long_sizing_cohorts(records: list[dict]) -> dict[str, list[dict]]:
@@ -66,6 +69,34 @@ def exit_sizing_cohorts(records: list[dict]) -> dict[str, list[dict]]:
         "unaffected_shorts": [row for row in records if row.get("side") == "SHORT"],
         "full_baseline_risk": longs["full_baseline_risk"],
     }
+
+
+def cap_epoch_label(created_at: str) -> str:
+    """Label a record with the portfolio stop-risk cap epoch, or `unknown`."""
+    try:
+        created = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        if created.tzinfo is None:
+            raise ValueError("Cap-epoch creation time needs a timezone")
+        return (
+            "cap_4000"
+            if created.astimezone(UTC)
+            >= datetime.fromisoformat(PORTFOLIO_CAP_4000_STARTED_AT)
+            else "cap_400"
+        )
+    except (ValueError, TypeError):
+        return "unknown"
+
+
+def cap_epoch_cohorts(records: list[dict]) -> dict[str, list[dict]]:
+    """Group planning-side records by the operator cap boundary; never merge."""
+    cohorts: dict[str, list[dict]] = {
+        "cap_400": [],
+        "unknown": [],
+        "cap_4000": [],
+    }
+    for record in records:
+        cohorts[cap_epoch_label(record.get("created_at", ""))].append(record)
+    return cohorts
 
 
 def jsonl(archive: zipfile.ZipFile, root: str, name: str) -> list[dict]:

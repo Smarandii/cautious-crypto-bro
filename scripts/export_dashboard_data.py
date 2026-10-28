@@ -43,8 +43,11 @@ from cautious_crypto_bro.forensic_pnl import (  # noqa: E402
     LIVE_LONG_RISK_EXIT_PROFILE,
     LIVE_LONG_RISK_STARTED_AT,
     LONG_FULL_RISK_STARTED_AT,
+    PORTFOLIO_CAP_4000_STARTED_AT,
     PROSPECTIVE_SHADOW_REVIEW_CASES,
     bootstrap_performance_intervals,
+    cap_epoch_cohorts,
+    cap_epoch_label,
     exit_sizing_cohorts,
     jsonl,
     long_sizing_cohorts,
@@ -619,6 +622,14 @@ def _demo_long_participation_experiment(
             )
 
     grouped = long_sizing_cohorts(assignments)
+    cap_boundary = PORTFOLIO_CAP_4000_STARTED_AT
+    for _name, rows in grouped.items():
+        for row in rows:
+            row["cap_epoch"] = cap_epoch_label(row.get("created_at", ""))
+    epoch_counts = {
+        epoch: len(epoch_rows)
+        for epoch, epoch_rows in cap_epoch_cohorts(assignments).items()
+    }
     cohorts = {
         name: _participation_cohort(
             rows,
@@ -634,6 +645,8 @@ def _demo_long_participation_experiment(
         "sizing_cohort": "full_baseline_risk",
         "sizing_cutover": LONG_FULL_RISK_STARTED_AT,
         "sizing_cohorts": cohorts,
+        "cap_epoch_boundary": cap_boundary,
+        "cap_epoch_summary": epoch_counts,
         "unknown_time_assignment_count": len(grouped["unknown"]),
     }
 

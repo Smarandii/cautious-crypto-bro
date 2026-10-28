@@ -12,6 +12,105 @@ SCRIPTS = Path(__file__).parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 from analyze_long_participation import report  # noqa: E402
 
+from cautious_crypto_bro.forensic_pnl import (  # noqa: E402
+    PORTFOLIO_CAP_4000_STARTED_AT,
+    cap_epoch_cohorts,
+    cap_epoch_label,
+)
+
+
+def test_cap_epoch_labels_partition_assignments_without_merging(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle = tmp_path / "cap-epochs.zip"
+    assignments = [
+        {
+            "intent_id": "before-cap",
+            "created_at": "2026-10-27T19:00:00+00:00",
+            "status": "SKIPPED",
+            "approval_mode": "SKIPPED",
+            "bybit_order_ids": [],
+            "arm": "skip",
+            "symbol": "OLDUSDT",
+            "side": "LONG",
+        },
+        {
+            # Exactly at the boundary belongs to the new cap epoch.
+            "intent_id": "boundary-plan",
+            "created_at": PORTFOLIO_CAP_4000_STARTED_AT,
+            "status": "SKIPPED",
+            "approval_mode": "SKIPPED",
+            "bybit_order_ids": [],
+            "arm": "skip",
+            "symbol": "NEWUSDT",
+            "side": "LONG",
+        },
+        {
+            "intent_id": "after-cap",
+            "created_at": "2026-10-27T21:00:00+00:00",
+            "status": "SKIPPED",
+            "approval_mode": "SKIPPED",
+            "bybit_order_ids": [],
+            "arm": "skip",
+            "symbol": "NEWUSDT",
+            "side": "LONG",
+        },
+        {
+            "intent_id": "timezone-free",
+            "created_at": "2026-10-27T19:00:00",
+            "status": "SKIPPED",
+            "approval_mode": "SKIPPED",
+            "bybit_order_ids": [],
+            "arm": "skip",
+            "symbol": "NAKEDUSDT",
+            "side": "LONG",
+        },
+        {
+            "intent_id": "malformed-time",
+            "created_at": "not-a-timestamp",
+            "status": "SKIPPED",
+            "approval_mode": "SKIPPED",
+            "bybit_order_ids": [],
+            "arm": "skip",
+            "symbol": "BADUSDT",
+            "side": "LONG",
+        },
+    ]
+    _archive(bundle, assignments)
+
+    report(bundle)
+    output = capsys.readouterr().out
+
+    assert f"long_participation_cap_boundary={PORTFOLIO_CAP_4000_STARTED_AT}" in output
+    assert "cap_400=1" in output
+    assert "cap_4000=2" in output
+    assert "unknown=2" in output
+    # The boundary only labels; review gates stay per sizing cohort.
+    assert "long_participation_status=collecting" in output
+
+    cohorts = cap_epoch_cohorts(assignments)
+    assert [item["intent_id"] for item in cohorts["cap_400"]] == ["before-cap"]
+    assert [item["intent_id"] for item in cohorts["cap_4000"]] == [
+        "boundary-plan",
+        "after-cap",
+    ]
+    assert [item["intent_id"] for item in cohorts["unknown"]] == [
+        "timezone-free",
+        "malformed-time",
+    ]
+
+
+def test_cap_epoch_label_handles_boundaries_and_bad_evidence() -> None:
+    assert cap_epoch_label("2026-10-27T20:11:54.999999+00:00") == "cap_400"
+    assert cap_epoch_label(PORTFOLIO_CAP_4000_STARTED_AT) == "cap_4000"
+    assert cap_epoch_label("2026-10-27T20:11:55Z") == "cap_4000"
+    # Timezone-free creation evidence stays visible and cannot pick an epoch.
+    assert cap_epoch_label("2026-10-28T10:00:00") == "unknown"
+    assert cap_epoch_label("garbage") == "unknown"
+    assert cap_epoch_label(None) == "unknown"
+    assert cap_epoch_label("") == "unknown"
+
 
 def _archive(
     path: Path,
