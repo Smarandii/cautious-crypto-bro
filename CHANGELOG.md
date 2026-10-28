@@ -10,6 +10,28 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.20] - 2026-10-28
+
+Durable zone-enrollment checkpoint.
+
+### Added
+
+- Every successfully executed Strategy V2 plan now enrolls into the allocation
+  ledger (#240, part of #123): its plan+intent are frozen as a zone in the
+  deterministic per-symbol/side group, and each submitted ENTRY identity
+  (broker order id, `ccb-v2-…-eN` link, planned quantity, role ENTRY) is
+  bound exactly once. The ledger remains evidence only — it grants no
+  mutation permission — and a ledger write failure never fails a filled
+  execution; it is logged loudly for supervision to reconcile.
+
+### Upgrade, validation and limitations
+
+- Schema 14 unchanged; coordinator-level tests cover enrollment identities,
+  ledger-failure semantics, execution-failure no-writes and group
+  determinism; the full suite passes. V1 plans, position actions, intake
+  guards and activation gates are untouched: multi-zone intake, the group
+  protection writer and activation evidence remain open on #123.
+
 ## [2.2.19] - 2026-10-28
 
 Deterministic exchange-rejection terminal planning checkpoint.
