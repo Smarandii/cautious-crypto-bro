@@ -281,6 +281,12 @@ def test_old_entry_executes_and_persists_under_mutation_lock(approval_mode) -> N
                 assert lock.locked()
                 assert order_ids == ("order-1",)
 
+            async def register_zone(self, group_id, intent_id):
+                assert lock.locked()
+
+            async def bind_zone_order(self, order):
+                assert lock.locked()
+
             async def record_entry_failure(
                 self, intent_id, message, *, strategy_status
             ):
@@ -322,3 +328,216 @@ def test_old_entry_executes_and_persists_under_mutation_lock(approval_mode) -> N
     asyncio.run(run(None))
     asyncio.run(run(RuntimeError("Exchange rejected order")))
     asyncio.run(run(EntryPreflightError("Entry price was passed through")))
+
+
+def test_executed_plan_enrolls_its_zone_allocation_durably() -> None:
+    """#123: a filled execution freezes its zone and binds entry identities."""
+    from cautious_crypto_bro.domain import Entry, EntryType, OpenRelation, Side
+    from cautious_crypto_bro.zone_ledger import zone_group_id
+
+    now = datetime.now(UTC)
+    intent = TradingIntent(
+        source=SourceMessage(
+            channel_id=1,
+            channel_title="Test",
+            message_id=9,
+            published_at=now,
+            received_at=now,
+            text="BTC long",
+        ),
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        entry=Entry(type=EntryType.LIMIT, price=100),
+        stop_loss=90,
+        take_profit=120,
+        summary="Test",
+        confidence=1,
+        relation=OpenRelation.NEW,
+        approval_mode=ApprovalMode.AUTO,
+        created_at=now,
+    )
+    plan = ExecutionPlanner().plan(
+        intent,
+        ExecutionPolicy(trading_capital_usdt=Decimal("1000")),
+        InstrumentContext(
+            market_price=Decimal("105"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+    enrolled: list[tuple] = []
+    bound: list = []
+
+    class LedgerStore:
+        async def get_active_position_strategies(self):
+            return ()
+
+        async def get_intent(self, intent_id):
+            return intent
+
+        async def get_execution_plan(self, intent_id):
+            return plan
+
+        async def claim_for_execution(self, *args, **kwargs):
+            return True
+
+        async def ensure_position_strategy(self, plan):
+            return None
+
+        async def mark_executed(self, intent_id, order_ids):
+            return None
+
+        async def register_zone(self, group_id, intent_id):
+            enrolled.append((group_id, intent_id))
+
+        async def bind_zone_order(self, order):
+            bound.append(order)
+
+    class LedgerExecutor:
+        async def account_state(self):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(positions=(), open_orders=())
+
+        async def execute(self, plan):
+            return tuple(f"order-{index}" for index in range(len(plan.orders)))
+
+    coordinator = ExecutionCoordinator(
+        store=LedgerStore(),
+        executor=LedgerExecutor(),
+        planner=ExecutionPlanner(),
+        max_age_seconds=3600,
+        execution_lock=asyncio.Lock(),
+    )
+
+    outcome = asyncio.run(
+        coordinator.execute_intent(
+            intent.intent_id,
+            approval_mode=ApprovalMode.AUTO,
+        )
+    )
+
+    assert outcome.status is IntentStatus.EXECUTED
+    assert enrolled == [(zone_group_id("BTCUSDT", Side.LONG), intent.intent_id)]
+    assert len(bound) == len(plan.orders)
+    prefix = f"ccb-v2-{intent.intent_id.hex[:20]}-"
+    for order, planned, order_id in zip(
+        bound, plan.orders, (f"order-{i}" for i in range(len(plan.orders))), strict=True
+    ):
+        assert order.zone_id == intent.intent_id
+        assert order.order_id == order_id
+        assert order.order_link_id == prefix + planned.name.lower()
+        assert order.role == "ENTRY"
+        assert order.quantity == planned.quantity
+
+
+def test_zone_enrollment_failure_never_fails_a_filled_execution() -> None:
+    from cautious_crypto_bro.domain import (
+        Entry,
+        EntryType,
+        OpenRelation,
+        Side,
+        StoreError,
+    )
+
+    now = datetime.now(UTC)
+    intent = TradingIntent(
+        source=SourceMessage(
+            channel_id=1,
+            channel_title="Test",
+            message_id=11,
+            published_at=now,
+            received_at=now,
+            text="BTC long",
+        ),
+        symbol="BTCUSDT",
+        side=Side.LONG,
+        entry=Entry(type=EntryType.LIMIT, price=100),
+        stop_loss=90,
+        take_profit=120,
+        summary="Test",
+        confidence=1,
+        relation=OpenRelation.NEW,
+        approval_mode=ApprovalMode.AUTO,
+        created_at=now,
+    )
+    plan = ExecutionPlanner().plan(
+        intent,
+        ExecutionPolicy(trading_capital_usdt=Decimal("1000")),
+        InstrumentContext(
+            market_price=Decimal("105"),
+            tick_size=Decimal("0.1"),
+            qty_step=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+    )
+
+    failures: list[str] = []
+
+    class FailingLedgerStore:
+        async def get_active_position_strategies(self):
+            return ()
+
+        async def get_intent(self, intent_id):
+            return intent
+
+        async def get_execution_plan(self, intent_id):
+            return plan
+
+        async def claim_for_execution(self, *args, **kwargs):
+            return True
+
+        async def ensure_position_strategy(self, plan):
+            return None
+
+        async def mark_executed(self, intent_id, order_ids):
+            return None
+
+        async def register_zone(self, group_id, intent_id):
+            raise StoreError("Zone enrollment evidence store unavailable")
+
+        async def bind_zone_order(self, order):
+            raise AssertionError("Enrollment must stop at its first failure")
+
+        async def record_entry_failure(self, *args, **kwargs):
+            failures.append("record_entry_failure")
+
+    class WorkingExecutor:
+        async def account_state(self):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(positions=(), open_orders=())
+
+        async def execute(self, plan):
+            return ("order-0",)
+
+    coordinator = ExecutionCoordinator(
+        store=FailingLedgerStore(),
+        executor=WorkingExecutor(),
+        planner=ExecutionPlanner(),
+        max_age_seconds=3600,
+        execution_lock=asyncio.Lock(),
+    )
+
+    outcome = asyncio.run(
+        coordinator.execute_intent(
+            intent.intent_id,
+            approval_mode=ApprovalMode.AUTO,
+        )
+    )
+
+    assert outcome.status is IntentStatus.EXECUTED
+    assert failures == []
+
+
+def test_zone_group_identity_is_deterministic_per_symbol_and_side() -> None:
+    from cautious_crypto_bro.domain import Side
+    from cautious_crypto_bro.zone_ledger import zone_group_id
+
+    assert zone_group_id("BTCUSDT", Side.LONG) == zone_group_id("btcusdt", Side.LONG)
+    assert zone_group_id("BTCUSDT", Side.LONG) != zone_group_id("BTCUSDT", Side.SHORT)
+    assert zone_group_id("BTCUSDT", Side.LONG) != zone_group_id("ETHUSDT", Side.LONG)

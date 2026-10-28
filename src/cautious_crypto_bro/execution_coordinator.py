@@ -27,6 +27,7 @@ from .domain import (
 from .execution import ExecutionPlanner
 from .portfolio_risk import open_stop_risk_usdt
 from .ports import AccountGateway, ExecutionCoordinatorStore
+from .zone_ledger import ZoneOrder, zone_group_id
 
 logger = logging.getLogger(__name__)
 
@@ -340,6 +341,8 @@ class ExecutionCoordinator:
                 order_ids,
             )
 
+            await self._enroll_executed_zone(effective_plan, order_ids)
+
         except Exception as exc:
             logger.exception(
                 "Execution failed for %s",
@@ -424,6 +427,40 @@ class ExecutionCoordinator:
             )
 
         return intent, plan
+
+    async def _enroll_executed_zone(
+        self,
+        plan,
+        order_ids: tuple[str, ...],
+    ) -> None:
+        """Freeze the executed zone and bind its entry orders durably (#123).
+
+        The ledger is durable evidence, never permission to mutate: orders are
+        already live on the exchange, so an evidence-write failure must not
+        turn a filled execution into a failure outcome or trigger cleanup.
+        """
+        if plan.strategy_version < 2:
+            return
+        try:
+            group_id = zone_group_id(plan.symbol, plan.side)
+            await self._store.register_zone(group_id, plan.intent_id)
+            prefix = f"ccb-v2-{plan.intent_id.hex[:20]}-"
+            for order, order_id in zip(plan.orders, order_ids, strict=True):
+                await self._store.bind_zone_order(
+                    ZoneOrder(
+                        zone_id=plan.intent_id,
+                        order_id=str(order_id),
+                        order_link_id=prefix + order.name.lower(),
+                        role="ENTRY",
+                        quantity=order.quantity,
+                    )
+                )
+        except Exception:
+            logger.exception(
+                "Zone enrollment failed for %s; orders remain live and "
+                "supervision must reconcile the unenrolled allocation",
+                plan.intent_id,
+            )
 
     async def _assert_open_preflight(
         self,
