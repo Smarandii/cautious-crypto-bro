@@ -1,5 +1,7 @@
 # Cautious Crypto Bro
 
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/Smarandii/badge.svg)](https://hub.xerj.org/contributors/Smarandii)
+
 Telegram text/images/albums → LLM extraction → deterministic Strategy V2 planning →
 manual approval or AUTO routing → Bybit Demo → durable position supervision.
 
