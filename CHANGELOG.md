@@ -10,6 +10,32 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.19] - 2026-10-28
+
+Deterministic exchange-rejection terminal planning checkpoint.
+
+### Fixed
+
+- Stop the live retry loop on deterministically rejected exchange instrument
+  reads (#237): a supported post for a symbol Bybit explicitly rejects with a
+  retCode response (e.g. `10001 symbol invalid` for the PEPE/1000SHIB
+  contracts, retried 71 times over two hours on the deployed runtime) now
+  completes the source once with a durable planning rejection instead of
+  entering the retry path. Transport failures (`Bybit HTTP request failed`,
+  timeouts) keep the retryable behavior. A typed `is_exchange_rejection`
+  predicate mirrors the existing client message-code parsing, and the
+  coverage disposition exposes `exchange_rejected_request` so the class is
+  visible in source-coverage reports. No symbol aliasing is introduced:
+  mapping a source's symbol onto a different contract stays a separate
+  policy decision.
+
+### Upgrade, validation and limitations
+
+- Schema 14 and all trading settings are unchanged; the change affects only
+  planning failure classification. Rollback is a redeploy of the previous
+  image. After deployment the looped source completes with its recorded
+  rejection and the channel's intake coverage no longer reports incomplete.
+
 ## [2.2.18] - 2026-10-28
 
 ### Added
