@@ -902,6 +902,12 @@ def test_participation_dashboard_counts_skips_without_claiming_an_edge() -> None
     assert experiment["take_unresolved_count"] == 2
     assert experiment["status"] == "collecting"
     assert experiment["take_completed_performance"]["available"] is False
+    assert experiment["cap_epoch_boundary"] == exporter.PORTFOLIO_CAP_4000_STARTED_AT
+    assert experiment["cap_epoch_summary"] == {
+        "cap_400": 0,
+        "unknown": 0,
+        "cap_4000": 4,
+    }
     database.close()
 
 
