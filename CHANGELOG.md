@@ -10,6 +10,31 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.13] - 2026-10-28
+
+Native one-sided stop amendment observation for independent zones.
+
+### Added
+
+- New opt-in probe mode `--zone-amendment` (#225, part of #139): amends zone
+  A's partial stop on the real Bybit Demo adapter and verifies from fresh
+  reads that A's child identity and requested trigger hold, zone B's exact
+  pair is untouched, and net quantity is unchanged, for both LONG and SHORT
+  under the exclusive runner boundary. The orchestration runner refuses to
+  resume the app unless both receipts acknowledge the amendment with
+  preserved identities and no activation claim.
+- Synthetic adapter-level race scenarios pin late-entry-fill allocation
+  isolation and lost-amendment-acknowledgement reconciliation (exactly one
+  amend request, fresh-read reconciliation, no adoption of unknown
+  identities).
+
+### Upgrade, validation and limitations
+
+- Probe and tests only; schema 13, settings and service behavior unchanged.
+  Rollback is a redeploy of the previous image. Native amendment receipts are
+  recorded in docs after the post-deploy rehearsal; partial-fill timing and
+  mainnet behavior remain outside the observed matrix.
+
 ## [2.2.12] - 2026-10-28
 
 Momentum-gated Demo LONG participation checkpoint.
