@@ -92,6 +92,9 @@ def amendment_observations_verified(records: list[dict]) -> bool:
             and r.get("a_sl_trigger_matches_request") is True
             and r.get("b_pair_preserved") is True
             and isinstance(r.get("a_tp_still_present"), bool)
+            and r.get("a_tp_trigger_filled") is True
+            and r.get("a_sl_peer_cancelled") is True
+            and r.get("b_remainder_units") == "2"
             and r.get("activation_proven") is False
             for r in observed
         )
