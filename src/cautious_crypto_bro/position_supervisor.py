@@ -32,8 +32,15 @@ from .position_management.exit_installer import (
 from .position_management.fill_detector import FillDetector
 from .position_management.trailing_stop_manager import TrailingStopManager
 from .supervision_health import publish_success
+from .zone_ledger import ZoneExecution
 
 logger = logging.getLogger(__name__)
+
+# Zones enrolled before the first recording pass bootstrap from this lookback.
+ZONE_EXECUTION_BOOTSTRAP_MS = 48 * 60 * 60 * 1000
+# Rate-aware window: one execution-history read per symbol at most this often,
+# not on every two-second supervision pass.
+ZONE_EXECUTION_RECORD_INTERVAL_S = 60.0
 
 
 class _AccountStateUnavailable(TradeExecutionError):
@@ -69,6 +76,7 @@ class PositionSupervisor:
         self._report_state = report_state
         self._legacy_entry_ttl_minutes = legacy_entry_ttl_minutes
         self._reported_uncertain: set[UUID] = set()
+        self._zone_execution_due_at = 0.0
         self._trailing_stop_manager = TrailingStopManager(executor=executor)
         self._fill_detector = FillDetector(executor=executor)
         self._exit_installer = ExitInstaller(
@@ -122,6 +130,104 @@ class PositionSupervisor:
             # Visibility failure must not interrupt exchange protection work.
             logger.exception("Failed to publish successful supervision progress")
 
+    async def _record_zone_executions(self) -> None:
+        """Bind observed fills to enrolled zones; never adopt unknown orders.
+
+        Bounded and rate-aware: one execution-history read per symbol per
+        window (not every supervision pass), never before the first window
+        elapses more than once per process. Evidence only: a failure stops
+        *that* group until a later window retries it, so the durable
+        watermark never jumps past unrecorded evidence, and the whole pass
+        never breaks strategy reconciliation.
+        """
+        now = asyncio.get_running_loop().time()
+        if now < self._zone_execution_due_at:
+            return
+        self._zone_execution_due_at = now + ZONE_EXECUTION_RECORD_INTERVAL_S
+        try:
+            groups_by_symbol = await self._store.zone_order_symbols()
+            for symbol, group_ids in groups_by_symbol.items():
+                try:
+                    await self._record_symbol_executions(symbol, group_ids)
+                except Exception:
+                    logger.exception(
+                        "Zone execution recording failed for symbol %s", symbol
+                    )
+        except Exception:
+            logger.exception("Zone execution recording pass failed")
+
+    async def _record_symbol_executions(
+        self,
+        symbol: str,
+        group_ids: tuple[UUID, ...],
+    ) -> None:
+        contexts: list[tuple[UUID, set[str], int]] = []
+        since_values: list[int] = []
+        now_ms = int(datetime.now(UTC).timestamp() * 1000)
+        for group_id in group_ids:
+            bound = {
+                order.order_id
+                for order in await self._store.zone_bound_orders(group_id)
+            }
+            if not bound:
+                continue
+            watermark = await self._store.zone_execution_watermark(group_id)
+            since = (
+                watermark + 1
+                if watermark is not None
+                else now_ms - ZONE_EXECUTION_BOOTSTRAP_MS
+            )
+            contexts.append((group_id, bound, since))
+            since_values.append(since)
+        if not contexts:
+            return
+        rows = await self._executor.execution_history(symbol, min(since_values))
+        ordered = tuple(sorted(rows, key=lambda row: int(row.get("execTime") or 0)))
+        for group_id, bound, since in contexts:
+            await self._record_group_executions(group_id, bound, since, ordered)
+
+    async def _record_group_executions(
+        self,
+        group_id: UUID,
+        bound: set[str],
+        since_ms: int,
+        rows: tuple[dict, ...],
+    ) -> None:
+        for row in rows:
+            order_id = str(row.get("orderId") or "")
+            if (
+                order_id not in bound
+                or row.get("execType") != "Trade"
+                or int(row.get("execTime") or 0) < since_ms
+            ):
+                continue
+            try:
+                await self._store.record_zone_execution(
+                    ZoneExecution(
+                        execution_id=str(row["execId"]),
+                        order_id=order_id,
+                        side=(Side.LONG if row.get("side") == "Buy" else Side.SHORT),
+                        quantity=Decimal(str(row["execQty"])),
+                        closed_quantity=Decimal(str(row.get("closedSize") or 0)),
+                        price=Decimal(str(row["execPrice"])),
+                        fee=Decimal(str(row.get("execFee") or 0)),
+                        executed_at_ms=int(row["execTime"]),
+                    )
+                )
+            except StoreError:
+                # Durable conflict/failure: stop this group so the watermark
+                # cannot advance past the evidence; a later window retries it.
+                logger.exception(
+                    "Zone execution recording halted for group %s at order %s",
+                    group_id,
+                    order_id,
+                )
+                return
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                logger.exception(
+                    "Zone execution row rejected as malformed for order %s", order_id
+                )
+
     async def reconcile_once(self) -> None:
         # The durable strategy snapshot must be loaded while holding the
         # same lock used for exchange mutations and quarantine writes.
@@ -129,6 +235,8 @@ class PositionSupervisor:
 
         async with self._mutation_lock:
             records = await self._store.get_active_position_strategies()
+
+            await self._record_zone_executions()
 
             if not records:
                 self._reported_uncertain.clear()

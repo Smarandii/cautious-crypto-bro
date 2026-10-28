@@ -153,6 +153,8 @@ class FakeAccountGateway:
         self.exits: list[dict[str, Any]] = []
         self.minute_closes: dict[str, list[tuple[int, Decimal]]] = {}
         self.minute_closes_calls: list[str] = []
+        self.execution_rows: dict[str, list[dict]] = {}
+        self.execution_history_calls: list[tuple[str, int]] = []
 
     async def one_minute_closes(
         self,
@@ -162,6 +164,18 @@ class FakeAccountGateway:
     ) -> list[tuple[int, Decimal]]:
         self.minute_closes_calls.append(symbol)
         return self.minute_closes.get(symbol, [])
+
+    async def execution_history(
+        self,
+        symbol: str,
+        since_ms: int,
+    ) -> tuple[dict, ...]:
+        self.execution_history_calls.append((symbol, since_ms))
+        return tuple(
+            row
+            for row in self.execution_rows.get(symbol, ())
+            if int(row.get("execTime") or 0) >= since_ms
+        )
 
     async def market_context(self, symbol: str) -> InstrumentContext:
         assert (

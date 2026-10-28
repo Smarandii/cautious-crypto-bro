@@ -54,6 +54,14 @@ class AccountGateway(Protocol):
         """Fully formed 1-minute candle closes as (start_ms, close)."""
         ...
 
+    async def execution_history(
+        self,
+        symbol: str,
+        since_ms: int,
+    ) -> tuple[dict, ...]:
+        """Raw private execution rows for a symbol since a millisecond."""
+        ...
+
     async def account_state(self) -> AccountStateSummary: ...
 
     async def wallet_balance_usdt(self) -> Decimal: ...
@@ -581,6 +589,12 @@ class ZoneLedgerRepository(Protocol):
 
     async def record_zone_execution(self, execution: ZoneExecution) -> None: ...
 
+    async def zone_bound_orders(self, group_id: UUID) -> tuple[ZoneOrder, ...]: ...
+
+    async def zone_order_symbols(self) -> dict[str, tuple[UUID, ...]]: ...
+
+    async def zone_execution_watermark(self, group_id: UUID) -> int | None: ...
+
     async def zone_group_snapshot(
         self,
         group_id: UUID,
@@ -602,6 +616,7 @@ class PositionSupervisorStore(
     PositionStrategyRepository,
     PositionActionRepository,
     IntentRepository,
+    ZoneLedgerRepository,
     Protocol,
 ):
     """Everything PositionSupervisor needs from durable storage."""
