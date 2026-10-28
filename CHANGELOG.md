@@ -10,6 +10,40 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.12] - 2026-10-28
+
+Momentum-gated Demo LONG participation checkpoint.
+
+### Changed
+
+- Add `DEMO_LONG_MOMENTUM_GATE` (deployed on, #223): the pre-registered #183
+  review gate was met (20/20 reconciled takes, 28 skips, zero invalid
+  records) and its momentum strata produced an adequate positive result only
+  for entries after a direction-aligned positive prior 60-minute return
+  (+1.81 USDT and +0.313R per assignment; day-clustered 95% CIs exclude zero
+  in both units), while the nonpositive stratum stayed a coin flip. New LONG
+  plans are therefore assigned take/skip by that classifier at planning time
+  instead of the coin flip; unavailable candle evidence falls back to the
+  stable bucket and records the stratum as unavailable, so no post is lost
+  to a data hiccup.
+- Persist the stratum (`long_participation_momentum`:
+  positive/nonpositive/unavailable) on the plan's strategy metadata and in
+  forensic assignment records; schema 13 is unchanged. `DEMO_LONG_
+  PARTICIPATION_SKIP_FRACTION` keeps its meaning for the fallback path;
+  turning the gate off restores the randomized experiment exactly.
+- The export's lineage also records every plan-order execution
+  (`plan_executions`), and Closed-PnL attribution prefers the closing
+  order's identity with the symbol+time window as fallback (#221), so
+  rehearsal orders can no longer over-close a position's attribution.
+
+### Upgrade, validation and limitations
+
+- No sizing, cap, exit, approval or SHORT behavior changes; the gate affects
+  only newly planned Demo LONGs and is reversible per cohort. The strata
+  evidence is observational from a small sample; review the gated cohort as
+  it grows and keep cohort boundaries separate in every report. Rollback:
+  turn the gate off; existing plans and positions are unchanged.
+
 ## [2.2.11] - 2026-10-28
 
 Portfolio cap-cohort labeling checkpoint.

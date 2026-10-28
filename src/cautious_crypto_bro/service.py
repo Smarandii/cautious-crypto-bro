@@ -37,6 +37,7 @@ from .domain import (
     TradingIntent,
 )
 from .execution import ExecutionPlanner, ExecutionPlanningError
+from .momentum import classify as classify_momentum
 from .portfolio_risk import (
     open_stop_risk_usdt,
     policy_with_remaining_portfolio_risk,
@@ -87,6 +88,7 @@ class SignalService:
         demo_long_risk_multiplier: Decimal = Decimal("1"),
         demo_long_exit_control_fraction: Decimal = Decimal("0"),
         demo_long_participation_skip_fraction: Decimal = Decimal("0"),
+        demo_long_momentum_gate: bool = False,
         demo_exit_profile: str = "baseline",
         demo_portfolio_stop_risk_cap_usdt: Decimal | None = None,
         demo_entry_order_ttl_minutes: int = 0,
@@ -143,6 +145,7 @@ class SignalService:
         self._demo_long_participation_skip_fraction = (
             demo_long_participation_skip_fraction
         )
+        self._demo_long_momentum_gate = demo_long_momentum_gate
         self._demo_exit_profile = demo_exit_profile
         self._demo_portfolio_stop_risk_cap_usdt = demo_portfolio_stop_risk_cap_usdt
         self._demo_entry_order_ttl_minutes = demo_entry_order_ttl_minutes
@@ -891,11 +894,14 @@ class SignalService:
                 original_manual=original_manual,
             )
 
+            momentum_stratum = await self._gate_momentum_stratum(intent)
+
             intent_policy = self._policy_for_intent_side(
                 policy,
                 intent.side,
                 intent.intent_id,
                 participation_eligible=(intent.approval_mode is ApprovalMode.AUTO),
+                momentum_stratum=momentum_stratum,
             )
 
             if self._demo_portfolio_stop_risk_cap_usdt is not None:
@@ -1001,6 +1007,37 @@ class SignalService:
             logger.exception("Portfolio stop-risk snapshot failed")
             return None
 
+    async def _gate_momentum_stratum(self, intent) -> str | None:
+        """The gate's classification for an eligible LONG; None otherwise."""
+        if not (
+            self._demo_long_momentum_gate
+            and intent.side is Side.LONG
+            and intent.approval_mode is ApprovalMode.AUTO
+        ):
+            return None
+        return await self._prior_momentum_stratum(intent.symbol)
+
+    async def _prior_momentum_stratum(self, symbol: str) -> str | None:
+        """Classify prior 60m momentum exactly like the #183 review's strata."""
+        try:
+            candles = await self._executor.one_minute_closes(symbol)
+        except Exception as exc:
+            logger.info(
+                "Momentum gate: %s candle read failed: %s",
+                symbol,
+                type(exc).__name__,
+            )
+            return None
+        try:
+            return classify_momentum(
+                [{"time": start, "close": float(close)} for start, close in candles],
+                signal_time_ms=int(datetime.now(UTC).timestamp() * 1000),
+                side="LONG",
+            )
+        except Exception:
+            logger.exception("Momentum gate classification failed for %s", symbol)
+            return None
+
     def _policy_for_intent_side(
         self,
         policy: ExecutionPolicy,
@@ -1008,6 +1045,7 @@ class SignalService:
         intent_id: UUID | None = None,
         *,
         participation_eligible: bool = True,
+        momentum_stratum: str | None = None,
     ) -> ExecutionPolicy:
         strategy = policy.strategy_v2
         updates = {}
@@ -1059,31 +1097,52 @@ class SignalService:
         if (
             side is Side.LONG
             and participation_eligible
-            and self._demo_long_participation_skip_fraction > 0
+            and (
+                self._demo_long_momentum_gate
+                or self._demo_long_participation_skip_fraction > 0
+            )
         ):
-            if intent_id is None:
-                raise ValueError(
-                    "Randomized LONG participation assignment requires an intent ID"
-                )
-            participation_bucket = int.from_bytes(
-                hashlib.sha256(b"long-participation-v1:" + intent_id.bytes).digest()[
-                    :8
-                ],
-                "big",
-            )
-            skip_threshold = int(
-                self._demo_long_participation_skip_fraction * (1 << 64)
-            )
-            strategy = strategy.model_copy(
-                update={
-                    "long_participation_arm": (
-                        "skip" if participation_bucket < skip_threshold else "take"
-                    )
-                }
+            strategy = self._assign_participation_arm(
+                strategy, side, intent_id, momentum_stratum
             )
         if strategy != policy.strategy_v2:
             updates["strategy_v2"] = strategy
         return policy.model_copy(update=updates) if updates else policy
+
+    def _assign_participation_arm(
+        self,
+        strategy,
+        side: Side,
+        intent_id: UUID | None,
+        momentum_stratum: str | None,
+    ):
+        """Assign the Demo LONG take/skip arm; the gate beats the coin flip."""
+        if intent_id is None:
+            raise ValueError(
+                "Randomized LONG participation assignment requires an intent ID"
+            )
+        participation_updates: dict[str, object] = {}
+        gated = self._demo_long_momentum_gate and momentum_stratum is not None
+        if gated:
+            participation_updates["long_participation_momentum"] = (
+                "positive" if momentum_stratum == "skip_positive" else "nonpositive"
+            )
+            participation_updates["long_participation_arm"] = (
+                "take" if momentum_stratum == "skip_positive" else "skip"
+            )
+            return strategy.model_copy(update=participation_updates)
+
+        if self._demo_long_momentum_gate:
+            participation_updates["long_participation_momentum"] = "unavailable"
+        participation_bucket = int.from_bytes(
+            hashlib.sha256(b"long-participation-v1:" + intent_id.bytes).digest()[:8],
+            "big",
+        )
+        skip_threshold = int(self._demo_long_participation_skip_fraction * (1 << 64))
+        participation_updates["long_participation_arm"] = (
+            "skip" if participation_bucket < skip_threshold else "take"
+        )
+        return strategy.model_copy(update=participation_updates)
 
     async def _capital_frozen_policy(self) -> ExecutionPolicy:
         policy = await self._store.get_execution_policy()

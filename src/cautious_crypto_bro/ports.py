@@ -44,6 +44,15 @@ from .storage.planning_candidate import PlanningCandidate
 class AccountGateway(Protocol):
     async def market_context(self, symbol: str) -> InstrumentContext: ...
 
+    async def one_minute_closes(
+        self,
+        symbol: str,
+        *,
+        limit: int = 120,
+    ) -> list[tuple[int, Decimal]]:
+        """Fully formed 1-minute candle closes as (start_ms, close)."""
+        ...
+
     async def account_state(self) -> AccountStateSummary: ...
 
     async def wallet_balance_usdt(self) -> Decimal: ...

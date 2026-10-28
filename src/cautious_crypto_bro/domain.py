@@ -899,6 +899,12 @@ class StrategyV2Policy(BaseModel):
     # Stable assignment tag for the Demo LONG participation experiment.
     long_participation_arm: Literal["take", "skip"] | None = None
 
+    # Momentum stratum behind the arm when the gate assigned it; None keeps
+    # the pre-gate era (randomized coin flip without a recorded stratum).
+    long_participation_momentum: (
+        Literal["positive", "nonpositive", "unavailable"] | None
+    ) = None
+
     # Zero preserves the legacy GTC behavior for plans without an explicit TTL.
     entry_order_ttl_minutes: int = Field(default=0, ge=0)
 

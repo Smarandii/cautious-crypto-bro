@@ -112,6 +112,7 @@ def _fake_application(monkeypatch, tmp_path, failed_reconciliation=None):
         demo_long_risk_multiplier=1,
         demo_long_exit_control_fraction=0,
         demo_long_participation_skip_fraction=0,
+        demo_long_momentum_gate=False,
         demo_portfolio_stop_risk_cap_usdt=340,
         demo_exit_profile="baseline",
         demo_entry_order_ttl_minutes=0,
