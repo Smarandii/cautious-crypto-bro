@@ -117,6 +117,7 @@ class ProbeOwnership:
         *,
         convergence_attempts=VERIFY_READ_ATTEMPTS,
         convergence_delay_seconds=VERIFY_READ_DELAY_SECONDS,
+        pending_close_quantity=None,
     ):
         """Verify ownership; only conservation may lag behind read visibility."""
         require(
@@ -131,6 +132,19 @@ class ProbeOwnership:
             and 0 <= convergence_delay_seconds <= 5,
             "Invalid conservation read delay",
         )
+        expected_close_pending = None
+        if pending_close_quantity is not None:
+            require(
+                isinstance(pending_close_quantity, D) and pending_close_quantity > 0,
+                "Invalid pending close quantity",
+            )
+            require(
+                self.close_submitted is True,
+                "Close-pending tolerance requires a submitted close",
+            )
+            expected_close_pending = (
+                pending_close_quantity if side is Side.LONG else -pending_close_quantity
+            )
         pending = []
         attempt = 0
         while True:
@@ -202,11 +216,19 @@ class ProbeOwnership:
                         },
                     )
                 return abs(signed_quantity)
+            # While flat, only the acknowledged close's own fill may be pending;
+            # any other conservation mismatch fails closed without more reads.
+            close_fill_pending = (
+                expected_close_pending is not None
+                and live is None
+                and signed_quantity == expected_close_pending
+            )
             pending.append(
                 {
                     "attempt": attempt,
                     "signed": str(signed_quantity),
                     "account": str(actual),
+                    **({"close_fill_pending": True} if close_fill_pending else {}),
                 }
             )
             self.record_observation(
@@ -217,6 +239,8 @@ class ProbeOwnership:
                     "pending_reads": pending,
                 },
             )
+            if live is None and not close_fill_pending:
+                require(False, "Run executions do not explain net exposure")
             require(
                 attempt < convergence_attempts,
                 "Run executions do not explain net exposure",
@@ -444,6 +468,7 @@ async def persist_action(store, side, kind, message_id, pct=None):
 
 
 async def cleanup(e, side, prefix, *, ownership=None):
+    pending_close_quantity = None
     for attempt in range(3):
         try:
             account = await e.account_state()
@@ -477,12 +502,21 @@ async def cleanup(e, side, prefix, *, ownership=None):
                         "orderLinkId": prefix + "cleanup",
                     },
                 )
+            pending_close_quantity = (
+                owned_quantity if ownership.close_submitted and owned_quantity else None
+            )
             await wait_account(e, lambda a: position(a) is None, "cleanup close")
             account = await e.account_state()
-            await ownership.verify(account, side)
+            await ownership.verify(
+                account, side, pending_close_quantity=pending_close_quantity
+            )
             for order in account.open_orders:
                 if order.symbol == SYMBOL:
-                    await ownership.verify(await e.account_state(), side)
+                    await ownership.verify(
+                        await e.account_state(),
+                        side,
+                        pending_close_quantity=pending_close_quantity,
+                    )
                     await e.cancel_order(SYMBOL, order.order_id)
             await wait_account(e, symbol_flat, "cleanup flat")
             emit("cleanup", symbol=SYMBOL, side=side.value, flat=True)

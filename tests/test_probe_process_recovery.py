@@ -206,6 +206,159 @@ def test_recovery_refuses_invalid_convergence_arguments(tmp_path, kwargs):
     exchange.account_state.assert_awaited_once()
 
 
+class CloseFillLaggingExchange(PairedExchange):
+    """Withhold the cleanup close's fill from execution reads while flat."""
+
+    def __init__(self, side, peer_retires, lagged_reads):
+        super().__init__(side, peer_retires)
+        self.lagged_reads = lagged_reads
+
+    def handle(self, request):
+        if (
+            request.url.path == "/v5/execution/list"
+            and self.lagged_reads > 0
+            and self.size == 0
+        ):
+            self.lagged_reads -= 1
+            visible = [
+                item
+                for item in self.executions
+                if not str(item.get("orderLinkId", "")).endswith("cleanup")
+            ]
+            return httpx.Response(
+                200,
+                json={"retCode": 0, "result": {"list": visible, "nextPageCursor": ""}},
+            )
+        return super().handle(request)
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_terminal_cleanup_tolerates_only_the_owned_close_fill_lag(tmp_path, side):
+    """#209: a confirmed flat position plus one pending close fill converges."""
+    started = int(datetime.now(UTC).timestamp() * 1000)
+    result = subprocess.run(
+        [sys.executable, "-c", WORKER, str(tmp_path), side.value],
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join(
+                str(ROOT / p) for p in ("src", "tests", "scripts")
+            ),
+        },
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+    assert result.returncode == 86, result.stderr
+    journal_path = tmp_path / "ownership.json"
+    exchange = CloseFillLaggingExchange(side, False, lagged_reads=2)
+    reloaded = reloaded_exchange(tmp_path, side)
+    exchange.orders = reloaded.orders
+    exchange.executions = reloaded.executions
+    exchange.size, exchange.avg, exchange.stop = (
+        reloaded.size,
+        reloaded.avg,
+        reloaded.stop,
+    )
+
+    async def recover_and_clean(executor):
+        owner = await demo.ProbeOwnership.recover(
+            executor,
+            journal_path,
+            side,
+            started_after_ms=started,
+            convergence_delay_seconds=0.01,
+        )
+        try:
+            await demo.cleanup(executor, side, "recovered-", ownership=owner)
+        finally:
+            owner.restore()
+
+    with executor_for(exchange) as executor:
+        asyncio.run(recover_and_clean(executor))
+    saved = json.loads(journal_path.read_text())
+    convergence = saved["observations"]["verify_convergence"]
+    assert convergence["converged_after_attempt"] is not None
+    assert any(read.get("close_fill_pending") for read in convergence["pending_reads"])
+    creates = [body for path, body in exchange.requests if path == "/v5/order/create"]
+    assert len(creates) == 1 and creates[0]["reduceOnly"] is True
+    assert exchange.size == 0
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_terminal_cleanup_fails_closed_on_unexplained_flat_mismatch(tmp_path, side):
+    """A flat position with a mismatch that is not the owned close never passes."""
+    started = int(datetime.now(UTC).timestamp() * 1000)
+    result = subprocess.run(
+        [sys.executable, "-c", WORKER, str(tmp_path), side.value],
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join(
+                str(ROOT / p) for p in ("src", "tests", "scripts")
+            ),
+        },
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+    assert result.returncode == 86, result.stderr
+    journal_path = tmp_path / "ownership.json"
+
+    class FlatEntryMissingExchange(PairedExchange):
+        def handle(self, request):
+            if (
+                request.url.path == "/v5/execution/list"
+                and self.size == 0
+                and len(self.executions) >= 3
+            ):
+                visible = [item for index, item in enumerate(self.executions) if index]
+                return httpx.Response(
+                    200,
+                    json={
+                        "retCode": 0,
+                        "result": {"list": visible, "nextPageCursor": ""},
+                    },
+                )
+            return super().handle(request)
+
+    exchange = FlatEntryMissingExchange(side, False)
+    reloaded = reloaded_exchange(tmp_path, side)
+    exchange.orders = reloaded.orders
+    exchange.executions = reloaded.executions
+    exchange.size, exchange.avg, exchange.stop = (
+        reloaded.size,
+        reloaded.avg,
+        reloaded.stop,
+    )
+
+    async def recover_and_clean(executor):
+        owner = await demo.ProbeOwnership.recover(
+            executor,
+            journal_path,
+            side,
+            started_after_ms=started,
+            convergence_delay_seconds=0.01,
+        )
+        try:
+            with pytest.raises(RuntimeError, match="Cleanup unverified"):
+                await demo.cleanup(executor, side, "recovered-", ownership=owner)
+        finally:
+            owner.restore()
+
+    with executor_for(exchange) as executor:
+        asyncio.run(recover_and_clean(executor))
+    saved = json.loads(journal_path.read_text())
+    convergence = saved["observations"]["verify_convergence"]
+    assert convergence["converged_after_attempt"] is None
+    assert not any(
+        read.get("close_fill_pending") for read in convergence["pending_reads"]
+    )
+    creates = [body for path, body in exchange.requests if path == "/v5/order/create"]
+    assert len(creates) == 1 and creates[0]["reduceOnly"] is True
+    assert exchange.size == 0
+
+
 @pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
 @pytest.mark.parametrize(
     "outcome", ["clean", "foreign_fill", "unknown_order", "close_submitted"]
