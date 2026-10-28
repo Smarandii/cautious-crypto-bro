@@ -381,7 +381,7 @@ class PositionActionRepository(Protocol):
     async def mark_position_action_skipped(
         self,
         action_id: UUID,
-        user_id: int,
+        user_id: int | None,
     ) -> bool: ...
 
     async def complete_position_action(

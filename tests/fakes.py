@@ -341,7 +341,7 @@ class FakePositionSupervisorStore:
     async def mark_position_action_skipped(
         self,
         action_id: UUID,
-        user_id: int,
+        user_id: int | None,
     ) -> bool:
         return True
 

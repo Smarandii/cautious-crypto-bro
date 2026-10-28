@@ -456,6 +456,47 @@ def test_service_auto_routing_requires_trusted_state() -> None:
     )
 
 
+def test_skipped_position_actions_resolve_durably_at_dispatch() -> None:
+    """#213 audit follow-up: a SKIPPED action never stays PENDING forever."""
+    import types
+
+    skipped_calls = []
+
+    class SkippingStore:
+        async def mark_position_action_skipped(self, action_id, user_id):
+            skipped_calls.append((action_id, user_id))
+            return True
+
+    service = SignalService(
+        store=SkippingStore(),
+        extractor=object(),
+        planner=object(),
+        executor=object(),
+        approval_bot=object(),
+        coordinator=object(),
+        context_provider=object(),
+        auto_approval_mode=AutoApprovalMode.ALL,
+    )
+    action = PositionActionIntent(
+        source=_source(),
+        symbol="TRUMPUSDT",
+        action=PositionActionType.REDUCE,
+        close_pct=50,
+        expected_side=Side.LONG,
+        summary="Reduce TRUMP by half",
+        confidence=1,
+    )
+    action.approval_mode = ApprovalMode.SKIPPED
+
+    asyncio.run(
+        service._dispatch_position_actions((action,), snapshot=types.SimpleNamespace())
+    )
+
+    assert len(skipped_calls) == 1
+    assert skipped_calls[0][0] == action.action_id
+    assert skipped_calls[0][1] is None
+
+
 def test_position_action_without_live_position_is_skipped() -> None:
     common = {
         "store": object(),
