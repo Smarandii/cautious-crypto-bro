@@ -896,6 +896,17 @@ async def main(args):
             ),
             "Choose a single zone observation mode",
         )
+        require(
+            not (
+                getattr(args, "zone_amendment", False)
+                and (
+                    getattr(args, "zone_protection", False)
+                    or getattr(args, "zone_pair_cancellation", False)
+                    or getattr(args, "zone_process_recovery", False)
+                )
+            ),
+            "Choose a single zone observation mode",
+        )
     e = executor()
     try:
         if args.resume_db:
@@ -948,6 +959,8 @@ async def main(args):
             for side in (Side.LONG, Side.SHORT):
                 if getattr(args, "zone_process_recovery", False):
                     await observe_zone_process_recovery(side)
+                elif getattr(args, "zone_amendment", False):
+                    await observe_zone_amendment(side)
                 elif zone_mode:
                     await observe_zone_stops(
                         e,
@@ -963,7 +976,9 @@ async def main(args):
             result="passed",
             coverage=(
                 "native independent-exit stop observation; no activation proof"
-                if zone_mode or getattr(args, "zone_process_recovery", False)
+                if zone_mode
+                or getattr(args, "zone_process_recovery", False)
+                or getattr(args, "zone_amendment", False)
                 else "real exchange plus labeled application fault injection"
             ),
             not_live_tested=[
@@ -971,7 +986,12 @@ async def main(args):
                 "immediate fill during installation",
                 "Telegram delivery",
                 "LLM accuracy",
-                "paired-stop amendment/cancellation races",
+                *(
+                    []
+                    if getattr(args, "zone_amendment", False)
+                    else ["paired-stop amendment races"]
+                ),
+                "paired-stop cancellation races",
                 "independent-zone offline/restart lifecycle",
             ],
         )
@@ -1353,6 +1373,109 @@ async def observe_zone_stops(
             ownership.restore()
 
 
+async def observe_zone_amendment(side):
+    """Native one-sided amend of A's partial stop while B's pair stays exact."""
+    e = executor()
+    prefix = ""
+    ownership = None
+    try:
+        require(symbol_flat(await e.account_state()), "Zone probe symbol must be flat")
+        context = await e.market_context(SYMBOL)
+        unit = max(
+            context.min_qty, context.min_notional * D("1.2") / context.market_price
+        )
+        unit = rounded(unit, context.qty_step) + context.qty_step
+        require(
+            unit * 3 * context.market_price <= 50, "Zone probe notional bound exceeded"
+        )
+        sign = D(1) if side is Side.LONG else D(-1)
+        prefix = f"ccb-zone-{uuid4().hex[:16]}-"
+        parents = [prefix + "a", prefix + "b"]
+        quantities = [unit, unit * 2]
+        stops = [
+            rounded(context.market_price * (1 - sign * distance), context.tick_size)
+            for distance in (D("0.05"), D("0.06"))
+        ]
+        targets = [
+            rounded(context.market_price * (1 + sign * distance), context.tick_size)
+            for distance in (D("0.08"), D("0.09"))
+        ]
+        ownership = await ProbeOwnership.start(e)
+        emit("mutation_started", side=side.value, scenario="zone_amendment")
+        for index, parent in enumerate(parents):
+            response = await asyncio.to_thread(
+                e._client.private_post,
+                "/v5/order/create",
+                zone_entry_params(
+                    side, parent, quantities[index], stops[index], targets[index]
+                ),
+            )
+            require(
+                bool(response.get("result", {}).get("orderId")),
+                "Missing entry acknowledgement",
+            )
+            expected = sum(quantities[: index + 1])
+            await wait_account(
+                e,
+                lambda a, expected=expected, parent=parent: (
+                    position(a) is not None
+                    and position(a).size == expected
+                    and zone_children(a, parent, "SL")
+                    and zone_children(a, parent, "TP")
+                ),
+                "zone entry and parent-linked pair",
+            )
+        account = await e.account_state()
+        before = zone_pair_snapshot(account, parents, quantities, stops, targets)
+        a_sl = before[0]["SL"]
+        new_trigger = rounded(stops[0] * (1 - sign * D("0.01")), context.tick_size)
+        require(new_trigger != stops[0], "Amendment trigger must differ")
+        ownership.record_observation(
+            "before_amendment", pair_evidence(account, parents)
+        )
+        response = await asyncio.to_thread(
+            e._client.private_post,
+            "/v5/order/amend",
+            {
+                "category": "linear",
+                "symbol": SYMBOL,
+                "orderId": a_sl.order_id,
+                "triggerPrice": str(new_trigger),
+            },
+        )
+        acknowledged = response.get("retCode") == 0
+        account = await e.account_state()
+        a_sls = zone_children(account, parents[0], "SL")
+        a_tps = zone_children(account, parents[0], "TP")
+        require_original_pair(account, parents[1], before[1])
+        emit(
+            "zone_amendment_observation",
+            side=side.value,
+            acknowledged=acknowledged,
+            a_sl_identity_preserved=(
+                len(a_sls) == 1 and a_sls[0].order_id == a_sl.order_id
+            ),
+            a_sl_trigger_matches_request=(
+                len(a_sls) == 1 and a_sls[0].trigger_price == new_trigger
+            ),
+            a_tp_still_present=(
+                len(a_tps) == 1 and a_tps[0].order_id == before[0]["TP"].order_id
+            ),
+            b_pair_preserved=True,
+            net_quantity_units=position(account).size / unit
+            if position(account)
+            else 0,
+            activation_proven=False,
+        )
+    finally:
+        try:
+            await cleanup(e, side, prefix or "ccb-zone-aborted-", ownership=ownership)
+        finally:
+            if ownership is not None:
+                ownership.restore()
+            e.close()
+
+
 async def observe_zone_process_recovery(side):
     directory = os.environ.get("CCB_PROBE_EVIDENCE_DIR")
     require(bool(directory), "Persistent recovery evidence required")
@@ -1473,6 +1596,7 @@ if __name__ == "__main__":
     parser.add_argument("--execute-demo", action="store_true")
     parser.add_argument("--zone-protection", action="store_true")
     parser.add_argument("--zone-pair-cancellation", action="store_true")
+    parser.add_argument("--zone-amendment", action="store_true")
     parser.add_argument("--zone-process-recovery", action="store_true")
     parser.add_argument(
         "--zone-recovery-worker", choices=["LONG", "SHORT"], help=argparse.SUPPRESS
