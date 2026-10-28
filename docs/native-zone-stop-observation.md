@@ -115,6 +115,41 @@ bounded process-loss case for both sides on this revision; exit races, late
 fills, amendments and complete offline allocation semantics stay #139 gates and
 #123 stays unactivated.
 
+## One-sided amendment observed — 2026-10-28
+
+Deployed revision `0bacf61c9a4f8c085b5a15648a8bf87b06fa5163` (v2.2.13) ran
+`--execute-demo --zone-amendment` for both sides under the exclusive runner
+boundary. Each case opened two unequal same-side zones (one and two units)
+with exact parent-linked TP/SL pairs, amended zone A's partial stop trigger by
+one percent away from market, and re-read everything from fresh snapshots:
+
+| Case | Amend acknowledged | A SL identity | A SL trigger | A TP present | B original pair | Net quantity |
+| --- | --- | --- | --- | --- | --- | --- |
+| LONG | Yes | Preserved | Matches request | Yes | Preserved | 3 units |
+| SHORT | Yes | Preserved | Matches request | Yes | Preserved | 3 units |
+
+A one-sided trigger amendment therefore did not relocate, resize or unbind
+either zone's protection on the native adapter, and zone B's allocation stayed
+exact while A's stop moved. Synthetic adapter scenarios additionally pin that
+a late zone-B entry fill cannot consume zone A's allocation and that a lost
+amendment acknowledgement reconciles from fresh reads with exactly one amend
+request and no adoption of unknown identities. Cleanup verified flat with no
+test-symbol orders in both cases; the normal app resumed without restart.
+Private journals and receipts remain under
+`audit-artifacts/bybit-demo-20261028-120611-754845`.
+
+### Explicitly unobserved
+
+Bybit rejects an amendment that crosses a partial take-profit or stop-loss
+trigger against the position side (error 10001: the trigger must stay beyond
+base/last price), so a native trigger-fired peer cancellation cannot be forced
+on demand; a bounded wait for natural market movement would be
+non-deterministic and was not attempted. Trigger-fired TP/SL peer
+cancellation, partial-fill timing and immediate-fill-during-installation
+therefore remain synthetic-only or documented-contract conclusions. They do
+not block this issue's closure because no activation decision depends on
+them, but they remain listed limitations for #123's activation gates.
+
 ## Run-owned cleanup evidence
 
 For the bounded #190 process-loss rehearsal, use the same runner with

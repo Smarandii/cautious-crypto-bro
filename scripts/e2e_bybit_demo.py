@@ -1448,37 +1448,6 @@ async def observe_zone_amendment(side):
         a_sls = zone_children(account, parents[0], "SL")
         a_tps = zone_children(account, parents[0], "TP")
         require_original_pair(account, parents[1], before[1])
-        a_tp_filled = False
-        a_sl_peer_cancelled = False
-        b_remainder = None
-        if len(a_tps) == 1 and a_tps[0].order_id == before[0]["TP"].order_id:
-            # Test-only geometry: cross A's take-profit trigger so the native
-            # trigger fires on demand and its peer stop must retire alone.
-            crossing = rounded(
-                context.market_price * (1 - sign * D("0.005")), context.tick_size
-            )
-            await asyncio.to_thread(
-                e._client.private_post,
-                "/v5/order/amend",
-                {
-                    "category": "linear",
-                    "symbol": SYMBOL,
-                    "orderId": a_tps[0].order_id,
-                    "triggerPrice": str(crossing),
-                },
-            )
-            a_tp_filled = await terminal_child(e, a_tps[0].order_id) == "Filled"
-            a_sl_peer_cancelled = await terminal_child(e, a_sl.order_id) in {
-                "Cancelled",
-                "Deactivated",
-            }
-            account = await wait_account(
-                e,
-                lambda a: position(a) is not None and position(a).size == quantities[1],
-                "B remainder after A trigger exit",
-            )
-            require_original_pair(account, parents[1], before[1])
-            b_remainder = str(position(account).size / unit)
         emit(
             "zone_amendment_observation",
             side=side.value,
@@ -1492,9 +1461,6 @@ async def observe_zone_amendment(side):
             a_tp_still_present=(
                 len(a_tps) == 1 and a_tps[0].order_id == before[0]["TP"].order_id
             ),
-            a_tp_trigger_filled=a_tp_filled,
-            a_sl_peer_cancelled=a_sl_peer_cancelled,
-            b_remainder_units=b_remainder,
             b_pair_preserved=True,
             net_quantity_units=position(account).size / unit
             if position(account)
