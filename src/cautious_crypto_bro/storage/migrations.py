@@ -42,6 +42,19 @@ WHERE status = 'UNCERTAIN'
 )
 
 
+MIGRATION_13_TO_14_SQL = """
+CREATE TABLE zone_orders_v14 (
+    order_id TEXT PRIMARY KEY,
+    zone_id TEXT NOT NULL REFERENCES zone_allocations(zone_id),
+    order_link_id TEXT UNIQUE CHECK(order_link_id IS NULL OR length(order_link_id)>0),
+    payload_json TEXT NOT NULL
+);
+INSERT INTO zone_orders_v14 SELECT order_id,zone_id,order_link_id,payload_json FROM zone_orders;
+DROP TABLE zone_orders;
+ALTER TABLE zone_orders_v14 RENAME TO zone_orders;
+"""
+
+
 async def initialize_database(database_path: Path) -> None:
     database_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -55,7 +68,7 @@ async def initialize_database(database_path: Path) -> None:
         if version == LATEST_SCHEMA_VERSION:
             return
 
-        if version in {4, 5, 6, 7, 8, 9, 10, 11, 12}:
+        if version in {4, 5, 6, 7, 8, 9, 10, 11, 12, 13}:
             try:
                 steps = (
                     (4, MIGRATION_4_TO_5_SQL),
@@ -67,6 +80,7 @@ async def initialize_database(database_path: Path) -> None:
                     (10, SOURCE_DECISION_SCHEMA_SQL),
                     (11, ZONE_LEDGER_SCHEMA_SQL),
                     (12, PLANNING_CANDIDATE_SCHEMA_SQL),
+                    (13, MIGRATION_13_TO_14_SQL),
                 )
                 migration_sql = "\n".join(
                     sql for source_version, sql in steps if version <= source_version
@@ -76,8 +90,11 @@ async def initialize_database(database_path: Path) -> None:
                     "BEGIN IMMEDIATE;\n"
                     + migration_sql
                     + f"\nPRAGMA user_version = {LATEST_SCHEMA_VERSION};\n"
-                    + "COMMIT;"
                 )
+                cursor = await db.execute("PRAGMA foreign_key_check")
+                if await cursor.fetchall():
+                    raise RuntimeError("Migrated database has invalid foreign keys")
+                await db.commit()
 
             except Exception:
                 await db.rollback()
@@ -88,7 +105,7 @@ async def initialize_database(database_path: Path) -> None:
         if version != 0:
             raise RuntimeError(
                 "Unsupported database schema version: "
-                f"{version}; expected 0, 4, 5, 6, 7, 8, 9, 10, 11, 12, "
+                f"{version}; expected 0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, "
                 f"or {LATEST_SCHEMA_VERSION}"
             )
 

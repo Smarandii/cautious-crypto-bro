@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-LATEST_SCHEMA_VERSION = 13
+LATEST_SCHEMA_VERSION = 14
 
 ZONE_LEDGER_SCHEMA_SQL = """
 CREATE TABLE zone_groups (
@@ -18,7 +18,7 @@ CREATE INDEX ix_zone_allocations_group ON zone_allocations(group_id);
 CREATE TABLE zone_orders (
     order_id TEXT PRIMARY KEY,
     zone_id TEXT NOT NULL REFERENCES zone_allocations(zone_id),
-    order_link_id TEXT NOT NULL UNIQUE,
+    order_link_id TEXT UNIQUE CHECK(order_link_id IS NULL OR length(order_link_id)>0),
     payload_json TEXT NOT NULL
 );
 CREATE TABLE zone_executions (

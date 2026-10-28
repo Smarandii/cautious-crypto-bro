@@ -1,6 +1,6 @@
 [project]
 name = "cautious-crypto-bro"
-version = "2.2.15"
+version = "2.2.16"
 description = "Human-in-the-loop Telegram crypto signal interpreter and Bybit demo executor"
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]

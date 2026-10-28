@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .domain import Side
 
@@ -16,9 +16,23 @@ class ZoneOrder(BaseModel):
 
     zone_id: UUID
     order_id: str = Field(min_length=1, pattern=r"^\S+$")
-    order_link_id: str = Field(min_length=1, pattern=r"^\S+$")
+    order_link_id: str = Field(pattern=r"^\S*$")
+    parent_order_link_id: str = Field(default="", pattern=r"^\S*$")
     role: Literal["ENTRY", "EXIT", "STOP"]
     quantity: Decimal = Field(gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def explicit_native_parent(self) -> ZoneOrder:
+        # Zen of Python: "Explicit is better than implicit." Native children
+        # have no submitted client link; never invent one to imply ownership.
+        if self.parent_order_link_id:
+            if self.order_link_id or self.role == "ENTRY":
+                raise ValueError(
+                    "Native child requires absent client link and closing role"
+                )
+        elif not self.order_link_id:
+            raise ValueError("Order requires a client link or explicit native parent")
+        return self
 
 
 class ZoneExecution(BaseModel):
