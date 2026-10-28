@@ -210,3 +210,30 @@ not prove independent-zone exit races, paired-order lifecycle or offline safety.
 [Grug, Testing](https://grugbrain.dev/) (faithful paraphrase): exercise real system
 boundaries with a small reliable end-to-end suite. That principle informed this
 native observation instead of treating a simulated stop lifecycle as broker proof.
+
+
+## Post-amendment explicit cancellation — observation mode #229
+
+Run `python scripts/run_bybit_demo_e2e.py --execute-demo
+--zone-amendment-pair-cancellation` (on one command line) only in an exclusive
+Demo window after deployment. This is separate from amendment-only observation.
+The same two unequal allocations and four exact parent-linked children are used.
+After verifying A's amended SL identity, quantity and requested trigger, cancel
+A's original TP exactly once. Reconcile a lost cancellation acknowledgement from
+fresh reads without resubmitting. After two seconds, retain A's original TP
+terminal history, the original SL's terminal or exact live state, B's unchanged
+pair and unchanged net quantity in the private journal, then clean up.
+
+The runner requires both sides' `zone_amendment_pair_cancellation_observation`
+receipts in addition to the amendment receipts and independently verified flat
+cleanup. A retained peer and a retired peer are both observable results; neither
+permits activation. A retained peer is evidence of its live state at observation,
+not a promise that it remains live forever. Missing/foreign/ambiguous evidence
+fails closed. No result is implied until the native receipts are recorded in
+[#229](https://github.com/Smarandii/cautious-crypto-bro/issues/229).
+
+This tests explicit cancellation after `/v5/order/amend`, not trigger-fired OCO.
+Bybit's warning about one-sided modifications through `/v5/position/trading-stop`
+must not be assumed to describe the other endpoint without observation. The
+remaining partial-fill, live-touch and offline-allocation gates under #123 stay
+open; preserved child identities alone do not prove paired retirement.

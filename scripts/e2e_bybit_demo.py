@@ -907,6 +907,21 @@ async def main(args):
             ),
             "Choose a single zone observation mode",
         )
+    require(
+        not (
+            getattr(args, "zone_amendment_pair_cancellation", False)
+            and any(
+                getattr(args, name, False)
+                for name in (
+                    "zone_protection",
+                    "zone_pair_cancellation",
+                    "zone_process_recovery",
+                    "zone_amendment",
+                )
+            )
+        ),
+        "Choose a single zone observation mode",
+    )
     e = executor()
     try:
         if args.resume_db:
@@ -959,6 +974,8 @@ async def main(args):
             for side in (Side.LONG, Side.SHORT):
                 if getattr(args, "zone_process_recovery", False):
                     await observe_zone_process_recovery(side)
+                elif getattr(args, "zone_amendment_pair_cancellation", False):
+                    await observe_zone_amendment(side, paired_cancellation=True)
                 elif getattr(args, "zone_amendment", False):
                     await observe_zone_amendment(side)
                 elif zone_mode:
@@ -979,6 +996,7 @@ async def main(args):
                 if zone_mode
                 or getattr(args, "zone_process_recovery", False)
                 or getattr(args, "zone_amendment", False)
+                or getattr(args, "zone_amendment_pair_cancellation", False)
                 else "real exchange plus labeled application fault injection"
             ),
             not_live_tested=[
@@ -1091,7 +1109,7 @@ def pair_evidence(account, parents):
 
 
 async def observe_pair_cancellation(
-    e, side, parents, snapshot, remaining_quantity, ownership
+    e, side, parents, snapshot, remaining_quantity, ownership, *, settle_seconds=0
 ):
     account = await e.account_state()
     await ownership.verify(account, side)
@@ -1115,6 +1133,8 @@ async def observe_pair_cancellation(
     # A missing acknowledgment never causes a second cancellation or new order.
     status = await terminal_child(e, original_tp.order_id)
     require(status in {"Cancelled", "Deactivated"}, "A TP filled during cancellation")
+    if settle_seconds:
+        await asyncio.sleep(settle_seconds)
     account = await e.account_state()
     await ownership.verify(account, side)
     require(
@@ -1170,8 +1190,7 @@ async def observe_pair_cancellation(
             "cancellation_acknowledged": acknowledged,
         },
     )
-    emit(
-        "paired_zone_cancellation_observation",
+    observation = dict(
         side=side.value,
         cancellation_acknowledged=acknowledged,
         a_tp_terminal=status,
@@ -1182,6 +1201,8 @@ async def observe_pair_cancellation(
         b_original_pair_preserved=True,
         activation_proven=False,
     )
+    emit("paired_zone_cancellation_observation", **observation)
+    return observation
 
 
 def zone_entry_params(side, parent, quantity, stop, target=None):
@@ -1373,7 +1394,7 @@ async def observe_zone_stops(
             ownership.restore()
 
 
-async def observe_zone_amendment(side):
+async def observe_zone_amendment(side, *, paired_cancellation=False):
     """Native one-sided amend of A's partial stop while B's pair stays exact."""
     e = executor()
     prefix = ""
@@ -1427,6 +1448,7 @@ async def observe_zone_amendment(side):
             )
         account = await e.account_state()
         before = zone_pair_snapshot(account, parents, quantities, stops, targets)
+        await ownership.verify(account, side)
         a_sl = before[0]["SL"]
         new_trigger = rounded(stops[0] * (1 - sign * D("0.01")), context.tick_size)
         require(new_trigger != stops[0], "Amendment trigger must differ")
@@ -1444,7 +1466,22 @@ async def observe_zone_amendment(side):
             },
         )
         acknowledged = response.get("retCode") == 0
-        account = await e.account_state()
+        if paired_cancellation:
+            require(
+                acknowledged
+                and response.get("result", {}).get("orderId") == a_sl.order_id,
+                "Amendment acknowledgement identity unverified",
+            )
+            account = await wait_account(
+                e,
+                lambda a: any(
+                    o.order_id == a_sl.order_id and o.trigger_price == new_trigger
+                    for o in zone_children(a, parents[0], "SL")
+                ),
+                "amended stop trigger",
+            )
+        else:
+            account = await e.account_state()
         a_sls = zone_children(account, parents[0], "SL")
         a_tps = zone_children(account, parents[0], "TP")
         require_original_pair(account, parents[1], before[1])
@@ -1467,6 +1504,35 @@ async def observe_zone_amendment(side):
             else 0,
             activation_proven=False,
         )
+        if paired_cancellation:
+            amended = zone_pair_snapshot(
+                account, parents, quantities, [new_trigger, stops[1]], targets
+            )
+            await ownership.verify(account, side)
+            require(
+                position(account) is not None
+                and position(account).size == sum(quantities),
+                "Net quantity changed before post-amendment cancellation",
+            )
+            ownership.record_observation(
+                "after_amendment", pair_evidence(account, parents)
+            )
+            observation = await observe_pair_cancellation(
+                e,
+                side,
+                parents,
+                amended,
+                sum(quantities),
+                ownership,
+                settle_seconds=2,
+            )
+            emit(
+                "zone_amendment_pair_cancellation_observation",
+                **observation,
+                amendment_verified=True,
+                net_quantity_unchanged=True,
+                settling_seconds=2,
+            )
     finally:
         try:
             await cleanup(e, side, prefix or "ccb-zone-aborted-", ownership=ownership)
@@ -1597,6 +1663,7 @@ if __name__ == "__main__":
     parser.add_argument("--zone-protection", action="store_true")
     parser.add_argument("--zone-pair-cancellation", action="store_true")
     parser.add_argument("--zone-amendment", action="store_true")
+    parser.add_argument("--zone-amendment-pair-cancellation", action="store_true")
     parser.add_argument("--zone-process-recovery", action="store_true")
     parser.add_argument(
         "--zone-recovery-worker", choices=["LONG", "SHORT"], help=argparse.SUPPRESS

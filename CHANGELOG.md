@@ -10,6 +10,33 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.15] - 2026-10-28
+
+### Added
+
+- Opt-in `--zone-amendment-pair-cancellation` rehearsal (#229): verify zone A's
+  one-sided stop amendment, cancel its exact TP once, then observe whether the
+  original peer SL retires or remains live after a two-second settling window.
+  Verify B's original pair and unchanged net quantity before cleanup. Both
+  decisive outcomes are observations, never multi-zone activation proof.
+- Reuse exact ownership journals, lost-acknowledgement read reconciliation,
+  bounded Demo notional and flat-cleanup gates. The runner requires distinct
+  LONG/SHORT receipts for the new phase; old amendment-only receipts cannot
+  satisfy it. Foreign evidence, identity mismatch and B drift fail closed.
+
+### Upgrade, validation and limitations
+
+- Probe/runner changes only; schema 13, trading settings and saved plans are
+  unchanged. Deploy with a stopped-writer, restore-verified backup and verify
+  the exact revision, authentication, supervision and existing native stops.
+  Rollback retains current state and settings with the previous image.
+- Focused validation exercises the real HTTP adapter and simulated retained/lost
+  peer binding, lost acknowledgements without replay, foreign orders, B drift,
+  malformed acknowledgements and runner cleanup/receipt gates. Native results
+  require a separately coordinated run after deployment and remain pending at
+  this code checkpoint. This does not test trigger-fired OCO, partial-fill timing
+  or complete independent-zone offline behavior; #123 remains unactivated.
+
 ## [2.2.14] - 2026-10-28
 
 Zone amendment evidence checkpoint and trigger-phase scope correction.
