@@ -35,6 +35,7 @@ from .domain import (
     TradingIntent,
 )
 from .storage.planning_candidate import PlanningCandidate
+from .zone_ledger import ZoneExecution, ZoneOrder
 
 # ---------------------------------------------------------------------------
 # Infrastructure ports
@@ -571,10 +572,27 @@ class SignalServiceStore(
     ) -> bool: ...
 
 
+class ZoneLedgerRepository(Protocol):
+    """Durable zone-allocation evidence the coordinator enrolls into."""
+
+    async def register_zone(self, group_id: UUID, intent_id: UUID) -> None: ...
+
+    async def bind_zone_order(self, order: ZoneOrder) -> None: ...
+
+    async def record_zone_execution(self, execution: ZoneExecution) -> None: ...
+
+    async def zone_group_snapshot(
+        self,
+        group_id: UUID,
+        account: AccountStateSummary | None = None,
+    ) -> dict: ...
+
+
 class ExecutionCoordinatorStore(
     IntentRepository,
     PositionActionRepository,
     PositionStrategyRepository,
+    ZoneLedgerRepository,
     Protocol,
 ):
     """Everything ExecutionCoordinator needs from durable storage."""

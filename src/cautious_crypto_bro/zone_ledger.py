@@ -4,11 +4,23 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .domain import Side
+
+# Stable namespace so every process derives the same net-position group for a
+# symbol/side without a lookup round trip (#123 durable enrollment).
+ZONE_GROUP_NAMESPACE = UUID("d7f7a5e3-6c31-4b0a-9d8f-2a9e5b6c1f00")
+
+
+def zone_group_id(symbol: str, side: Side) -> UUID:
+    """Deterministic per-symbol/side zone-group identity (uuid5)."""
+    return uuid5(
+        ZONE_GROUP_NAMESPACE,
+        f"zone-group:{str(symbol).upper()}:{side.value}",
+    )
 
 
 class ZoneOrder(BaseModel):
