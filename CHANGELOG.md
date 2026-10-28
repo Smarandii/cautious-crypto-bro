@@ -10,6 +10,35 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.18] - 2026-10-28
+
+### Added
+
+- Opt-in `report_source_coverage.py --telegram-history` audit (#235) compares
+  supported visible posts with the durable source ledger and current-attempt
+  decisions. Unlike the default stored-only report, it detects canonical posts
+  that were never stored. It uses an isolated session clone with updates disabled,
+  metadata reads only, and a read-only SQLite snapshot. No media downloads,
+  model/exchange calls, message sends or production initialization occur.
+- Publication-window and whole-album settling rules, bounded per-channel history
+  scans, explicit truncation/channel errors and incomplete-intake diagnostics.
+  Interrupted boundary albums cannot become false missing canonical IDs.
+  Recorded pre-model rejection remains distinct from unexplained missing evidence.
+
+### Validation, upgrade and limitations
+
+- Integration checks cover real SQLite preservation, canonical albums, window and
+  scan boundaries, current-attempt decisions, channel isolation and CLI session
+  cleanup. Exit status is 0 for complete visible intake, 2 for gaps/incomplete
+  history and 1 for audit failure. Default offline reporting is unchanged.
+- Schema 14 and trading settings remain unchanged. Use a stopped-writer,
+  restore-verified backup; rollback to 2.2.17 retains the current state and schema.
+- Coverage applies only to supported visible history in the requested window,
+  after its settling margin. It does not certify deleted/inaccessible posts,
+  edits, model classification or execution success. Missing posts are reported,
+  never automatically replayed. Historical outage recovery policy and #123's
+  unfinished independent-zone execution are unchanged.
+
 ## [2.2.17] - 2026-10-28
 
 ### Added

@@ -87,6 +87,33 @@ expiry (introduced in SQLite schema 11). Use `scripts/report_source_coverage.py 
 Historical missing decisions remain unknown; see STRATEGY.md for evidence privacy,
 upgrade and rollback requirements.
 
+To compare available channel history with intake records, explicitly opt in:
+
+```console
+python scripts/report_source_coverage.py --database PATH --hours 24 --telegram-history
+```
+
+Run with the deployed Telegram configuration and session available. This mode
+clones the session into disposable scratch space, disables updates, reads message
+metadata and a read-only ledger snapshot, then disconnects and removes the clone.
+It does not download media, call models or Bybit, send messages, initialize stores
+or replay missing posts. Without `--telegram-history`, the report remains offline.
+
+The publication window ends `--settle-seconds` (default 120) before audit startup.
+Whole albums crossing its lower boundary are included; albums with a tail newer
+than the window end are excluded until all members settle. `--max-messages`
+(default 2000) bounds each channel scan, with one extra item to check its boundary.
+A cap, partial boundary album or channel error makes history incomplete; other
+channels still report. JSON separates `history_complete` from
+`intake_coverage_complete`, and includes missing canonical IDs and status counts
+without source content, channel titles or credentials. Keep reports private.
+Exit 0 means visible supported intake is complete, exit 2 means gaps/incompleteness,
+and exit 1 means the audit failed. Successful intake coverage does not prove
+coverage of deleted/inaccessible history or edits, correct model classification,
+or successful execution. A recorded pre-model rejection counts as a known
+disposition; a completed record without either a current-attempt decision or
+recorded rejection remains unknown. Legacy ledgers are inspected without upgrade.
+
 The schema-12 zone ledger preserves independent frozen budgets and fill ownership
 as groundwork for multiple POIs. It does not enable multi-zone trading; remaining
 protection and execution gates are in `docs/independent-zone-execution.md`.
