@@ -51,6 +51,8 @@ def planning_rejection_kind(error: str) -> str:
         return "price_geometry"
     if "portfolio stop-risk cap" in text:
         return "portfolio_risk_cap"
+    if "bybit rejected request" in text or "symbol invalid" in text:
+        return "exchange_rejected_request"
     return "other"
 
 

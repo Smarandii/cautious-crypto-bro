@@ -14,6 +14,7 @@ from datetime import (
 from decimal import Decimal
 from uuid import UUID
 
+from .bybit.client import is_exchange_rejection
 from .domain import (
     AccountPnlSummary,
     AccountSnapshotDelivery,
@@ -34,6 +35,7 @@ from .domain import (
     SignalExtraction,
     SignalPositionContext,
     SourceMessage,
+    TradeExecutionError,
     TradingIntent,
 )
 from .execution import ExecutionPlanner, ExecutionPlanningError
@@ -1245,6 +1247,20 @@ class SignalService:
             reason = f"{intent.symbol}: {type(exc).__name__}: {exc}"
             planning_rejections.append(reason)
             logger.info("Execution candidate rejected: %s", reason)
+            return None
+        except TradeExecutionError as exc:
+            error = f"{intent.symbol}: {type(exc).__name__}: {exc}"
+            if is_exchange_rejection(exc):
+                # A retCode response is deterministic: completing the source
+                # once with a durable reason never enters the retry path.
+                planning_rejections.append(error)
+                logger.info("Execution candidate rejected by exchange: %s", error)
+                return None
+            planning_errors.append(error)
+            logger.exception(
+                "Execution planning failed for candidate %s",
+                intent.symbol,
+            )
             return None
         except Exception as exc:
             error = f"{intent.symbol}: {type(exc).__name__}: {exc}"
