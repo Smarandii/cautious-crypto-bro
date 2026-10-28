@@ -81,14 +81,36 @@ def recovery_observations_verified(records: list[dict]) -> bool:
     )
 
 
+def amendment_observations_verified(records: list[dict]) -> bool:
+    observed = [r for r in records if r.get("check") == "zone_amendment_observation"]
+    return (
+        len(observed) == 2
+        and {r.get("side") for r in observed} == {"LONG", "SHORT"}
+        and all(
+            r.get("acknowledged") is True
+            and r.get("a_sl_identity_preserved") is True
+            and r.get("a_sl_trigger_matches_request") is True
+            and r.get("b_pair_preserved") is True
+            and isinstance(r.get("a_tp_still_present"), bool)
+            and r.get("activation_proven") is False
+            for r in observed
+        )
+    )
+
+
 def run_suite(
     repo: Path,
     *,
     zone_protection: bool = False,
     zone_pair_cancellation: bool = False,
     zone_process_recovery: bool = False,
+    zone_amendment: bool = False,
 ) -> int:
     if zone_process_recovery and (zone_protection or zone_pair_cancellation):
+        raise ValueError("Choose a single zone observation mode")
+    if zone_amendment and (
+        zone_protection or zone_pair_cancellation or zone_process_recovery
+    ):
         raise ValueError("Choose a single zone observation mode")
     zone_protection = zone_protection or zone_pair_cancellation
 
@@ -168,6 +190,7 @@ def run_suite(
                     *(["--zone-protection"] if zone_protection else []),
                     *(["--zone-pair-cancellation"] if zone_pair_cancellation else []),
                     *(["--zone-process-recovery"] if zone_process_recovery else []),
+                    *(["--zone-amendment"] if zone_amendment else []),
                 ],
                 cwd=repo,
                 env=os.environ | {"CCB_IMAGE": image},
@@ -214,6 +237,8 @@ def run_suite(
                 raise RuntimeError("Paired cancellation observations are incomplete")
             if zone_process_recovery and not recovery_observations_verified(records):
                 raise RuntimeError("Process recovery observations are incomplete")
+            if zone_amendment and not amendment_observations_verified(records):
+                raise RuntimeError("Amendment observations are incomplete")
     except (Exception, KeyboardInterrupt) as exc:
         exit_code = 1
         print(f"Bybit Demo E2E failed: {exc}", file=sys.stderr)
@@ -259,6 +284,11 @@ def main() -> int:
         action="store_true",
         help="Observe native protection after abrupt worker exit and journal recovery",
     )
+    modes.add_argument(
+        "--zone-amendment",
+        action="store_true",
+        help="Observe one-sided partial-stop amendment against the untouched zone",
+    )
     args = parser.parse_args()
     if not args.execute_demo:
         parser.error("Requires --execute-demo; this suite places Bybit Demo orders")
@@ -267,6 +297,7 @@ def main() -> int:
         zone_protection=args.zone_protection,
         zone_pair_cancellation=args.zone_pair_cancellation,
         zone_process_recovery=args.zone_process_recovery,
+        zone_amendment=args.zone_amendment,
     )
 
 
