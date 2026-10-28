@@ -171,12 +171,22 @@ def test_dashboard_data_matches_renderer_contract() -> None:
     assert open_risk["combined_stop_risk_usdt"] is not None
     assert isinstance(open_risk["cap_exceeded"], bool)
     experiment = data["risk"]["demo_long_experiment"]
-    assert experiment["active"] is True
-    assert experiment["multiplier"] == 0.10
+    # Coherence contract, not an era pin: active means a reduced multiplier.
+    assert experiment["active"] is (
+        experiment["multiplier"] < 1 and experiment["base_risk_pct"] is not None
+    )
+    assert experiment["multiplier"] in (0.10, 1.0)
     assert experiment["completed_position_count"] <= experiment["filled_position_count"]
     assert (
         experiment["completed_position_count"]
         == experiment["performance"]["position_count"]
+    )
+    participation = data["risk"]["demo_long_participation_experiment"]
+    assert participation["active"] is True
+    assert participation["cap_epoch_boundary"] == "2026-10-27T20:11:55+00:00"
+    # Epoch labels cover every sizing cohort's assignments exactly once.
+    assert sum(participation["cap_epoch_summary"].values()) == sum(
+        cohort["planned_count"] for cohort in participation["sizing_cohorts"].values()
     )
     exit_experiment = data["risk"]["demo_exit_experiment"]
     assert exit_experiment["profile"] in {
