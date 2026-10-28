@@ -10,6 +10,34 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.11] - 2026-10-28
+
+Portfolio cap-cohort labeling checkpoint.
+
+### Changed
+
+- Label planning-side records with the portfolio cap epoch at the recorded
+  2.2.10 deployment boundary (`2026-10-27T20:11:55+00:00`, #213): the
+  participation CLI prints the boundary and per-cohort epoch counts, and the
+  dashboard exposes `cap_epoch_boundary`, `cap_epoch_summary` and per-row
+  `cap_epoch` labels beside the existing `sizing_cohorts`. Boundary equality
+  belongs to the new epoch; timezone-free, malformed or missing creation
+  evidence stays visible as `unknown` and cannot establish readiness. No
+  readiness gate, trading behavior or setting is changed.
+
+### Upgrade, validation and limitations
+
+- Schema 13 is unchanged; reporting code only, so rollback is a redeploy of
+  the previous image. The full unit suite passed (1170 tests, 87.09%
+  coverage). The post-change read-only checkpoint in #207/#213 found zero
+  historically-skipped posts that would have fit the new cap (161 production
+  decisions scanned; 28 participation skips, 3 manual skips, no capacity
+  skips), so the 4000-USDT cap is preventive capacity for the 1.0x era.
+- An erroneous v2.2.11 tag was pushed briefly before this release-prep
+  revision existed and was deleted unpublished; the release workflow's
+  tag/version/changelog assertion refused it, and the published tag now
+  targets this exact revision.
+
 ## [2.2.10] - 2026-10-27
 
 Operator-directed portfolio stop-risk cap checkpoint.
