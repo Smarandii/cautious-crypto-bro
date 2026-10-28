@@ -1372,6 +1372,20 @@ class SignalService:
 
         for action in position_actions:
             if action.approval_mode is ApprovalMode.SKIPPED:
+                # Resolve durably instead of leaving an eternal PENDING row:
+                # the trader's lifecycle instruction has no matching live
+                # position, so it can never become executable later.
+                skipped = await self._store.mark_position_action_skipped(
+                    action.action_id,
+                    None,
+                )
+                if skipped:
+                    logger.info(
+                        "Position action %s %s skipped durably; "
+                        "no matching live position",
+                        action.action.value,
+                        action.symbol,
+                    )
                 continue
 
             if action.approval_mode is ApprovalMode.AUTO:
