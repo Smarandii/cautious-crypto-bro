@@ -74,6 +74,36 @@ class BybitDemoExecutor:
             symbol,
         )
 
+    async def execution_history(
+        self,
+        symbol: str,
+        since_ms: int,
+    ) -> tuple[dict, ...]:
+        """Raw private execution rows for a symbol since a millisecond time."""
+        return await _run_sync(
+            self._execution_history_sync,
+            symbol,
+            since_ms,
+        )
+
+    def _execution_history_sync(
+        self,
+        symbol: str,
+        since_ms: int,
+    ) -> tuple[dict, ...]:
+        self._sync_clock()
+        return tuple(
+            self._client.paginate_private_list(
+                "/v5/execution/list",
+                {
+                    "category": "linear",
+                    "symbol": symbol,
+                    "startTime": int(since_ms),
+                    "limit": 100,
+                },
+            )
+        )
+
     async def one_minute_closes(
         self,
         symbol: str,

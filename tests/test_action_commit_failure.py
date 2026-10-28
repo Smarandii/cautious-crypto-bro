@@ -108,7 +108,13 @@ def test_confirmed_action_commit_failure_is_durable_and_never_replayed(
             await PositionSupervisor(
                 store=reopened, executor=executor, mutation_lock=lock
             ).reconcile_once()
-            assert not exchange.requests[before:]
+            # The restart must never replay or mutate; read-only zone
+            # execution-history evidence reads are the intended exception.
+            assert not [
+                request
+                for request in exchange.requests[before:]
+                if request[0] != "/v5/execution/list"
+            ]
             assert (
                 sum(
                     path == "/v5/order/create"
