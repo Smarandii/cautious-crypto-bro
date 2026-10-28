@@ -52,6 +52,11 @@ pytestmark = pytest.mark.integration
             "BTCUSDT: portfolio stop-risk cap: no capacity",
             "portfolio_risk_cap",
         ),
+        (
+            "PEPEUSDT: TradeExecutionError: Bybit rejected request: 10001 "
+            "params error: symbol invalid",
+            "exchange_rejected_request",
+        ),
         ("unexpected planning failure", "other"),
     ],
 )

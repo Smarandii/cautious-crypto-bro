@@ -17,6 +17,15 @@ DEMO_BASE_URL = "https://api-demo.bybit.com"
 UNMATCHED_IP_REASON = "Bybit error 10010 (Unmatched IP)"
 
 
+def is_exchange_rejection(error: Exception) -> bool:
+    """True when Bybit explicitly rejected the request (deterministic).
+
+    Transport failures ("Bybit HTTP request failed", timeouts) are not
+    rejections and may succeed on a later attempt.
+    """
+    return bool(re.match(r"Bybit rejected request: -?\d+(?:\s|$)", str(error)))
+
+
 def exchange_failure_reason(error: Exception) -> str:
     """Describe a failure without exposing response text, URLs or credentials."""
     current: BaseException | None = error

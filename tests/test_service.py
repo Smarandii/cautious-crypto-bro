@@ -709,3 +709,77 @@ def test_full_portfolio_cap_completes_source_without_retriable_planning_failure(
 
     assert store.completed == 1
     assert store.failed == 0
+
+
+def test_deterministic_exchange_rejection_is_terminal_not_retryable() -> None:
+    """#237: retCode rejections complete once; transport failures retry."""
+    from types import SimpleNamespace
+
+    from cautious_crypto_bro.bybit.client import is_exchange_rejection
+    from cautious_crypto_bro.domain import (
+        ApprovalMode,
+        AutoApprovalMode,
+        Entry,
+        EntryType,
+        ExecutionPolicy,
+        Side,
+        TradeExecutionError,
+        TradingIntent,
+    )
+
+    intent = TradingIntent(
+        source=post().source,
+        symbol="PEPEUSDT",
+        side=Side.LONG,
+        entry=Entry(type=EntryType.MARKET),
+        stop_loss=90,
+        take_profit=120,
+        summary="unsupported symbol signal",
+        confidence=1,
+        approval_mode=ApprovalMode.AUTO,
+    )
+
+    class RaisingExecutor:
+        def __init__(self, error):
+            self._error = error
+
+        async def market_context(self, symbol):
+            raise self._error
+
+    service = SignalService(
+        store=SimpleNamespace(),
+        extractor=object(),
+        planner=object(),
+        executor=object(),
+        approval_bot=object(),
+        coordinator=object(),
+        context_provider=object(),
+        auto_approval_mode=AutoApprovalMode.ALL,
+    )
+    policy = ExecutionPolicy(
+        trading_capital_usdt=Decimal("1000"),
+        risk_per_trade_pct=Decimal("1"),
+    )
+
+    deterministic = TradeExecutionError(
+        "Bybit rejected request: 10001 params error: symbol invalid"
+    )
+    transient = TradeExecutionError("Bybit HTTP request failed: read timeout")
+    assert is_exchange_rejection(deterministic) is True
+    assert is_exchange_rejection(transient) is False
+
+    rejections: list[str] = []
+    errors: list[str] = []
+    executor = RaisingExecutor(deterministic)
+    service._executor = executor
+    plan = asyncio.run(service._plan_single_intent(intent, policy, errors, rejections))
+    assert plan is None
+    assert len(rejections) == 1 and "symbol invalid" in rejections[0]
+    assert errors == []
+
+    rejections, errors = [], []
+    service._executor = RaisingExecutor(transient)
+    plan = asyncio.run(service._plan_single_intent(intent, policy, errors, rejections))
+    assert plan is None
+    assert rejections == []
+    assert len(errors) == 1 and "read timeout" in errors[0]
