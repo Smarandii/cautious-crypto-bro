@@ -74,6 +74,48 @@ class BybitDemoExecutor:
             symbol,
         )
 
+    async def one_minute_closes(
+        self,
+        symbol: str,
+        *,
+        limit: int = 120,
+    ) -> list[tuple[int, Decimal]]:
+        """Fully-formed 1m candle closes as (start_ms, close), oldest last."""
+        return await _run_sync(
+            self._one_minute_closes_sync,
+            symbol,
+            limit,
+        )
+
+    def _one_minute_closes_sync(
+        self,
+        symbol: str,
+        limit: int,
+    ) -> list[tuple[int, Decimal]]:
+        if not 1 <= limit <= 200:
+            raise TradeExecutionError("Minute-close limit must be between 1 and 200")
+        response = self._client.public_get(
+            "/v5/market/kline",
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "interval": "1",
+                "limit": limit + 1,
+            },
+        )
+        rows = response.get("result", {}).get("list") or []
+        closes: list[tuple[int, Decimal]] = []
+        for row in rows:
+            try:
+                start = int(row[0])
+                close = parse_decimal(row[4])
+            except (IndexError, TypeError, ValueError, ArithmeticError):
+                continue
+            if start > 0 and close is not None and close > 0:
+                closes.append((start, close))
+        closes.sort()
+        return closes
+
     async def account_state(
         self,
     ) -> AccountStateSummary:

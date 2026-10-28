@@ -143,6 +143,13 @@ class Settings(BaseSettings):
         le=1,
     )
 
+    # Demo-only momentum gate: when on, the LONG take/skip assignment follows
+    # the prior 60-minute direction-aligned return instead of the random
+    # bucket; unavailable candles fall back to that bucket.
+    demo_long_momentum_gate: bool = Field(
+        default=False,
+    )
+
     # Caps combined exchange stop risk for new Demo entries. Existing positions
     # are never resized; unset disables the portfolio-level cap.
     demo_portfolio_stop_risk_cap_usdt: Decimal | None = Field(

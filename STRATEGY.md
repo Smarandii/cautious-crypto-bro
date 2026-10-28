@@ -343,3 +343,21 @@ assignment is unresolved; use a minimum 20 assignments per arm and 20 fully
 reconciled take positions as an interim review only, not a profitability claim.
 Use `analyze_long_participation.py BUNDLE` after exporting a fresh forensic
 archive; only the take arm has fees/funding and whole-position payoff metrics.
+
+The pre-registered interim review gate was met on 2026-10-28 (#183): 20/20
+reconciled take positions and 28 skips, zero invalid records. Its momentum
+strata found an adequate positive result only for entries made after a
+direction-aligned positive prior 60-minute return (+1.81 USDT and +0.313R per
+assignment; day-clustered 95% CIs exclude zero in both units), while the
+nonpositive-momentum stratum stayed a coin flip. On that evidence the
+`DEMO_LONG_MOMENTUM_GATE` replaces the coin flip for new LONG plans when on:
+the stratum is computed from fully closed 1-minute candles at planning time
+(the review's exact classifier), take when the aligned 60-minute return is
+positive and skip otherwise; unavailable candle evidence falls back to the
+stable bucket and records the stratum as unavailable. The persisted stratum
+(`long_participation_momentum`) splits future exports into a new cohort —
+pooled reports across this boundary are descriptive only. The skip fraction
+keeps its meaning for the fallback path, and turning the gate off restores
+the randomized experiment exactly for future plans. The strata result is
+observational evidence from a small sample; review it again as the gated
+cohort grows.

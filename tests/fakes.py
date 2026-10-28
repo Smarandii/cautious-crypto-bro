@@ -151,6 +151,17 @@ class FakeAccountGateway:
         self.cancelled_orders: list[str] = []
         self.protection: list[tuple[str, Decimal, Decimal | None]] = []
         self.exits: list[dict[str, Any]] = []
+        self.minute_closes: dict[str, list[tuple[int, Decimal]]] = {}
+        self.minute_closes_calls: list[str] = []
+
+    async def one_minute_closes(
+        self,
+        symbol: str,
+        *,
+        limit: int = 120,
+    ) -> list[tuple[int, Decimal]]:
+        self.minute_closes_calls.append(symbol)
+        return self.minute_closes.get(symbol, [])
 
     async def market_context(self, symbol: str) -> InstrumentContext:
         assert (

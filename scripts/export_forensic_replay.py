@@ -185,6 +185,9 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
                     "approval_mode": row["approval_mode"],
                     "bybit_order_ids": json.loads(row["bybit_order_ids_json"] or "[]"),
                     "arm": arm,
+                    "long_participation_momentum": strategy.get(
+                        "long_participation_momentum"
+                    ),
                     "symbol": plan.get("symbol"),
                     "side": plan.get("side"),
                     "risk_per_trade_pct": policy.get("risk_per_trade_pct"),
@@ -401,6 +404,9 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
                     "long_participation_arm": (policy.get("strategy_v2") or {}).get(
                         "long_participation_arm"
                     ),
+                    "long_participation_momentum": (
+                        policy.get("strategy_v2") or {}
+                    ).get("long_participation_momentum"),
                     "entry_order_ttl_minutes": (policy.get("strategy_v2") or {}).get(
                         "entry_order_ttl_minutes", 0
                     ),
