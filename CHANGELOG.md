@@ -10,6 +10,31 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.14] - 2026-10-28
+
+Zone amendment evidence checkpoint and trigger-phase scope correction.
+
+### Changed
+
+- Revert the on-demand TP-trigger phase of the zone amendment rehearsal
+  (#227): Bybit rejects amendments that cross a partial TP/SL trigger against
+  the position side (error 10001), so a native trigger-fired peer
+  cancellation cannot be forced deterministically. The deterministic
+  one-sided amendment observation (v2.2.13, both sides, preserved identities,
+  triggers and B pair) stands as the native evidence; trigger-fired peer
+  cancellation, partial-fill timing and immediate-fill-during-installation
+  remain documented synthetic/contract limitations for #123's gates.
+- Record the amendment observation table, the synthetic late-fill and
+  lost-amendment-ack scenarios, and the explicit unobserved list in
+  `docs/native-zone-stop-observation.md` (#139).
+
+### Upgrade, validation and limitations
+
+- Probe/docs only; schema 13, settings and service behavior unchanged.
+  Rollback is a redeploy of the previous image. #139 closes with this
+  evidence; #123 remains gated on the supervisor group-protection path and
+  activation evidence.
+
 ## [2.2.13] - 2026-10-28
 
 Native one-sided stop amendment observation for independent zones.
