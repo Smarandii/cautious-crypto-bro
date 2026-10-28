@@ -22,8 +22,18 @@ def _order_matches_binding(order: AccountOrder, binding: ZoneOrder, side: Side) 
         side if opening else (Side.SHORT if side is Side.LONG else Side.LONG)
     )
     closing_order = order.reduce_only or order.close_on_trigger or order.is_protective
+    if binding.parent_order_link_id:
+        expected_kind = "SL" if binding.role == "STOP" else "TP"
+        if (
+            order.parent_order_link_id != binding.parent_order_link_id
+            or order.kind != expected_kind
+            or order.trigger_price is None
+            or order.trigger_price <= 0
+        ):
+            return False
     return (
         order.order_link_id == binding.order_link_id
+        and order.parent_order_link_id == binding.parent_order_link_id
         and order.side is expected_side
         and order.quantity == binding.quantity
         and Decimal("0") <= order.remaining_quantity <= order.quantity
@@ -145,9 +155,25 @@ class ZoneLedgerRepositoryImpl(_Store):
             )
             if await cursor.fetchone() is None:
                 raise StoreError("Order has no registered zone")
+            if order.parent_order_link_id:
+                cursor = await db.execute(
+                    "SELECT payload_json FROM zone_orders WHERE order_link_id=?",
+                    (order.parent_order_link_id,),
+                )
+                row = await cursor.fetchone()
+                parent = ZoneOrder.model_validate_json(row[0]) if row else None
+                if (
+                    parent is None
+                    or parent.zone_id != order.zone_id
+                    or parent.role != "ENTRY"
+                    or order.quantity > parent.quantity
+                ):
+                    raise StoreError(
+                        "Native child requires a same-zone confirmed ENTRY parent"
+                    )
             cursor = await db.execute(
                 "SELECT payload_json FROM zone_orders WHERE order_id=? OR order_link_id=?",
-                (order.order_id, order.order_link_id),
+                (order.order_id, order.order_link_id or None),
             )
             rows = list(await cursor.fetchall())
             if rows:
@@ -161,7 +187,7 @@ class ZoneLedgerRepositoryImpl(_Store):
                     (
                         order.order_id,
                         str(order.zone_id),
-                        order.order_link_id,
+                        order.order_link_id or None,
                         order.model_dump_json(),
                     ),
                 )

@@ -10,6 +10,32 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.16] - 2026-10-28
+
+### Added
+
+- Native zone-child bindings (#231) retain an exact broker order ID and a
+  same-zone confirmed ENTRY parent link, without inventing a client order link.
+  TP/SL siblings can coexist; unknown parents, conflicting ownership and
+  oversized children fail closed. Account snapshots check parent identity and
+  native TP/SL role alongside existing quantity/execution conservation checks.
+
+### Upgrade, validation and limitations
+
+- Schema 14 makes absent native client links NULL while retaining uniqueness
+  for submitted client links. The transactional upgrade preserves legacy order
+  payloads and executions and checks foreign-key integrity before commit.
+  Integration coverage includes both sides, restart, populated schema-13
+  migration and failed-upgrade rollback/retry.
+- Stop the writer and take a restore-verified current-state backup before
+  upgrading. Older binaries reject schema 14. Prefer a forward fix; do not
+  restore an old backup over newer exchange/ledger activity. See the explicit
+  conditional downgrade requirements in `docs/independent-zone-execution.md`.
+- Allocation evidence remains inactive: protection is unverified and trading
+  disabled. Full enrollment, coordinated native protection, source actions and
+  restart-safe group execution in #123 remain unfinished. Risk settings and
+  signal ingestion behavior are unchanged; no new native trade probe is needed.
+
 ## [2.2.15] - 2026-10-28
 
 ### Added

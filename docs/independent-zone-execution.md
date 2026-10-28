@@ -146,6 +146,32 @@ insufficient portfolio capacity; and unrelated pre-existing exposure. In each,
 assert budgets, allocation quantities, actual exchange protection, order lineage,
 operator escalation and absence of duplicate submissions.
 
+## Native-child identity and schema 14
+
+Bybit's observed native TP/SL children have an empty `orderLinkId` and an
+explicit `parentOrderLinkId`. Bind their exact `orderId` only after the parent's
+nonempty client link has been bound to an ENTRY in the same zone. Keep submitted
+client links unique; never substitute a fabricated child link or adopt by prefix.
+The allocation model retains the empty broker field; SQLite stores its absent
+unique key as NULL so siblings do not collide. Snapshot matching checks the exact
+parent, closing side, native TP/SL role, positive trigger and quantity bounds.
+These checks are ownership evidence, not a protection-lifecycle certification.
+
+Upgrade with the writer stopped and a restore-verified current-state backup.
+The schema-13-to-14 transaction rebuilds only the order table, copies payloads
+unchanged and checks all foreign keys before committing the new version. Failed
+upgrades roll back the table and version together; restart retries the upgrade.
+No mixed-version writers are supported. Older binaries reject version 14.
+
+Prefer a forward fix for rollback. A downgrade must operate on a new backup of
+the **current** stopped-writer state and is permitted only if there are no native
+bindings (no NULL client links and no nonempty parent fields). In that case an
+explicit, reviewed transaction may remove only empty `parent_order_link_id`
+defaults from submitted-order JSON, restore the NOT NULL UNIQUE order-link
+constraint, verify unchanged identities/executions and foreign keys, then set
+version 13. If native evidence exists, retain schema 14 and use a compatible
+binary; do not delete that evidence or restore an older state to force rollback.
+
 ## Rationale
 
 [Zen of Python](https://peps.python.org/pep-0020/): "Explicit is better than implicit."

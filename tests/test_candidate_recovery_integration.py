@@ -31,7 +31,7 @@ def test_schema12_upgrade_preserves_sources_without_replaying_history(tmp_path):
     asyncio.run(IntentStore(database).initialize())
     asyncio.run(IntentStore(database).initialize())
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone() == (13,)
+        assert db.execute("PRAGMA user_version").fetchone() == (14,)
         assert db.execute("PRAGMA quick_check").fetchone() == ("ok",)
         assert db.execute("SELECT * FROM source_messages").fetchall() == original
         assert db.execute("SELECT COUNT(*) FROM planning_candidates").fetchone() == (0,)
