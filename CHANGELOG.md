@@ -10,6 +10,39 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.21] - 2026-10-29
+
+Operator-directed wallet-utilization checkpoint (#248, standing top priority).
+
+### Changed
+
+- Raise the stored execution policy's base per-trade risk from 1% to 3% of
+  the live wallet (~212 USDT stop budget per trade) so the strategy's verified
+  good win/loss shape operates at real magnitude; outcomes in the ~±100 USDT
+  ballpark are the operator's goal and a rare full stop-out (~-212 USDT) is
+  explicitly accepted. Exits, entries, stops, profiles and every strategy
+  behavior are untouched.
+- Disable the momentum gate and the participation skip fraction so every
+  actionable post trades; the operator confirmed the signal source and
+  per-trade security are good. The momentum-gate cohort evidence (#223/#183)
+  remains recorded and inspectable; plans from this boundary form an
+  unlabeled-gate cohort and pooled comparisons across it are descriptive only.
+- Portfolio cap stays 4000 USDT (~18 concurrent full-risk plans); Compose
+  carries the two flag changes and the policy row is updated through the
+  existing `scripts/set_execution_policy.py` with a stopped-writer state
+  backup taken first.
+
+### Upgrade, validation and limitations
+
+- Schema and strategy behavior unchanged. Rollback restores the policy to 1%
+  and the flags (gate on, skip 0.50) for future plans; saved plans and
+  positions are never rewritten. Take a stopped-writer, restore-verified state
+  backup before applying the policy update; verify the deployed revision,
+  the printed policy (risk_pct=3), the two Compose flags, Demo
+  authentication, supervision health and native stop protection after
+  deployment. Watch trade-level outcomes via Bybit Closed-PnL and record the
+  first |100 USDT|-scale close in #248.
+
 ## [2.2.20] - 2026-10-28
 
 Durable zone-enrollment checkpoint.

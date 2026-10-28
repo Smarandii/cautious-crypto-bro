@@ -181,6 +181,25 @@ Dashboard exit fields refer to current LONGs, with separate results retained in
 `sizing_cohorts`; the CLI labels every group. Legacy archives lacking plan
 creation evidence remain inspectable in `unknown` but cannot establish readiness.
 
+## Demo wallet-utilization checkpoint (2026-10-29, #248)
+
+At the operator's explicit direction, the stored execution policy raises base
+per-trade risk from 1% to 3% of the live wallet (~212 USDT stop budget per
+trade at the current balance), and Compose disables the momentum gate and the
+participation skip fraction so every actionable post trades. The operator
+verified the strategy and its exits work and requires magnitude: outcomes in
+the ~±100 USDT ballpark are the goal, a rare full stop-out is ~-212 USDT, and
+the $4000 portfolio cap (~18 concurrent full-risk plans) is unchanged.
+Exits, entries, stops, profiles, leverage and every strategy behavior are
+untouched. The policy row is updated through the existing
+`scripts/set_execution_policy.py` with a stopped-writer state backup taken
+first; plans created before the change keep their frozen budgets. Rollback
+restores the policy to 1% and the two Compose flags to their prior values
+(gate on, skip 0.50) for future plans without rewriting saved plans. The
+momentum-gate cohort evidence (#223/#183) remains recorded and inspectable;
+new plans from this boundary form an unlabeled-gate cohort and pooled
+comparisons across it are descriptive only.
+
 ## Demo portfolio stop-risk cap experiment
 
 New Demo plans are limited by a $400 total open stop-risk cap. Planning estimates
