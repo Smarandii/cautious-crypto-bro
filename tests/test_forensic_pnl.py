@@ -71,6 +71,296 @@ def test_read_open_entry_orders_supports_empty_and_legacy_archives(tmp_path) -> 
     assert analyzer.read_open_entry_orders_snapshot(previous) == (None, None, None)
 
 
+def test_reconcile_attributes_by_closing_order_and_ignores_probe_closes(
+    tmp_path,
+) -> None:
+    """#221: re-traded symbols attribute by order identity, never probe dust."""
+    bundle = tmp_path / "retraded.zip"
+    metadata = {
+        "source_channel_id": 123,
+        "confidence": 0.99,
+        "entry_type": "MARKET",
+        "risk_per_trade_pct": "1",
+        "planned_max_loss_usdt": "20",
+        "exit_profile": "payoff_challenger",
+        "entry_order_ttl_minutes": 240,
+    }
+
+    def intent(intent_id, entry_id):
+        return {
+            "intent_id": intent_id,
+            "entry_order_ids": [entry_id],
+            "metadata": dict(metadata),
+            "intent": {
+                "symbol": "DOGEUSDT",
+                "side": "LONG",
+                "stop_loss": "90",
+            },
+        }
+
+    with zipfile.ZipFile(bundle, "w") as archive:
+        first = intent("intent-old", "entry-old")
+        first["bybit"] = {
+            "plan_executions": [
+                {"orderId": "entry-old", "execType": "Trade"},
+                {"orderId": "exit-old", "execType": "Trade"},
+            ]
+        }
+        second = intent("intent-new", "entry-new")
+        second["bybit"] = {
+            "plan_executions": [
+                {"orderId": "entry-new", "execType": "Trade"},
+                {"orderId": "exit-new", "execType": "Trade"},
+            ]
+        }
+        _write_jsonl(
+            archive,
+            "analysis/trade_lineage.jsonl",
+            [{"intents": [first, second]}],
+        )
+        _write_jsonl(
+            archive,
+            "bybit/executions.jsonl",
+            [
+                {
+                    "execType": "Trade",
+                    "orderId": "entry-old",
+                    "execTime": "1000",
+                    "execQty": "2",
+                    "execPrice": "100",
+                    "closedSize": "0",
+                    "orderLinkId": "ccb-v2-aaaa-e1",
+                },
+                {
+                    "execType": "Trade",
+                    "orderId": "exit-old",
+                    "execTime": "1500",
+                    "execQty": "2",
+                    "execPrice": "95",
+                    "closedSize": "2",
+                    "orderLinkId": "ccb-v2-aaaa-tp1",
+                },
+                {
+                    # Untracked probe close inside the old window.
+                    "execType": "Trade",
+                    "orderId": "probe-close",
+                    "execTime": "1600",
+                    "execQty": "3",
+                    "execPrice": "94",
+                    "closedSize": "3",
+                    "orderLinkId": "ccb-zone-rehearsal-a-SL",
+                },
+                {
+                    "execType": "Trade",
+                    "orderId": "entry-new",
+                    "execTime": "2000",
+                    "execQty": "4",
+                    "execPrice": "90",
+                    "closedSize": "0",
+                    "orderLinkId": "ccb-v2-bbbb-e1",
+                },
+                {
+                    "execType": "Trade",
+                    "orderId": "exit-new",
+                    "execTime": "2500",
+                    "execQty": "4",
+                    "execPrice": "99",
+                    "closedSize": "4",
+                    "orderLinkId": "ccb-v2-bbbb-tp1",
+                },
+            ],
+        )
+        _write_jsonl(
+            archive,
+            "bybit/closed_pnl.jsonl",
+            [
+                {
+                    "symbol": "DOGEUSDT",
+                    "side": "Sell",
+                    "updatedTime": "1500",
+                    "closedSize": "2",
+                    "closedPnl": "10",
+                    "openFee": "0.2",
+                    "closeFee": "0.2",
+                    "orderId": "exit-old",
+                },
+                {
+                    "symbol": "DOGEUSDT",
+                    "side": "Sell",
+                    "updatedTime": "1600",
+                    "closedSize": "3",
+                    "closedPnl": "-1",
+                    "openFee": "0.1",
+                    "closeFee": "0.1",
+                    "orderId": "probe-close",
+                },
+                {
+                    "symbol": "DOGEUSDT",
+                    "side": "Sell",
+                    "updatedTime": "2500",
+                    "closedSize": "4",
+                    "closedPnl": "36",
+                    "openFee": "0.3",
+                    "closeFee": "0.3",
+                    "orderId": "exit-new",
+                },
+            ],
+        )
+        _write_jsonl(archive, "bybit/transaction_log.jsonl", [])
+
+    positions = analyzer.reconcile(bundle)
+    by_intent = {position["intent_id"]: position for position in positions}
+
+    old = by_intent["intent-old"]
+    # Without order-identity attribution the probe row over-closes this
+    # position (5/2 = 2.5) and the 99-100% completion tolerance excludes it.
+    assert old["closed_qty"] == 2.0
+    assert old["complete"] is True
+    assert old["net_pnl"] == 10
+    new = by_intent["intent-new"]
+    assert new["closed_qty"] == 4.0
+    assert new["complete"] is True
+    assert new["net_pnl"] == 36
+
+
+def test_reconcile_uses_the_bundle_probe_list_for_shared_link_shapes(
+    tmp_path,
+) -> None:
+    """Rehearsal orders reuse app link shapes; only production ids own rows."""
+    bundle = tmp_path / "shared-shapes.zip"
+    metadata = {
+        "source_channel_id": 123,
+        "confidence": 0.99,
+        "entry_type": "MARKET",
+        "risk_per_trade_pct": "1",
+        "planned_max_loss_usdt": "20",
+        "exit_profile": "payoff_challenger",
+        "entry_order_ttl_minutes": 240,
+    }
+
+    def intent(intent_id, entry_id):
+        return {
+            "intent_id": intent_id,
+            "entry_order_ids": [entry_id],
+            "metadata": dict(metadata),
+            "intent": {
+                "symbol": "DOGEUSDT",
+                "side": "LONG",
+                "stop_loss": "90",
+            },
+            "bybit": {
+                "plan_executions": [
+                    {"orderId": entry_id, "execType": "Trade"},
+                ]
+            },
+        }
+
+    with zipfile.ZipFile(bundle, "w") as archive:
+        first = intent("intent-old", "entry-old")
+        _write_jsonl(
+            archive,
+            "analysis/trade_lineage.jsonl",
+            [{"intents": [first]}],
+        )
+        _write_jsonl(
+            archive,
+            "analysis/probe_order_ids.jsonl",
+            [{"probe_order_ids": ["probe-v2-close", "probe-action-close"]}],
+        )
+        _write_jsonl(
+            archive,
+            "bybit/executions.jsonl",
+            [
+                {
+                    "execType": "Trade",
+                    "orderId": "entry-old",
+                    "execTime": "1000",
+                    "execQty": "2",
+                    "execPrice": "100",
+                    "closedSize": "0",
+                    "orderLinkId": "ccb-v2-aaaa-e1",
+                },
+                {
+                    # A rehearsal order that reuses the app's v2 link shape.
+                    "execType": "Trade",
+                    "orderId": "probe-v2-close",
+                    "execTime": "1500",
+                    "execQty": "3",
+                    "execPrice": "94",
+                    "closedSize": "3",
+                    "orderLinkId": "ccb-v2-probeunknown-t1r1",
+                },
+                {
+                    # A rehearsal close that reuses the action link shape.
+                    "execType": "Trade",
+                    "orderId": "probe-action-close",
+                    "execTime": "1600",
+                    "execQty": "1",
+                    "execPrice": "93",
+                    "closedSize": "1",
+                    "orderLinkId": "ccb-action-probeunknown24",
+                },
+                {
+                    # The position's own coordinator close.
+                    "execType": "Trade",
+                    "orderId": "own-action-close",
+                    "execTime": "1700",
+                    "execQty": "2",
+                    "execPrice": "95",
+                    "closedSize": "2",
+                    "orderLinkId": "ccb-action-ownactionid24",
+                },
+            ],
+        )
+        _write_jsonl(
+            archive,
+            "bybit/closed_pnl.jsonl",
+            [
+                {
+                    "symbol": "DOGEUSDT",
+                    "side": "Sell",
+                    "updatedTime": "1500",
+                    "closedSize": "3",
+                    "closedPnl": "-1",
+                    "openFee": "0.1",
+                    "closeFee": "0.1",
+                    "orderId": "probe-v2-close",
+                },
+                {
+                    "symbol": "DOGEUSDT",
+                    "side": "Sell",
+                    "updatedTime": "1600",
+                    "closedSize": "1",
+                    "closedPnl": "-2",
+                    "openFee": "0.1",
+                    "closeFee": "0.1",
+                    "orderId": "probe-action-close",
+                },
+                {
+                    "symbol": "DOGEUSDT",
+                    "side": "Sell",
+                    "updatedTime": "1700",
+                    "closedSize": "2",
+                    "closedPnl": "-10",
+                    "openFee": "0.2",
+                    "closeFee": "0.2",
+                    "orderId": "own-action-close",
+                },
+            ],
+        )
+        _write_jsonl(archive, "bybit/transaction_log.jsonl", [])
+
+    positions = analyzer.reconcile(bundle)
+
+    assert len(positions) == 1
+    position = positions[0]
+    # Both rehearsal closes are excluded even though their links reuse the
+    # app's shapes; the position's own close attributes exactly.
+    assert position["closed_qty"] == 2.0
+    assert position["complete"] is True
+    assert position["net_pnl"] == -10
+
+
 @pytest.mark.parametrize(
     "closed_size,complete,settlement_time,funding",
     [

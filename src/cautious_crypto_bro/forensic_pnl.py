@@ -189,6 +189,27 @@ def reconcile(path: Path | BinaryIO) -> list[dict]:
         executions = jsonl(archive, root, "bybit/executions.jsonl")
         closed_pnl = jsonl(archive, root, "bybit/closed_pnl.jsonl")
         settlements = jsonl(archive, root, "bybit/transaction_log.jsonl")
+        probe_rows = (
+            jsonl(archive, root, "analysis/probe_order_ids.jsonl")
+            if f"{root}/analysis/probe_order_ids.jsonl" in archive.namelist()
+            else []
+        )
+
+    probe_order_ids = {
+        str(order_id)
+        for row in probe_rows
+        for order_id in (row.get("probe_order_ids") or [])
+    }
+    if not probe_order_ids:
+        # Older bundles: only the unambiguous rehearsal prefixes are known.
+        probe_order_ids = {
+            str(execution.get("orderId") or "")
+            for execution in executions
+            if execution.get("orderId")
+            and str(execution.get("orderLinkId") or "").startswith(
+                ("ccb-zone-", "ccb-recover-")
+            )
+        }
 
     executions_by_order = defaultdict(list)
     for execution in executions:
@@ -197,7 +218,17 @@ def reconcile(path: Path | BinaryIO) -> list[dict]:
 
     positions = _entry_positions(lineage, executions_by_order)
     by_symbol = _position_windows(positions)
-    _assign_closed_pnl(by_symbol, closed_pnl)
+    owned_order_ids: dict[str, str] = {}
+    for source in lineage:
+        for item in source["intents"]:
+            intent_id = str(item.get("intent_id") or "")
+            if not intent_id:
+                continue
+            for fill in (item.get("bybit") or {}).get("plan_executions") or []:
+                order_id = str(fill.get("orderId") or "")
+                if order_id:
+                    owned_order_ids.setdefault(order_id, intent_id)
+    _assign_closed_pnl(by_symbol, closed_pnl, owned_order_ids, probe_order_ids)
     _assign_funding(by_symbol, settlements)
     _finish_positions(positions)
     return positions
@@ -288,31 +319,51 @@ def _position_windows(positions: list[dict]) -> dict[str, list[dict]]:
 
 
 def _assign_closed_pnl(
-    by_symbol: dict[str, list[dict]], closed_pnl: list[dict]
+    by_symbol: dict[str, list[dict]],
+    closed_pnl: list[dict],
+    owned_order_ids: dict[str, str] | None = None,
+    probe_order_ids: frozenset[str] | set[str] | None = None,
 ) -> None:
+    owned_order_ids = owned_order_ids or {}
+    probe_order_ids = probe_order_ids or set()
     for row in closed_pnl:
         symbol = str(row.get("symbol") or "").upper()
         side = position_side(str(row.get("side") or ""))
         timestamp = int(row.get("updatedTime") or row.get("createdTime") or 0)
-        matches = [
-            position
-            for position in by_symbol.get(symbol, [])
-            if position["side"] == side
-            and position["start"] <= timestamp < position["end"]
-        ]
-        if len(matches) != 1:
-            if len(matches) > 1:
-                for position in matches:
-                    position["ambiguous_rows"] += 1
+        closer = str(row.get("orderId") or "")
+        if closer and closer in probe_order_ids:
+            # Untracked probe/rehearsal dust never attributes to an app position.
             continue
-        position = matches[0]
-        position["closed_qty"] += float(row.get("closedSize") or row.get("qty") or 0)
-        position["closed_at"] = max(position["closed_at"], timestamp)
-        position["closed_pnl"] += float(row.get("closedPnl") or 0)
-        position["fees"] += float(row.get("openFee") or 0) + float(
+        attributed = None
+        owner = owned_order_ids.get(closer) if closer else None
+        if owner:
+            candidates = [
+                position
+                for position in by_symbol.get(symbol, [])
+                if position["intent_id"] == owner and position["side"] == side
+            ]
+            if len(candidates) == 1:
+                attributed = candidates[0]
+        if attributed is None:
+            matches = [
+                position
+                for position in by_symbol.get(symbol, [])
+                if position["side"] == side
+                and position["start"] <= timestamp < position["end"]
+            ]
+            if len(matches) != 1:
+                if len(matches) > 1:
+                    for position in matches:
+                        position["ambiguous_rows"] += 1
+                continue
+            attributed = matches[0]
+        attributed["closed_qty"] += float(row.get("closedSize") or row.get("qty") or 0)
+        attributed["closed_at"] = max(attributed["closed_at"], timestamp)
+        attributed["closed_pnl"] += float(row.get("closedPnl") or 0)
+        attributed["fees"] += float(row.get("openFee") or 0) + float(
             row.get("closeFee") or 0
         )
-        position["pnl_rows"] += 1
+        attributed["pnl_rows"] += 1
 
 
 def _assign_funding(by_symbol: dict[str, list[dict]], settlements: list[dict]) -> None:
