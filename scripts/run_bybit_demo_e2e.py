@@ -98,6 +98,24 @@ def amendment_observations_verified(records: list[dict]) -> bool:
     )
 
 
+def amendment_pair_observations_verified(records: list[dict]) -> bool:
+    # Zen of Python: "In the face of ambiguity, refuse the temptation to guess."
+    # Record either verified peer state; neither outcome authorizes activation.
+    observed = [
+        r
+        for r in records
+        if r.get("check") == "zone_amendment_pair_cancellation_observation"
+    ]
+    return all(
+        r.get("amendment_verified") is True
+        and r.get("net_quantity_unchanged") is True
+        and r.get("settling_seconds") == 2
+        for r in observed
+    ) and pair_observations_verified(
+        [{**r, "check": "paired_zone_cancellation_observation"} for r in observed]
+    )
+
+
 def run_suite(
     repo: Path,
     *,
@@ -105,7 +123,13 @@ def run_suite(
     zone_pair_cancellation: bool = False,
     zone_process_recovery: bool = False,
     zone_amendment: bool = False,
+    zone_amendment_pair_cancellation: bool = False,
 ) -> int:
+    if zone_amendment_pair_cancellation and any(
+        (zone_protection, zone_pair_cancellation, zone_process_recovery, zone_amendment)
+    ):
+        raise ValueError("Choose a single zone observation mode")
+    zone_amendment = zone_amendment or zone_amendment_pair_cancellation
     if zone_process_recovery and (zone_protection or zone_pair_cancellation):
         raise ValueError("Choose a single zone observation mode")
     if zone_amendment and (
@@ -190,7 +214,16 @@ def run_suite(
                     *(["--zone-protection"] if zone_protection else []),
                     *(["--zone-pair-cancellation"] if zone_pair_cancellation else []),
                     *(["--zone-process-recovery"] if zone_process_recovery else []),
-                    *(["--zone-amendment"] if zone_amendment else []),
+                    *(
+                        ["--zone-amendment"]
+                        if zone_amendment and not zone_amendment_pair_cancellation
+                        else []
+                    ),
+                    *(
+                        ["--zone-amendment-pair-cancellation"]
+                        if zone_amendment_pair_cancellation
+                        else []
+                    ),
                 ],
                 cwd=repo,
                 env=os.environ | {"CCB_IMAGE": image},
@@ -239,6 +272,11 @@ def run_suite(
                 raise RuntimeError("Process recovery observations are incomplete")
             if zone_amendment and not amendment_observations_verified(records):
                 raise RuntimeError("Amendment observations are incomplete")
+            if (
+                zone_amendment_pair_cancellation
+                and not amendment_pair_observations_verified(records)
+            ):
+                raise RuntimeError("Post-amendment pair observations are incomplete")
     except (Exception, KeyboardInterrupt) as exc:
         exit_code = 1
         print(f"Bybit Demo E2E failed: {exc}", file=sys.stderr)
@@ -289,6 +327,11 @@ def main() -> int:
         action="store_true",
         help="Observe one-sided partial-stop amendment against the untouched zone",
     )
+    modes.add_argument(
+        "--zone-amendment-pair-cancellation",
+        action="store_true",
+        help="Observe exact TP/SL peer cancellation after one-sided SL amendment",
+    )
     args = parser.parse_args()
     if not args.execute_demo:
         parser.error("Requires --execute-demo; this suite places Bybit Demo orders")
@@ -298,6 +341,7 @@ def main() -> int:
         zone_pair_cancellation=args.zone_pair_cancellation,
         zone_process_recovery=args.zone_process_recovery,
         zone_amendment=args.zone_amendment,
+        zone_amendment_pair_cancellation=args.zone_amendment_pair_cancellation,
     )
 
 

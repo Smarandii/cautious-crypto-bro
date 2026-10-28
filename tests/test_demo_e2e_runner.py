@@ -30,6 +30,24 @@ PAIR = {
     "a_peer_retired": True,
 }
 
+AMENDMENT = {
+    "check": "zone_amendment_observation",
+    "side": "LONG",
+    "acknowledged": True,
+    "a_sl_identity_preserved": True,
+    "a_sl_trigger_matches_request": True,
+    "a_tp_still_present": True,
+    "b_pair_preserved": True,
+    "activation_proven": False,
+}
+AMENDED_PAIR = {
+    **PAIR,
+    "check": "zone_amendment_pair_cancellation_observation",
+    "amendment_verified": True,
+    "net_quantity_unchanged": True,
+    "settling_seconds": 2,
+}
+
 RECOVERY = {
     "check": "zone_process_recovery_observation",
     "side": "LONG",
@@ -140,7 +158,16 @@ def test_conflicting_zone_modes_refused_before_docker(tmp_path, monkeypatch):
 )
 @pytest.mark.parametrize(
     "mode",
-    ["standard", "zones", "pairs", "pairs-missing", "recovery", "recovery-missing"],
+    [
+        "standard",
+        "zones",
+        "pairs",
+        "pairs-missing",
+        "recovery",
+        "recovery-missing",
+        "amended-pair",
+        "amended-pair-missing",
+    ],
 )
 def test_runner_lifecycle(
     tmp_path,
@@ -154,6 +181,13 @@ def test_runner_lifecycle(
     zone_protection = mode == "zones"
     paired = mode.startswith("pairs")
     recovery = mode.startswith("recovery")
+    amended_pair = mode.startswith("amended-pair")
+    if amended_pair and process_exit == 0 and expected_exit == 0:
+        records = [*records, AMENDMENT, {**AMENDMENT, "side": "SHORT"}]
+        if mode == "amended-pair":
+            records = [*records, AMENDED_PAIR, {**AMENDED_PAIR, "side": "SHORT"}]
+        else:
+            expected_exit = 1
     if recovery and process_exit == 0 and expected_exit == 0:
         if mode == "recovery":
             records = [*records, RECOVERY, {**RECOVERY, "side": "SHORT"}]
@@ -204,6 +238,8 @@ def test_runner_lifecycle(
         assert ("--zone-protection" in args) is (zone_protection or paired)
         assert ("--zone-pair-cancellation" in args) is paired
         assert ("--zone-process-recovery" in args) is recovery
+        assert ("--zone-amendment-pair-cancellation" in args) is amended_pair
+        assert "--zone-amendment" not in args
         return SimpleNamespace(
             stdout=io.StringIO("\n".join(json.dumps(r) for r in records)),
             wait=lambda: process_exit,
@@ -217,6 +253,7 @@ def test_runner_lifecycle(
             zone_protection=zone_protection,
             zone_pair_cancellation=paired,
             zone_process_recovery=recovery,
+            zone_amendment_pair_cancellation=amended_pair,
         )
         == expected_exit
     )
@@ -229,3 +266,60 @@ def test_runner_lifecycle(
     assert manifest["runtime_image"] == image
     assert len(manifest["suite_sha256"]) == 64
     assert len(manifest["runner_sha256"]) == 64
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        None,
+        {"amendment_verified": False},
+        {"net_quantity_unchanged": False},
+        {"settling_seconds": 0},
+        {"a_tp_terminal": "Unknown"},
+        {"a_peer_retired": False},
+    ],
+)
+def test_amended_pair_requires_distinct_complete_both_side_receipts(change):
+    records = [AMENDED_PAIR, {**AMENDED_PAIR, "side": "SHORT", **(change or {})}]
+    assert runner.amendment_pair_observations_verified(records) is (change is None)
+    assert not runner.amendment_pair_observations_verified(records[:1])
+    assert not runner.amendment_pair_observations_verified(records + records)
+    assert not runner.amendment_pair_observations_verified(
+        [PAIR, {**PAIR, "side": "SHORT"}]
+    )
+
+
+def test_amended_pair_accepts_observed_unbound_peer_with_lost_ack():
+    records = [
+        {
+            **AMENDED_PAIR,
+            "side": side,
+            "a_peer_retired": False,
+            "a_peer_sl_status": "Untriggered",
+            "cancellation_acknowledged": False,
+        }
+        for side in ("LONG", "SHORT")
+    ]
+    assert runner.amendment_pair_observations_verified(records)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "zone_protection",
+        "zone_pair_cancellation",
+        "zone_process_recovery",
+        "zone_amendment",
+    ],
+)
+def test_amended_pair_refuses_conflicting_mode_before_docker(
+    tmp_path, monkeypatch, other
+):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Conflicting modes reached Docker")
+
+    monkeypatch.setattr(runner.subprocess, "run", forbidden)
+    with pytest.raises(ValueError, match="single zone observation mode"):
+        runner.run_suite(
+            tmp_path, zone_amendment_pair_cancellation=True, **{other: True}
+        )
