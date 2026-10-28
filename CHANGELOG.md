@@ -10,6 +10,15 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+### Fixed
+
+- Separate LONG participation reports by frozen assignment mechanism inside
+  each sizing cohort (#243). Deterministic momentum decisions, hash fallback,
+  historical untagged records and unknown provenance remain visible separately.
+  Gated, mixed and unknown samples cannot satisfy randomized review gates;
+  historical untagged readiness is descriptive and no longer claims an ITT effect.
+  Trading policy, sizing, saved plans and schema are unchanged.
+
 ## [2.2.20] - 2026-10-28
 
 Durable zone-enrollment checkpoint.

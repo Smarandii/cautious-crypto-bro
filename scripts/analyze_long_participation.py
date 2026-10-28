@@ -18,9 +18,12 @@ from analyze_signal_followthrough import load_market_candles  # noqa: E402
 
 from cautious_crypto_bro.forensic_pnl import (  # noqa: E402
     LONG_FULL_RISK_STARTED_AT,
+    PARTICIPATION_ASSIGNMENT_DESCRIPTIONS,
     PORTFOLIO_CAP_4000_STARTED_AT,
     cap_epoch_cohorts,
     long_sizing_cohorts,
+    participation_assignment_basis,
+    participation_assignment_cohorts,
     reconcile,
     summarize,
 )
@@ -80,6 +83,11 @@ def _momentum_stratum(
     market_candles_by_symbol: dict[str, list[dict]],
 ) -> str | None:
     """Classify an assignment by direction-aligned, closed-candle momentum."""
+    tag = assignment.get("long_participation_momentum")
+    if tag is not None:
+        if not isinstance(tag, str):
+            return None
+        return {"positive": "skip_positive", "nonpositive": "keep_nonpositive"}.get(tag)
     side = assignment.get("side")
     symbol = assignment.get("symbol")
     created_at = assignment.get("created_at")
@@ -234,7 +242,8 @@ def _report_momentum_strata(
     print(
         "long_participation_momentum_note=60m prior direction-aligned return "
         "from fully closed 1m candles; take-arm outcomes are pooled across "
-        "randomized exit profiles; strata are descriptive until adequately sampled"
+        "exit profiles; stored momentum takes precedence, legacy untagged rows "
+        "use candles; strata are descriptive and do not establish a causal effect"
     )
     print(f"long_participation_momentum_unclassified={unclassified}")
 
@@ -293,9 +302,17 @@ def report(bundle: Path) -> None:
                 f"{epoch}={count}" for epoch, count in sorted(epoch_counts.items())
             )
         )
-        _report_cohort(
-            rows, positions, market_candles_by_symbol, reviewable=cohort != "unknown"
-        )
+        for mechanism, mechanism_rows in participation_assignment_cohorts(rows).items():
+            if mechanism_rows:
+                print(f"long_participation_assignment_cohort={mechanism}")
+                _report_cohort(
+                    mechanism_rows,
+                    positions,
+                    market_candles_by_symbol,
+                    reviewable=cohort != "unknown",
+                )
+        if not rows:
+            _report_cohort([], positions, market_candles_by_symbol, reviewable=False)
 
 
 def _report_cohort(
@@ -305,6 +322,8 @@ def _report_cohort(
     *,
     reviewable: bool,
 ) -> None:
+    mechanism = participation_assignment_basis(assignments)
+    eligible = not assignments or mechanism in {"legacy_untagged", "hash_fallback"}
     by_arm = {
         arm: [item for item in assignments if item.get("arm") == arm]
         for arm in ("take", "skip")
@@ -345,7 +364,11 @@ def _report_cohort(
     invalid_take = [
         item for item in by_arm["take"] if item.get("approval_mode") != "AUTO"
     ]
-    print("long_participation_assignment_basis=auto-approved Strategy V2 LONG plans")
+    print(f"long_participation_assignment_basis={mechanism}")
+    print(
+        "long_participation_assignment_description="
+        + PARTICIPATION_ASSIGNMENT_DESCRIPTIONS[mechanism]
+    )
     print(
         "long_participation_assignment_note=skip contributes zero portfolio PnL; "
         "take PnL is not final until its whole position reconciles; unresolved takes "
@@ -367,6 +390,7 @@ def _report_cohort(
 
     ready = (
         reviewable
+        and eligible
         and unresolved_take == 0
         and not invalid_skip
         and not invalid_take
@@ -376,11 +400,11 @@ def _report_cohort(
     )
     print(
         "long_participation_status="
-        f"{'ready_for_review' if ready else 'collecting'}"
+        f"{'ready_for_review' if ready else 'collecting' if eligible else 'descriptive_only'}"
         f"/take_target:{REVIEW_TARGET_PER_ARM}"
         f"/skip_target:{REVIEW_TARGET_PER_ARM}"
     )
-    if ready:
+    if ready and mechanism == "hash_fallback":
         interval = _day_cluster_interval(take_values_by_day, seed=88231)
         take_mean = sum(sum(values) for values in take_values_by_day.values()) / len(
             by_arm["take"]
