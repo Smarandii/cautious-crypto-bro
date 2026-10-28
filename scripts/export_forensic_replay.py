@@ -308,16 +308,30 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
     # Orders placed by this production database's own strategies and actions.
     # The rehearsal suites reuse the same link conventions with their own
     # disposable stores, so link shape alone cannot separate them.
-    own_strategy_prefixes = {
-        f"ccb-v2-{UUID(row['strategy_id']).hex[:20]}-"
-        for row in database.execute("SELECT strategy_id FROM position_strategies")
-        if _is_uuid(row["strategy_id"])
+    tables = {
+        row["name"]
+        for row in database.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
     }
-    own_action_prefixes = {
-        f"ccb-action-{UUID(row['action_id']).hex[:24]}"
-        for row in database.execute("SELECT action_id FROM position_actions")
-        if _is_uuid(row["action_id"])
-    }
+    own_strategy_prefixes = set()
+    own_action_prefixes = set()
+    if "position_strategies" in tables:
+        own_strategy_prefixes = {
+            f"ccb-v2-{UUID(row['strategy_id']).hex[:20]}-"
+            for row in database.execute("SELECT strategy_id FROM position_strategies")
+            if _is_uuid(row["strategy_id"])
+        }
+    if "position_actions" in tables:
+        own_action_prefixes = {
+            f"ccb-action-{UUID(action_id).hex[:24]}"
+            for payload in (
+                row[0]
+                for row in database.execute("SELECT payload_json FROM position_actions")
+            )
+            for action_id in [str((json.loads(payload) or {}).get("action_id") or "")]
+            if action_id and _is_uuid(action_id)
+        }
 
     def _probe_link(link: str) -> bool:
         if link.startswith(("ccb-zone-", "ccb-recover-")):
