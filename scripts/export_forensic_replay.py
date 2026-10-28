@@ -8,6 +8,7 @@ import zipfile
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 from cautious_crypto_bro.bybit.client import DEMO_BASE_URL, BybitClient
 from cautious_crypto_bro.config import get_settings
@@ -16,6 +17,14 @@ WINDOW = timedelta(days=7)
 KLINE_CHUNK_MS = 1_000 * 60_000
 MARKET_CANDLE_LOOKBACK_MINUTES = 240
 MARKET_CANDLE_LOOKBACK_MS = MARKET_CANDLE_LOOKBACK_MINUTES * 60_000
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
 
 
 def _timestamp_ms(value: str) -> int:
@@ -296,6 +305,38 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
         if float(position.get("size") or 0) > 0
     ]
 
+    # Orders placed by this production database's own strategies and actions.
+    # The rehearsal suites reuse the same link conventions with their own
+    # disposable stores, so link shape alone cannot separate them.
+    own_strategy_prefixes = {
+        f"ccb-v2-{UUID(row['strategy_id']).hex[:20]}-"
+        for row in database.execute("SELECT strategy_id FROM position_strategies")
+        if _is_uuid(row["strategy_id"])
+    }
+    own_action_prefixes = {
+        f"ccb-action-{UUID(row['action_id']).hex[:24]}"
+        for row in database.execute("SELECT action_id FROM position_actions")
+        if _is_uuid(row["action_id"])
+    }
+
+    def _probe_link(link: str) -> bool:
+        if link.startswith(("ccb-zone-", "ccb-recover-")):
+            return True
+        if link.startswith("ccb-v2-"):
+            return not any(link.startswith(prefix) for prefix in own_strategy_prefixes)
+        if link.startswith("ccb-action-"):
+            return not any(link.startswith(prefix) for prefix in own_action_prefixes)
+        return False
+
+    probe_order_ids = sorted(
+        {
+            str(execution.get("orderId"))
+            for execution in executions
+            if execution.get("orderId")
+            and _probe_link(str(execution.get("orderLinkId") or ""))
+        }
+    )
+
     executions_by_order = defaultdict(list)
     for execution in executions:
         if execution.get("execType") == "Trade":
@@ -313,6 +354,14 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
         ]
         if not primary_fills:
             continue
+        # Every execution of this plan's own orders (entries, installed exits
+        # and coordinator closes) so Closed-PnL can be attributed by identity.
+        plan_executions = [
+            execution
+            for order_id in order_ids
+            for execution in executions_by_order.get(str(order_id), [])
+            if execution.get("execType") == "Trade"
+        ]
         source = intent_payload.get("source") or {}
         entry = intent_payload.get("entry") or {}
         policy = plan.get("policy") or {}
@@ -348,7 +397,10 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
                     "stop_loss": plan["stop_loss"],
                     "take_profit": plan.get("take_profit"),
                 },
-                "bybit": {"executions": primary_fills},
+                "bybit": {
+                    "executions": primary_fills,
+                    "plan_executions": plan_executions,
+                },
             }
         )
 
@@ -389,6 +441,12 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
                     root,
                     "analysis/long_participation_assignments.jsonl",
                     [{"assignments": participation_assignments}],
+                )
+                _write_jsonl(
+                    archive,
+                    root,
+                    "analysis/probe_order_ids.jsonl",
+                    [{"probe_order_ids": probe_order_ids}],
                 )
                 _write_jsonl(archive, root, "bybit/executions.jsonl", executions)
                 _write_jsonl(
