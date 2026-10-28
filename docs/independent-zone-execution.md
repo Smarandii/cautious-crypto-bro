@@ -172,6 +172,30 @@ constraint, verify unchanged identities/executions and foreign keys, then set
 version 13. If native evidence exists, retain schema 14 and use a compatible
 binary; do not delete that evidence or restore an older state to force rollback.
 
+## Native-stop coverage evidence
+
+The transactional group snapshot reports `native_stop_coverage_verified`,
+`native_stop_issues` and one `native_stop_coverage` row per bound ENTRY parent.
+Its remaining quantity comes from exact entry executions minus closing
+executions linked through that parent's native children. An unscoped reduction
+leaves parent quantities unknown, rather than allocating the reduction by guess.
+Equal account or zone quantities cannot replace per-parent conservation.
+
+Every positive remainder needs exactly matching stop quantity from confirmed
+native market SL children at that zone's frozen plan trigger. Check exact IDs,
+parent links, closing side/flags, untriggered state and retained quantities.
+Reject missing, changed, duplicate, oversized and stale native children, and
+unscoped position TP/SL/trailing controls. Without an account snapshot coverage
+is unobserved; a flat group does not certify a live protection path.
+
+This evidence deliberately does not set `protection_verified` or enable trading.
+It does not authorize cancel/replace or certify the interval between those
+operations. A future single group writer must obtain fresh account state under
+the shared mutation lock and satisfy the complete native lifecycle, revision,
+enrollment, risk-admission and source-action contract before changing exposure.
+Dynamic stop revisions require durable expected-trigger evidence; they cannot
+silently overwrite the frozen stop to match external drift.
+
 ## Rationale
 
 [Zen of Python](https://peps.python.org/pep-0020/): "Explicit is better than implicit."

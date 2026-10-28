@@ -10,6 +10,31 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.17] - 2026-10-28
+
+### Added
+
+- Independent native-stop coverage evidence in allocation snapshots (#233).
+  Reconstruct each ENTRY parent's remaining quantity from exact executions and
+  check its own live market stop at the frozen zone trigger. Matching account or
+  zone totals cannot hide missing, changed, duplicate, oversized or stale stops.
+  Unallocated reductions and whole-position TP/SL/trailing controls fail coverage.
+- Coverage diagnostics remain separate from quantity reconciliation. No account
+  means unobserved coverage; a flat group is not proof of a live protection path.
+  Integration checks exercise both sides, restart, unequal zones, multiple
+  parents, partial exits, replacement stops and preserved read-only state.
+
+### Upgrade and limitations
+
+- Schema 14 and trading settings are unchanged. Take a stopped-writer,
+  restore-verified backup; binary rollback to 2.2.16 retains schema compatibility
+  and current state. Do not restore older state over newer exchange activity.
+- This is snapshot evidence for the unfinished group coordinator, not permission
+  to mutate the exchange. Overall protection remains unverified and trading
+  disabled for allocations. Dynamic stop revisions, complete native exit
+  lifecycle, fresh account reads under the mutation lock, enrollment and source
+  actions remain required by #123. No new live probe was needed or submitted.
+
 ## [2.2.16] - 2026-10-28
 
 ### Added

@@ -89,6 +89,152 @@ def _zone_balances(
     return balances, issues
 
 
+def _child_stop_coverage(
+    child: ZoneOrder,
+    observed: list[AccountOrder],
+    remaining: Decimal,
+    side: Side,
+    stop_loss: Decimal,
+) -> tuple[Decimal, set[str]]:
+    matches = [order for order in observed if order.order_id == child.order_id]
+    if not matches:
+        return Decimal("0"), set()
+    if len(matches) != 1:
+        return Decimal("0"), {"DUPLICATE_NATIVE_ORDER"}
+    order = matches[0]
+    issues = set()
+    if remaining == 0 and order.remaining_quantity > 0:
+        issues.add("STALE_NATIVE_CHILD")
+    if child.role == "EXIT" and order.remaining_quantity > remaining:
+        issues.add("NATIVE_EXIT_OVERSIZED")
+    if child.role != "STOP":
+        return Decimal("0"), issues
+    if (
+        not _order_matches_binding(order, child, side)
+        or order.status != "Untriggered"
+        or order.order_type != "Market"
+        or not (order.reduce_only or order.close_on_trigger)
+        or order.trigger_price != stop_loss
+        or order.executed_quantity != 0
+    ):
+        issues.add("NATIVE_STOP_INVALID")
+        return Decimal("0"), issues
+    return order.remaining_quantity, issues
+
+
+def _parent_stop_snapshot(
+    parent: ZoneOrder,
+    remaining: Decimal,
+    orders: list[ZoneOrder],
+    observed: list[AccountOrder],
+    side: Side,
+    stop_loss: Decimal,
+    ambiguous: bool,
+) -> dict:
+    issues = set()
+    covered = Decimal("0")
+    if ambiguous:
+        issues.add("UNALLOCATED_PARENT_REDUCTION")
+    if remaining < 0:
+        issues.add("PARENT_OVERCLOSED")
+    children = [
+        child
+        for child in orders
+        if child.zone_id == parent.zone_id
+        and child.parent_order_link_id == parent.order_link_id
+    ]
+    for child in children:
+        quantity, child_issues = _child_stop_coverage(
+            child, observed, remaining, side, stop_loss
+        )
+        covered += quantity
+        issues.update(child_issues)
+    if covered < remaining:
+        issues.add("NATIVE_STOP_UNDERCOVERED")
+    elif covered > remaining:
+        issues.add("NATIVE_STOP_OVERCOVERED")
+    return {
+        "zone_id": str(parent.zone_id),
+        "entry_order_id": parent.order_id,
+        "remaining_quantity": None if ambiguous else remaining,
+        "covered_quantity": covered,
+        "issues": tuple(sorted(issues)),
+    }
+
+
+def _native_stop_snapshot(
+    zones: list[tuple[str, str]],
+    orders: list[ZoneOrder],
+    executions: list[ZoneExecution],
+    account: AccountStateSummary | None,
+    symbol: str,
+    side: Side,
+    quantity_issues: list[str],
+) -> dict:
+    """Observe frozen-stop coverage; never authorize exchange mutations."""
+    if account is None:
+        return {
+            "native_stop_coverage_verified": None,
+            "native_stop_issues": (),
+            "native_stop_coverage": [],
+        }
+    plans = {zone: ExecutionPlan.model_validate_json(plan) for zone, plan in zones}
+    known = {order.order_id: order for order in orders}
+    entries = {order.order_link_id: order for order in orders if order.role == "ENTRY"}
+    entered = {order.order_id: Decimal("0") for order in entries.values()}
+    closed = dict(entered)
+    ambiguous_zones = set()
+    for execution in executions:
+        binding = known[execution.order_id]
+        if binding.role == "ENTRY":
+            entered[binding.order_id] += execution.quantity
+        else:
+            parent = entries.get(binding.parent_order_link_id)
+            # Zen of Python: "In the face of ambiguity, refuse the temptation
+            # to guess." A net reduction cannot select an entry allocation.
+            if parent is None or parent.zone_id != binding.zone_id:
+                ambiguous_zones.add(binding.zone_id)
+            else:
+                closed[parent.order_id] += execution.quantity
+    issues = {"QUANTITY_NOT_RECONCILED"} if quantity_issues else set()
+    if any(
+        p.symbol == symbol and (p.stop_loss or p.trailing_stop or p.take_profit)
+        for p in account.positions
+    ):
+        issues.add("UNSCOPED_POSITION_PROTECTION")
+    observed = [order for order in account.open_orders if order.symbol == symbol]
+    if any(
+        order.order_id in known
+        and known[order.order_id].role != "ENTRY"
+        and not known[order.order_id].parent_order_link_id
+        for order in observed
+    ):
+        issues.add("UNSCOPED_CLOSING_ORDER")
+    rows = []
+    active = False
+    for parent in entries.values():
+        remaining = entered[parent.order_id] - closed[parent.order_id]
+        active = active or remaining > 0
+        row = _parent_stop_snapshot(
+            parent,
+            remaining,
+            orders,
+            observed,
+            side,
+            plans[str(parent.zone_id)].stop_loss,
+            parent.zone_id in ambiguous_zones,
+        )
+        issues.update(row["issues"])
+        rows.append(row)
+    if not active:
+        issues.add("NO_LIVE_ALLOCATION")
+    return {
+        "native_stop_coverage_verified": not issues,
+        "native_stop_issues": tuple(sorted(issues)),
+        "native_stop_coverage": rows,
+    }
+
+
 class ZoneLedgerRepositoryImpl(_Store):
     async def register_zone(self, group_id: UUID, intent_id: UUID) -> None:
         """Freeze a saved plan and lineage; do not enroll it in live supervision."""
@@ -320,6 +466,9 @@ class ZoneLedgerRepositoryImpl(_Store):
             "remaining_quantity": total_quantity,
             "issues": tuple(sorted(set(issues))),
             "quantity_reconciled": not issues if account is not None else None,
+            **_native_stop_snapshot(
+                zones, orders, executions, account, symbol, Side(side), issues
+            ),
             "protection_verified": False,
             "trading_enabled": False,
         }
