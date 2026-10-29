@@ -10,6 +10,31 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.22] - 2026-10-29
+
+### Added
+
+- Publish a bounded, public Demo whole-trade feed and readable dashboard table
+  (#253, child of #248): quantity, signed net PnL/R, UTC close time and frozen risk.
+  Current sizing/coverage settings appear separately. Missing, stale and failed
+  refreshes are explicit; aggregate cards keep their separate snapshot date.
+- Local read-only 15-minute refresh through the existing Pages workflow, with
+  strict public-field validation and public-site verification. Bybit credentials
+  remain local; GitHub credentials come from the host's credential manager.
+  PnL-only forensic exports can omit market candles without changing research defaults.
+
+### Validation and rollback
+
+- Exercise actual partial-close reconciliation, public-field privacy, unknown
+  values, bounded rows, Pages installation and PnL-only private history requests.
+  Check the phone layout and empty/stale/unavailable views with synthetic fixtures.
+- No database migration or trading-policy change. Stop the local feed publisher
+  and redeploy the previous image to roll back. The publisher needs an explicitly
+  installed host process and existing repository Actions write access.
+- #248 remains open until a natural new-risk Demo close demonstrates the requested
+  magnitude. A published table or a larger configured budget is not that evidence;
+  neither establishes improved expectancy or mainnet readiness.
+
 ## [2.2.21] - 2026-10-29
 
 Operator-directed wallet-utilization checkpoint (#248, standing top priority).
