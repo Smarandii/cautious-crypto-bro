@@ -67,7 +67,7 @@ def test_query_cursor_window_throttle_and_failures_survive_restart(tmp_path):
         database = tmp_path / "queries.sqlite3"
         store = IntentStore(database)
         await store.initialize()
-        now = int(datetime.now(UTC).timestamp() * 1000)
+        now = int(datetime(2026, 10, 29, 12, tzinfo=UTC).timestamp() * 1000)
         queries = await store.prepare_zone_history_queries(("BTCUSDT",), now)
         assert {q.lane for q in queries} == {"recent", "archive"}
         assert all(
@@ -110,7 +110,7 @@ def test_global_query_budget_is_fair_and_recent_windows_repeat(tmp_path):
     async def run():
         store = IntentStore(tmp_path / "fairness.sqlite3")
         await store.initialize()
-        now = int(datetime.now(UTC).timestamp() * 1000)
+        now = int(datetime(2026, 10, 29, 12, tzinfo=UTC).timestamp() * 1000)
         symbols = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
         first = await store.prepare_zone_history_queries(symbols, now)
         assert len(first) == 4
@@ -134,7 +134,7 @@ def test_persistent_page_budget_never_claims_an_infinite_history_complete(tmp_pa
         database = tmp_path / "page-budget.sqlite3"
         store = IntentStore(database)
         await store.initialize()
-        now = int(datetime.now(UTC).timestamp() * 1000)
+        now = int(datetime(2026, 10, 29, 12, tzinfo=UTC).timestamp() * 1000)
         for index in range(100):
             queries = await IntentStore(database).prepare_zone_history_queries(
                 ("BTCUSDT",), now + index * HISTORY_QUERY_INTERVAL_MS

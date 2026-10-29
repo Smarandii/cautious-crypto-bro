@@ -345,7 +345,8 @@ Schema 15 adds durable execution-history query progress (#256). Each recording
 pass (normally once per minute) consumes at most four pages globally, with at most
 100 rows per page.
 The recent lane repeatedly reads 48-hour windows; an independent archival lane
-cycles through seven-day windows within a conservative 730-day lookback. Terminal
+cycles through seven-day windows inside a conservative 730-day limit, using a
+full day of request headroom and UTC-day alignment. Terminal
 strategies remain eligible. Pages, cursor history and scheduling survive restart;
 restart cannot bypass the one-minute query throttle. A query stops at 100 pages
 with an explicit error rather than claiming completion of an unbounded response.
