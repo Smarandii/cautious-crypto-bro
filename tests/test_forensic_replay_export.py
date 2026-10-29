@@ -187,7 +187,10 @@ def test_terminal_transaction_compatibility_does_not_accept_malformed_pages(
         client.close()
 
 
-def test_export_bundle_uses_supported_private_page_sizes(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("skip_candles", [False, True])
+def test_export_bundle_uses_supported_private_page_sizes(
+    tmp_path, monkeypatch, skip_candles
+) -> None:
     database_path = tmp_path / "state.sqlite3"
     now = datetime.now(UTC)
     timestamp = int(now.timestamp() * 1000)
@@ -275,6 +278,7 @@ def test_export_bundle_uses_supported_private_page_sizes(tmp_path, monkeypatch) 
         if path == "/v5/market/time":
             return httpx.Response(200, json={"retCode": 0, "time": timestamp})
         if path == "/v5/market/kline":
+            assert not skip_candles
             return httpx.Response(200, json={"retCode": 0, "result": {"list": []}})
         maximum, rows = pages[path]
         if int(request.url.params["limit"]) > maximum:
@@ -303,11 +307,12 @@ def test_export_bundle_uses_supported_private_page_sizes(tmp_path, monkeypatch) 
     )
     bundle = tmp_path / "export.zip"
     try:
-        metadata = exporter.export_bundle(bundle)
+        metadata = exporter.export_bundle(bundle, skip_market_candles=skip_candles)
     finally:
         client.close()
     assert seen == set(pages)
     assert metadata["filled_v2_cases"] == 1
+    assert metadata["market_candles_included"] is not skip_candles
     positions = reconcile(bundle)
     assert len(positions) == 1 and positions[0]["complete"]
     assert positions[0]["net_pnl"] == 17

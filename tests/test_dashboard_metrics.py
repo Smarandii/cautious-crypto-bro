@@ -317,6 +317,8 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
     export_dashboard_data = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(export_dashboard_data)
 
+    monkeypatch.setattr(export_dashboard_data, "forensic_as_of", lambda _bundle: None)
+
     monkeypatch.setattr(
         export_dashboard_data,
         "forensic_closed_pnl_updates",
@@ -399,6 +401,7 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
             {
                 "complete": True,
                 "net_pnl": 20.0,
+                "symbol": "BTCUSDT",
                 "net_r": 0.2,
                 "side": "LONG",
                 "start": "2026-10-08T08:51:00+00:00",
@@ -418,6 +421,7 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
             {
                 "complete": True,
                 "net_pnl": 30.0,
+                "symbol": "ETHUSDT",
                 "net_r": 0.3,
                 "side": "LONG",
                 "start": "2026-10-08T08:53:00+00:00",
@@ -586,6 +590,7 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
         {
             "complete": True,
             "net_pnl": 10.0,
+            "symbol": "BTCUSDT",
             "net_r": 0.2,
             "side": "LONG",
             "start": "2026-10-09T11:01:00+00:00",
@@ -596,6 +601,7 @@ def test_dashboard_builder_keeps_account_rows_separate_from_trade_metrics(
         {
             "complete": True,
             "net_pnl": -10.0,
+            "symbol": "ETHUSDT",
             "net_r": -0.2,
             "side": "LONG",
             "start": "2026-10-09T11:02:00+00:00",

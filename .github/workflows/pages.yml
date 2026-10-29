@@ -5,6 +5,11 @@ on:
     branches: [master]
   # Lets the site be rebuilt from the UI without a dummy commit.
   workflow_dispatch:
+    inputs:
+      trade_feed:
+        description: Validated public Demo trade snapshot (no credentials or source text)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -35,6 +40,11 @@ jobs:
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Install validated public trade feed
+        env:
+          PUBLIC_TRADE_FEED: ${{ inputs.trade_feed }}
+        run: python3 scripts/install_dashboard_feed.py
 
       # No build step on purpose. docs/ is plain HTML and CSS with no bundler,
       # so there is no toolchain to pin and nothing that can drift from source.

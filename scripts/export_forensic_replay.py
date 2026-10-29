@@ -6,6 +6,7 @@ import sqlite3
 import time
 import zipfile
 from collections import defaultdict
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -138,12 +139,15 @@ def _market_candles(
     return candles
 
 
-def export_bundle(output_path: Path) -> dict[str, int | str]:
+def export_bundle(
+    output_path: Path, *, skip_market_candles: bool = False
+) -> dict[str, int | str]:
     if output_path.exists():
         raise FileExistsError(output_path)
 
     settings = get_settings()
-    with sqlite3.connect(settings.database_path) as database:
+    database_uri = settings.database_path.resolve().as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(database_uri, uri=True)) as database:
         database.row_factory = sqlite3.Row
         plan_rows = list(
             database.execute(
@@ -167,6 +171,40 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
                 """
             )
         )
+
+        # Orders placed by this production database's own strategies and actions.
+        # The rehearsal suites reuse the same link conventions with their own
+        # disposable stores, so link shape alone cannot separate them.
+        tables = {
+            row["name"]
+            for row in database.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        own_strategy_prefixes = set()
+        own_action_prefixes = set()
+        if "position_strategies" in tables:
+            own_strategy_prefixes = {
+                f"ccb-v2-{UUID(row['strategy_id']).hex[:20]}-"
+                for row in database.execute(
+                    "SELECT strategy_id FROM position_strategies"
+                )
+                if _is_uuid(row["strategy_id"])
+            }
+        if "position_actions" in tables:
+            own_action_prefixes = {
+                f"ccb-action-{UUID(action_id).hex[:24]}"
+                for payload in (
+                    row[0]
+                    for row in database.execute(
+                        "SELECT payload_json FROM position_actions"
+                    )
+                )
+                for action_id in [
+                    str((json.loads(payload) or {}).get("action_id") or "")
+                ]
+                if action_id and _is_uuid(action_id)
+            }
 
     plans = []
     participation_assignments = []
@@ -307,34 +345,6 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
         )
         if float(position.get("size") or 0) > 0
     ]
-
-    # Orders placed by this production database's own strategies and actions.
-    # The rehearsal suites reuse the same link conventions with their own
-    # disposable stores, so link shape alone cannot separate them.
-    tables = {
-        row["name"]
-        for row in database.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        )
-    }
-    own_strategy_prefixes = set()
-    own_action_prefixes = set()
-    if "position_strategies" in tables:
-        own_strategy_prefixes = {
-            f"ccb-v2-{UUID(row['strategy_id']).hex[:20]}-"
-            for row in database.execute("SELECT strategy_id FROM position_strategies")
-            if _is_uuid(row["strategy_id"])
-        }
-    if "position_actions" in tables:
-        own_action_prefixes = {
-            f"ccb-action-{UUID(action_id).hex[:24]}"
-            for payload in (
-                row[0]
-                for row in database.execute("SELECT payload_json FROM position_actions")
-            )
-            for action_id in [str((json.loads(payload) or {}).get("action_id") or "")]
-            if action_id and _is_uuid(action_id)
-        }
 
     def _probe_link(link: str) -> bool:
         if link.startswith(("ccb-zone-", "ccb-recover-")):
@@ -521,6 +531,8 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
                     first_fill_times,
                     participation_assignments,
                 )
+                if skip_market_candles:
+                    candle_symbols = []
                 for index, symbol in enumerate(candle_symbols, start=1):
                     candles = _market_candles(
                         client,
@@ -544,6 +556,7 @@ def export_bundle(output_path: Path) -> dict[str, int | str]:
                     "exchange": "Bybit Demo",
                     "category": "linear",
                     "interval_minutes": 1,
+                    "market_candles_included": not skip_market_candles,
                     "market_candle_lookback_minutes": (MARKET_CANDLE_LOOKBACK_MINUTES),
                     "filled_v2_cases": len(lineage),
                     "long_participation_assignment_count": len(
@@ -614,10 +627,17 @@ def main() -> None:
         required=True,
         help="New zip path; existing files are never overwritten.",
     )
+    parser.add_argument(
+        "--skip-market-candles",
+        action="store_true",
+        help="PnL-only refresh: retain private reconciliation evidence without candles",
+    )
     args = parser.parse_args()
 
     try:
-        summary = export_bundle(args.output)
+        summary = export_bundle(
+            args.output, skip_market_candles=args.skip_market_candles
+        )
     except FileExistsError as exc:
         raise SystemExit(
             f"Refusing to overwrite existing bundle: {args.output}"
