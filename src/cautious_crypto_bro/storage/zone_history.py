@@ -17,12 +17,20 @@ from ..execution_history import (
 )
 from ._connection import _Store, sqlite_connection
 
+DAY_MS = 24 * 60 * 60 * 1000
+
+
+def _retention_floor(now_ms: int) -> int:
+    # Keep one full day of request headroom, then align inside the limit.
+    # The floor stays stable within a UTC day, preserving page cursors.
+    return max(1, ((now_ms - HISTORY_RETENTION_MS) // DAY_MS + 2) * DAY_MS)
+
 
 def _window(lane: str, previous_end: int, now_ms: int) -> tuple[int, int]:
     recent = max(1, now_ms - RECENT_HISTORY_MS)
     if lane == "recent":
         return recent, now_ms
-    floor = max(1, now_ms - HISTORY_RETENTION_MS)
+    floor = _retention_floor(now_ms)
     start = previous_end + 1
     if start < floor or start >= recent:
         start = floor
@@ -35,7 +43,7 @@ class ZoneHistoryRepositoryImpl(_Store):
     ) -> tuple[HistoryQuery, ...]:
         if not symbols:
             return ()
-        floor = max(1, now_ms - HISTORY_RETENTION_MS)
+        floor = _retention_floor(now_ms)
         async with sqlite_connection(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
             for symbol in sorted(set(symbols)):
@@ -49,8 +57,8 @@ class ZoneHistoryRepositoryImpl(_Store):
                     # Retention is an explicit limitation, never fabricated coverage.
                     await db.execute(
                         "UPDATE zone_history_queries SET start_ms=?,end_ms=?,cursor='',"
-                        "seen_cursors_json='[]',last_error='History window aged beyond retention' "
-                        "WHERE symbol=? AND lane=? AND end_ms<?",
+                        "seen_cursors_json='[]',last_error='History window crossed the retained lookback boundary' "
+                        "WHERE symbol=? AND lane=? AND start_ms<?",
                         (start, end, symbol, lane, floor),
                     )
                     await db.execute(

@@ -22,6 +22,10 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
   100 rows. Persist cursor history and query scheduling across restart. Conflicts,
   malformed pages, repeated cursors and the 100-page query limit remain explicit
   failures; they never advance a query's completed-window record.
+- Align the archival retention boundary by UTC day with a full day of request
+  headroom (#260), preserving same-day pagination while keeping requests inside
+  Bybit's moving two-year limit. An advanced boundary restarts expired coverage
+  explicitly and never claims excluded history complete.
 
 ### Validation and rollback
 
