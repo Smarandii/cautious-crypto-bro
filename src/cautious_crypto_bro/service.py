@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import (
     UTC,
     datetime,
@@ -15,6 +15,12 @@ from decimal import Decimal
 from uuid import UUID
 
 from .bybit.client import is_exchange_rejection
+from .contract_symbols import (
+    BYBIT_CONTRACT_ALIASES,
+    ContractUnitError,
+    owned_action_symbol,
+    resolve_open_contract,
+)
 from .domain import (
     AccountPnlSummary,
     AccountSnapshotDelivery,
@@ -24,6 +30,7 @@ from .domain import (
     ExecutionPlan,
     ExecutionPolicy,
     IncomingPost,
+    InstrumentContext,
     IntentExecutionOutcome,
     IntentStatus,
     OpenRelation,
@@ -752,6 +759,7 @@ class SignalService:
         position_actions = self._build_position_actions(
             signals,
             account_state=(context_snapshot.account_state),
+            position_context=context_snapshot.position_context,
         )
 
         if not await self._record_source_decision(
@@ -767,6 +775,17 @@ class SignalService:
                 "errors": planning_errors + planning_rejections,
                 "retryable_errors": planning_errors,
                 "rejections": planning_rejections,
+                "contract_resolutions": [
+                    {
+                        "intent_id": str(intent.intent_id),
+                        "reported_symbol": original.symbol,
+                        "contract_symbol": intent.symbol,
+                    }
+                    for intent, _ in planned
+                    for original in signals.open_intents
+                    if original.intent_id == intent.intent_id
+                    and original.symbol != intent.symbol
+                ],
             },
         ):
             return None
@@ -852,6 +871,18 @@ class SignalService:
         ] = []
         planning_errors: list[str] = []
 
+        original_intents = {i.intent_id: i for i in signals.open_intents}
+        (
+            signals,
+            resolved_contexts,
+            resolution_counts,
+        ) = await self._resolve_open_contracts(
+            signals,
+            planning_errors,
+            planning_rejections,
+            retry_candidates,
+            original_duplicate=original_duplicate,
+        )
         if not signals.open_intents:
             return planned, planning_errors
 
@@ -859,6 +890,20 @@ class SignalService:
         position_context = context_snapshot.position_context
 
         open_counts = self._candidate_counts(signals, original_duplicate)
+        open_counts = Counter(
+            {
+                key: max(count, resolution_counts[key])
+                for key, count in open_counts.items()
+            }
+        )
+        retry_counts = Counter(
+            {
+                (original_intents[i.intent_id].symbol, i.side): open_counts[
+                    (i.symbol, i.side)
+                ]
+                for i in signals.open_intents
+            }
+        )
 
         try:
             policy = await self._capital_frozen_policy()
@@ -871,7 +916,9 @@ class SignalService:
                 "Execution policy/capital load failed",
             )
             self._remember_retry_candidates(
-                signals.open_intents, open_counts, retry_candidates
+                tuple(original_intents[i.intent_id] for i in signals.open_intents),
+                retry_counts,
+                retry_candidates,
             )
             return planned, planning_errors
 
@@ -881,7 +928,9 @@ class SignalService:
         )
         if existing_portfolio_risk is None:
             self._remember_retry_candidates(
-                signals.open_intents, open_counts, retry_candidates
+                tuple(original_intents[i.intent_id] for i in signals.open_intents),
+                retry_counts,
+                retry_candidates,
             )
             return planned, planning_errors
 
@@ -894,6 +943,9 @@ class SignalService:
                 account_state,
                 open_counts,
                 original_manual=original_manual,
+            )
+            retry_intent = original_intents[intent.intent_id].model_copy(
+                update={"approval_mode": intent.approval_mode}
             )
 
             momentum_stratum = await self._gate_momentum_stratum(intent)
@@ -928,7 +980,9 @@ class SignalService:
                         f"{intent.symbol}: portfolio stop-risk cap: {exc}"
                     )
                     self._remember_retry_candidates(
-                        (intent,), open_counts, retry_candidates
+                        (retry_intent,),
+                        retry_counts,
+                        retry_candidates,
                     )
                     continue
 
@@ -938,10 +992,11 @@ class SignalService:
                 intent_policy,
                 planning_errors,
                 planning_rejections,
+                market_context=resolved_contexts.get(intent.intent_id),
             )
             self._remember_retry_candidates(
-                (intent,) if len(planning_errors) > previous_error_count else (),
-                open_counts,
+                (retry_intent,) if len(planning_errors) > previous_error_count else (),
+                retry_counts,
                 retry_candidates,
             )
 
@@ -958,6 +1013,56 @@ class SignalService:
                 planned.append((intent, plan))
 
         return planned, planning_errors
+
+    async def _resolve_open_contracts(
+        self,
+        signals: SignalExtraction,
+        errors: list[str],
+        rejections: list[str],
+        retry_candidates: list[tuple[TradingIntent, bool, datetime]] | None,
+        *,
+        original_duplicate: bool,
+    ) -> tuple[
+        SignalExtraction, dict[UUID, InstrumentContext], Counter[tuple[str, Side]]
+    ]:
+        resolved: list[TradingIntent] = []
+        contexts: dict[UUID, InstrumentContext] = {}
+        prospective = Counter(
+            (BYBIT_CONTRACT_ALIASES.get(i.symbol, i.symbol), i.side)
+            for i in signals.open_intents
+        )
+        counts = Counter(
+            {
+                (i.symbol, i.side): max(
+                    prospective[
+                        (BYBIT_CONTRACT_ALIASES.get(i.symbol, i.symbol), i.side)
+                    ],
+                    2 if original_duplicate else 1,
+                )
+                for i in signals.open_intents
+            }
+        )
+        for intent in signals.open_intents:
+            if intent.symbol not in BYBIT_CONTRACT_ALIASES:
+                resolved.append(intent)
+                continue
+            try:
+                canonical, context = await resolve_open_contract(
+                    intent, self._executor.market_context
+                )
+            except Exception as exc:
+                reason = f"{intent.symbol}: {type(exc).__name__}: {exc}"
+                if isinstance(exc, ContractUnitError) or is_exchange_rejection(exc):
+                    rejections.append(reason)
+                else:
+                    errors.append(reason)
+                    self._remember_retry_candidates((intent,), counts, retry_candidates)
+                logger.info("Contract resolution unavailable: %s", reason)
+                continue
+            resolved.append(canonical)
+            if context is not None:
+                contexts[intent.intent_id] = context
+        return replace(signals, open_intents=tuple(resolved)), contexts, counts
 
     @staticmethod
     def _candidate_counts(
@@ -1234,9 +1339,12 @@ class SignalService:
         policy: ExecutionPolicy,
         planning_errors: list[str],
         planning_rejections: list[str],
+        *,
+        market_context: InstrumentContext | None = None,
     ) -> ExecutionPlan | None:
         try:
-            market_context = await self._executor.market_context(intent.symbol)
+            if market_context is None:
+                market_context = await self._executor.market_context(intent.symbol)
             return self._planner.plan(
                 intent,
                 policy,
@@ -1277,7 +1385,24 @@ class SignalService:
         signals: SignalExtraction,
         *,
         account_state: AccountStateSummary | None,
+        position_context: SignalPositionContext | None = None,
     ) -> tuple[PositionActionIntent, ...]:
+        history = position_context.source_open_history if position_context else ()
+        actions = tuple(
+            action.model_copy(
+                update={
+                    "symbol": owned_action_symbol(
+                        action.symbol,
+                        history
+                        if position_context is not None
+                        and position_context.source_channel_id
+                        == action.source.channel_id
+                        else (),
+                    )
+                }
+            )
+            for action in signals.position_actions
+        )
         return tuple(
             action.model_copy(
                 update={
@@ -1289,7 +1414,7 @@ class SignalService:
                     )
                 }
             )
-            for action in signals.position_actions
+            for action in actions
         )
 
     async def _complete_or_fail_source(

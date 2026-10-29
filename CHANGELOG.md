@@ -10,6 +10,29 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.24] - 2026-10-29
+
+### Fixed
+
+- Resolve the reviewed PEPEUSDT alias to Bybit's 1000PEPEUSDT contract only
+  after an explicit invalid-symbol response (#257). Valid exact contracts take
+  precedence. Source prices remain unchanged; incompatible quote units are
+  rejected rather than multiplied or divided. Raw extraction evidence is retained.
+- Resolve lifecycle aliases only against the same source's contract history.
+  Canonical contract identity participates in duplicate and ownership checks;
+  partial failures retain duplicate restrictions, original IDs and retry deadlines.
+  Recovered alias candidates recheck quote units before planning.
+
+### Validation and rollback
+
+- Synthetic exchange-boundary and real-SQLite regressions cover LONG/SHORT
+  planning, quote-unit rejection, exact precedence, auth/transport failures,
+  lifecycle scope and partial-batch restart/expiry behavior without real orders.
+- No schema migration, historical replay, or trading-policy change. Roll back
+  to the previous image if needed; newly supported aliases will again be rejected.
+- #248 remains open pending a naturally closed new-risk Demo trade at the
+  requested magnitude. Improved post coverage does not establish profitability.
+
 ## [2.2.23] - 2026-10-29
 
 ### Fixed
