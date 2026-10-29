@@ -14,6 +14,14 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 Operator-directed wallet-utilization checkpoint (#248, standing top priority).
 
+### Added
+
+- Observe exchange executions for already enrolled zone-order identities
+  (#245/#249), using existing ledger ownership and execution-ID checks.
+  Recording is observational groundwork: it does not enable independent-zone
+  trading or certify complete historical evidence. Existing entry, exit and
+  position-protection behavior is unchanged.
+
 ### Changed
 
 - Raise the stored execution policy's base per-trade risk from 1% to 3% of
@@ -42,6 +50,10 @@ Operator-directed wallet-utilization checkpoint (#248, standing top priority).
   authentication, supervision health and native stop protection after
   deployment. Watch trade-level outcomes via Bybit Closed-PnL and record the
   first |100 USDT|-scale close in #248.
+- This release delivers the requested settings checkpoint, not the complete
+  profit-magnitude objective. The public trade-level dashboard and an observed
+  outcome at the requested scale remain acceptance items in #248. Larger sizing
+  alone does not establish improved expectancy or guarantee that outcome.
 
 ## [2.2.20] - 2026-10-28
 
