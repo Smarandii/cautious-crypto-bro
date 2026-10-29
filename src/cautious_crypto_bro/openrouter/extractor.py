@@ -9,6 +9,7 @@ from dataclasses import replace
 
 from pydantic import ValidationError
 
+from ..contract_symbols import contract_evidence_aliases
 from ..domain import (
     Entry,
     EntryType,
@@ -563,6 +564,8 @@ def _symbol_close_variants(
         return ()
 
     variants = {compact}
+    for alias in contract_evidence_aliases(symbol):
+        variants.update(_symbol_close_variants(alias))
 
     for quote in (
         "usdt",
@@ -783,7 +786,7 @@ def _lifecycle_symbol_matches(text: str, symbol: str) -> bool:
     )
     mentions = {
         token.casefold()
-        for token in re.findall(r"\b[A-Z][A-Z0-9]{1,14}\b", text)
+        for token in re.findall(r"\b[0-9]*[A-Z][A-Z0-9]{1,14}\b", text)
         if token not in prose
     }
     mentions.update(re.findall(r"\$([a-z0-9]+)\b", text.casefold()))
@@ -809,11 +812,11 @@ def _cancel_entries_evidence(
         ):
             continue
         # Uppercase ticker tokens are evidence from the actual post.
-        tickers = re.findall(r"\b[A-Z][A-Z0-9]{1,14}\b", clause)
+        tickers = re.findall(r"\b[0-9]*[A-Z][A-Z0-9]{1,14}\b", clause)
         scope = normalized
         if not tickers and index:
             previous = clauses[index - 1]
-            tickers = re.findall(r"\b[A-Z][A-Z0-9]{1,14}\b", previous)
+            tickers = re.findall(r"\b[0-9]*[A-Z][A-Z0-9]{1,14}\b", previous)
             scope = _normalize_evidence_text(previous) + ". " + normalized
         variants = _symbol_close_variants(symbol)
         if tickers and all(t.lower() in variants for t in tickers):
