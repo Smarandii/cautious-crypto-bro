@@ -47,6 +47,9 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: Dashboard JavaScript syntax
+        run: node --check docs/script.js
+
       - name: Type check
         run: uv run pyright
 

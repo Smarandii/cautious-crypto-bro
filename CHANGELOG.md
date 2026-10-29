@@ -10,6 +10,34 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.27] - 2026-10-29
+
+### Changed
+
+- Replace the decorative public dashboard with plain, accessible Demo evidence
+  (#264): current trades and settings first, dated historical analysis separately,
+  system fonts, stable named metric bindings and ordinary expandable history.
+  Remove authored health grades, protection counts, illustrative diagrams,
+  numbered narratives and the stale manually counted test badge.
+- Keep all published trade rows available while showing the latest ten first.
+  Preserve frozen-risk cohorts, whole-position versus account-row distinctions,
+  fees/funding, uncertainty intervals and historical assignment provenance.
+- Load current evidence independently with bounded fetches. A failed current
+  feed shows unknown settings rather than relabeling a historical budget as
+  current; a refresh failure retains the last successful current evidence and
+  its own timestamp. Stale evidence and bundled historical fallback stay explicit.
+
+### Validation and rollback
+
+- Exercise real public payloads and synthetic reordered, empty, stale,
+  unavailable, independent-feed and bundled-fallback cases in the browser;
+  inspect desktop and phone rendering. Producer privacy/data contracts remain
+  unchanged. No framework, runtime dependency or frontend build step is added.
+- Schema 15, trading strategy, approvals, risk settings and exchange behavior
+  are unchanged. Preserve a restore-verified state backup before deployment;
+  the previous schema-15 image remains compatible. The broader #262 architecture
+  refactor, independent-zone activation and #248 magnitude evaluation remain open.
+
 ## [2.2.26] - 2026-10-29
 
 ### Changed
