@@ -1,3 +1,12 @@
+x-demo-policy: &demo-policy
+  DEMO_LONG_RISK_MULTIPLIER: "1.0"
+  DEMO_LONG_EXIT_CONTROL_FRACTION: "0.50"
+  DEMO_LONG_PARTICIPATION_SKIP_FRACTION: "0"
+  DEMO_LONG_MOMENTUM_GATE: "false"
+  DEMO_PORTFOLIO_STOP_RISK_CAP_USDT: "4000"
+  DEMO_EXIT_PROFILE: payoff_early_tight_trail_long_015
+  DEMO_ENTRY_ORDER_TTL_MINUTES: "240"
+
 services:
   redis:
     # Left on a floating tag deliberately, unlike the Dockerfile base image.
@@ -29,16 +38,10 @@ services:
       target: runtime
     env_file: .env
     environment:
+      <<: *demo-policy
       TELEGRAM_SESSION_NAME: /state/cautious_crypto_bro
       DATABASE_PATH: /state/cautious_crypto_bro.sqlite3
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      DEMO_LONG_RISK_MULTIPLIER: "1.0"
-      DEMO_LONG_EXIT_CONTROL_FRACTION: "0.50"
-      DEMO_LONG_PARTICIPATION_SKIP_FRACTION: "0"
-      DEMO_LONG_MOMENTUM_GATE: "false"
-      DEMO_PORTFOLIO_STOP_RISK_CAP_USDT: "4000"
-      DEMO_EXIT_PROFILE: payoff_early_tight_trail_long_015
-      DEMO_ENTRY_ORDER_TTL_MINUTES: "240"
     volumes:
       - app_state:/state
     healthcheck:
@@ -58,6 +61,36 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  publisher:
+    image: ${CCB_IMAGE:-cautious-crypto-bro:local}
+    profiles: ["publisher"]
+    command: ["/app/.venv/bin/python", "/app/scripts/publish_trade_feed.py"]
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      <<: *demo-policy
+      DATABASE_PATH: /state/cautious_crypto_bro.sqlite3
+      PUBLISHER_SECRETS_DIR: /run/secrets
+      PUBLISHER_WORK_DIR: /work
+    volumes:
+      - app_state:/state:ro
+      - publisher_secrets:/run/secrets:ro
+      - publisher_work:/work
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "/app/scripts/publish_trade_feed.py", "--health"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+      start_period: 8m
+    depends_on:
+      app:
+        condition: service_started
+    restart: unless-stopped
+
   test:
     build:
       context: .
@@ -72,3 +105,5 @@ services:
 volumes:
   app_state:
   redis_state:
+  publisher_secrets:
+  publisher_work:

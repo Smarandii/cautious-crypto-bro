@@ -384,3 +384,8 @@ the installed wheel from an isolated environment outside the checkout.
 
 SQLite and Telegram sessions persist in Docker volume `app_state`; Redis uses
 `redis_state`. Audit exports and backups stay local and outside build context.
+
+The optional Compose `publisher` service refreshes the public Demo trade feed
+every 15 minutes. It uses read-only state and selected credential mounts, private
+temporary storage and its own healthcheck; no Windows scheduled task or Docker
+socket is required. See [trade-feed setup and rollback](docs/TRADE_FEED.md).
