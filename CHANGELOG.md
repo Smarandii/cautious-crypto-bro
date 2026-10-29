@@ -10,6 +10,29 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.28] - 2026-10-29
+
+### Changed
+
+- Move periodic public trade publication into an opt-in Docker Compose publisher
+  (#268). The service reuses the runtime image and read-only exporters directly,
+  with no host WSL/Docker-exec/Git commands or Docker socket. Share policy values
+  with the app; mount state and selected credentials read-only, with a separate
+  private work volume for bounded exports, singleton ownership and health receipts.
+- Preserve feed validation, whole-trade reconciliation, 15-minute cadence,
+  publication verification and private diagnostics. Health requires a recent
+  successful publication; startup and failed cycles never claim readiness.
+
+### Validation and rollback
+
+- Verify HTTP/SQLite/export/publication integration, private-field rejection,
+  bounded command failure, singleton ownership and stale/unavailable health.
+  Verify a live service publication before removing the prior Windows task.
+- Schema 15 and trading behavior are unchanged. Keep a restore-verified state
+  backup and previous schema-15 image. Rollback stops the publisher before
+  restoring the old schedule; never run both exporters concurrently. The broader
+  #262 refactor, independent-zone activation and #248 magnitude review remain open.
+
 ## [2.2.27] - 2026-10-29
 
 ### Changed

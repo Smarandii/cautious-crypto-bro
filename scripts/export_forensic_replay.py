@@ -7,6 +7,7 @@ import time
 import zipfile
 from collections import defaultdict
 from contextlib import closing
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -18,6 +19,13 @@ WINDOW = timedelta(days=7)
 KLINE_CHUNK_MS = 1_000 * 60_000
 MARKET_CANDLE_LOOKBACK_MINUTES = 240
 MARKET_CANDLE_LOOKBACK_MS = MARKET_CANDLE_LOOKBACK_MINUTES * 60_000
+
+
+@dataclass(frozen=True)
+class ForensicAccess:
+    database_path: Path
+    bybit_api_key: str = field(repr=False)
+    bybit_api_secret: str = field(repr=False)
 
 
 def _is_uuid(value: str) -> bool:
@@ -140,12 +148,15 @@ def _market_candles(
 
 
 def export_bundle(
-    output_path: Path, *, skip_market_candles: bool = False
+    output_path: Path,
+    *,
+    skip_market_candles: bool = False,
+    access: ForensicAccess | None = None,
 ) -> dict[str, int | str]:
     if output_path.exists():
         raise FileExistsError(output_path)
 
-    settings = get_settings()
+    settings = access or get_settings()
     database_uri = settings.database_path.resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(database_uri, uri=True)) as database:
         database.row_factory = sqlite3.Row

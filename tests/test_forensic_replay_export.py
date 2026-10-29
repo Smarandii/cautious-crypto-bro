@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -188,8 +189,9 @@ def test_terminal_transaction_compatibility_does_not_accept_malformed_pages(
 
 
 @pytest.mark.parametrize("skip_candles", [False, True])
+@pytest.mark.parametrize("explicit_access", [False, True])
 def test_export_bundle_uses_supported_private_page_sizes(
-    tmp_path, monkeypatch, skip_candles
+    tmp_path, monkeypatch, skip_candles, explicit_access
 ) -> None:
     database_path = tmp_path / "state.sqlite3"
     now = datetime.now(UTC)
@@ -307,7 +309,20 @@ def test_export_bundle_uses_supported_private_page_sizes(
     )
     bundle = tmp_path / "export.zip"
     try:
-        metadata = exporter.export_bundle(bundle, skip_market_candles=skip_candles)
+        access = (
+            exporter.ForensicAccess(database_path, "synthetic-key", "synthetic-secret")
+            if explicit_access
+            else None
+        )
+        if explicit_access:
+
+            def no_app_settings():
+                pytest.fail("Publisher export loaded full application credentials")
+
+            monkeypatch.setattr(exporter, "get_settings", no_app_settings)
+        metadata = exporter.export_bundle(
+            bundle, skip_market_candles=skip_candles, access=access
+        )
     finally:
         client.close()
     assert seen == set(pages)
@@ -317,3 +332,38 @@ def test_export_bundle_uses_supported_private_page_sizes(
     assert len(positions) == 1 and positions[0]["complete"]
     assert positions[0]["net_pnl"] == 17
     assert positions[0]["funding"] == -1
+    if explicit_access and skip_candles:
+        import publish_trade_feed as publisher
+
+        with closing(sqlite3.connect(database_path)) as database:
+            with database:
+                database.executescript(
+                    "CREATE TABLE execution_policy(id INTEGER, risk_per_trade_pct REAL);"
+                    "INSERT INTO execution_policy VALUES(1,3);"
+                )
+        before = database_path.read_bytes()
+        secrets = tmp_path / "publisher-secrets"
+        secrets.mkdir()
+        for name in ("bybit_api_key", "bybit_api_secret"):
+            (secrets / name).write_text("PRIVATE_CREDENTIAL_CANARY", encoding="utf-8")
+        client = BybitClient(DEMO_BASE_URL, "synthetic-key", "synthetic-secret")
+        client._http_client.close()
+        client._http_client = httpx.Client(
+            base_url=DEMO_BASE_URL, transport=httpx.MockTransport(respond)
+        )
+        config = publisher.PublisherSettings(
+            _env_file=None,
+            database_path=database_path,
+            publisher_secrets_dir=secrets,
+        )
+        public_output = tmp_path / "public.json"
+        try:
+            publisher.export_feed(config, tmp_path / "publisher.zip", public_output)
+        finally:
+            client.close()
+        public = json.loads(public_output.read_text(encoding="utf-8"))
+        assert public["risk"]["risk_per_trade_pct"] == 3
+        assert public["trade_history"]["total_completed"] == 1
+        assert public["trade_history"]["rows"][0]["net_pnl_usdt"] == 17
+        assert "PRIVATE" not in public_output.read_text(encoding="utf-8")
+        assert database_path.read_bytes() == before
