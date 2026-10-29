@@ -44,6 +44,7 @@ from cautious_crypto_bro.forensic_pnl import (  # noqa: E402
     LIVE_LONG_RISK_EXIT_PROFILE,
     LIVE_LONG_RISK_STARTED_AT,
     LONG_FULL_RISK_STARTED_AT,
+    PARTICIPATION_ASSIGNMENT_DESCRIPTIONS,
     PORTFOLIO_CAP_4000_STARTED_AT,
     PROSPECTIVE_SHADOW_REVIEW_CASES,
     bootstrap_performance_intervals,
@@ -52,6 +53,8 @@ from cautious_crypto_bro.forensic_pnl import (  # noqa: E402
     exit_sizing_cohorts,
     jsonl,
     long_sizing_cohorts,
+    participation_assignment_basis,
+    participation_assignment_cohorts,
     read_open_entry_orders_snapshot,
     read_open_positions_snapshot,
     reconcile,
@@ -655,6 +658,9 @@ def _demo_long_participation_experiment(
                 {
                     "intent_id": row[0],
                     "arm": arm,
+                    "long_participation_momentum": strategy.get(
+                        "long_participation_momentum"
+                    ),
                     "order_ids": json.loads(row[2] or "[]"),
                     "status": row[3],
                     "approval_mode": row[4],
@@ -681,6 +687,19 @@ def _demo_long_participation_experiment(
         )
         for name, rows in grouped.items()
     }
+    for name, rows in grouped.items():
+        cohorts[name]["assignment_cohorts"] = {
+            mechanism: _participation_cohort(
+                mechanism_rows,
+                positions,
+                skip_fraction=skip_fraction,
+                forensic_available=forensic_available,
+                reviewable=name != "unknown",
+            )
+            for mechanism, mechanism_rows in participation_assignment_cohorts(
+                rows
+            ).items()
+        }
     return {
         **cohorts["full_baseline_risk"],
         "sizing_cohort": "full_baseline_risk",
@@ -700,6 +719,8 @@ def _participation_cohort(
     forensic_available: bool,
     reviewable: bool,
 ) -> dict[str, object]:
+    mechanism = participation_assignment_basis(assignments)
+    eligible = not assignments or mechanism in {"legacy_untagged", "hash_fallback"}
     take = [item for item in assignments if item["arm"] == "take"]
     skip = [item for item in assignments if item["arm"] == "skip"]
     take_ids = {item["intent_id"] for item in take}
@@ -726,8 +747,11 @@ def _participation_cohort(
     status = (
         "inactive"
         if skip_fraction <= 0
+        and (not assignments or mechanism in {"legacy_untagged", "hash_fallback"})
         else "awaiting_forensic_data"
         if not forensic_available
+        else "descriptive_only"
+        if not eligible
         else "ready_for_review"
         if reviewable
         and len(take) >= 20
@@ -739,9 +763,10 @@ def _participation_cohort(
         else "collecting"
     )
     return {
-        "active": skip_fraction > 0,
+        "active": skip_fraction > 0 or bool(assignments),
         "skip_fraction": skip_fraction,
-        "assignment": "stable SHA-256 bucket of intent ID, independent salt",
+        "assignment_basis": mechanism,
+        "assignment": PARTICIPATION_ASSIGNMENT_DESCRIPTIONS[mechanism],
         "planned_count": len(assignments),
         "take_assigned_count": len(take),
         "skip_assigned_count": len(skip),
@@ -765,7 +790,10 @@ def _participation_cohort(
             "Skip arm is zero exposure by design. Do not compare arm expectancy "
             "until take assignments are resolved, the per-arm review target is met, "
             "and at least 20 take positions are fully reconciled within the same "
-            "sizing cohort. Historical and unknown-time assignments are separate."
+            "sizing and assignment-mechanism cohort. Gated, mixed and unknown "
+            "mechanisms are descriptive only. Historical untagged results retain "
+            "their sample gate, but do not prove randomized provenance or a causal "
+            "effect. Unknown-time assignments cannot pass the review gate."
         ),
     }
 

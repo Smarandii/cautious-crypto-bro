@@ -34,6 +34,48 @@ LONG_FULL_RISK_STARTED_AT = "2026-10-27T17:06:35+00:00"
 PORTFOLIO_CAP_4000_STARTED_AT = "2026-10-27T20:11:55+00:00"
 
 
+PARTICIPATION_ASSIGNMENT_DESCRIPTIONS = {
+    "legacy_untagged": (
+        "historical untagged assignments; mechanism not frozen; "
+        "sample review is descriptive, without causal attribution"
+    ),
+    "hash_fallback": "stable SHA-256 bucket; momentum unavailable at assignment",
+    "momentum_gate": "deterministic momentum gate: positive take, nonpositive skip",
+    "unknown": "unknown or inconsistent frozen assignment metadata",
+    "mixed": "mixed assignment mechanisms; inspect separate assignment cohorts",
+}
+
+
+def participation_assignment_cohorts(records: list[dict]) -> dict[str, list[dict]]:
+    """Partition by frozen provenance, never current settings or later candles."""
+    # Zen of Python: "Explicit is better than implicit." Selection mechanisms
+    # must not silently supply each other's experimental sample requirements.
+    cohorts: dict[str, list[dict]] = {
+        name: [] for name in PARTICIPATION_ASSIGNMENT_DESCRIPTIONS if name != "mixed"
+    }
+    for record in records:
+        tag = record.get("long_participation_momentum")
+        if tag is None:
+            name = "legacy_untagged"
+        elif tag == "unavailable":
+            name = "hash_fallback"
+        elif (tag == "positive" and record.get("arm") == "take") or (
+            tag == "nonpositive" and record.get("arm") == "skip"
+        ):
+            name = "momentum_gate"
+        else:
+            name = "unknown"
+        cohorts[name].append(record)
+    return cohorts
+
+
+def participation_assignment_basis(records: list[dict]) -> str:
+    names = [
+        name for name, rows in participation_assignment_cohorts(records).items() if rows
+    ]
+    return names[0] if len(names) == 1 else "mixed" if names else "unknown"
+
+
 def long_sizing_cohorts(records: list[dict]) -> dict[str, list[dict]]:
     """Keep the verified sizing cutover separate, including its cap-limited plans."""
     boundary = datetime.fromisoformat(LONG_FULL_RISK_STARTED_AT)

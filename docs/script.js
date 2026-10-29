@@ -176,8 +176,18 @@ function renderLongParticipationExperiment(experiment){
   const metric=document.querySelectorAll('.metric')[2];
   if(experiment.sizing_cutover) metric.querySelector('p').textContent+=` Participation sizing cohort starts ${experiment.sizing_cutover}; earlier assignments are reported separately.`;
   if(experiment.unknown_time_assignment_count) metric.querySelector('p').textContent+=` ${experiment.unknown_time_assignment_count} assignments have unknown creation times and cannot establish review readiness.`;
-  metric.querySelector('p').textContent+=` Randomized participation: ${experiment.take_assigned_count} take / ${experiment.skip_assigned_count} skip Long assignments; take arm has ${experiment.take_unresolved_count??'—'} unresolved.`;
-  metric.querySelector('footer').innerHTML+=` · Participation ${experiment.take_assigned_count}/${experiment.review_target_per_arm} take assigned · ${experiment.skip_records_valid_count}/${experiment.review_target_per_arm} verified skips · ${experiment.take_completed_position_count??'—'} take complete <b>${experiment.status.replaceAll('_',' ')}</b>`;
+  const description=experiment.assignment_basis&&experiment.assignment?experiment.assignment:'Historical assignments; randomized provenance was not recorded.';
+  metric.querySelector('p').textContent+=` Participation history: ${experiment.take_assigned_count} take / ${experiment.skip_assigned_count} skip LONG assignments; take arm has ${experiment.take_unresolved_count??'—'} unresolved. Assignment: ${description}.`;
+  const cohorts=Object.entries(experiment.assignment_cohorts??{}).filter(([,cohort])=>cohort.planned_count>0);
+  if(cohorts.length){
+    metric.querySelector('p').textContent+=` Separate cohorts: ${cohorts.map(([name,cohort])=>`${name.replaceAll('_',' ')} ${cohort.take_assigned_count} take / ${cohort.skip_assigned_count} skip (${cohort.status.replaceAll('_',' ')})`).join('; ')}.`;
+  }
+  const footer=metric.querySelector('footer');
+  footer.classList.add('has-participation');
+  const status=document.createElement('span');
+  status.className='participation-status';
+  status.textContent=`Participation ${experiment.take_assigned_count} take assigned · ${experiment.skip_records_valid_count} verified skips · ${experiment.take_completed_position_count??'—'} take complete · ${experiment.status.replaceAll('_',' ')}`;
+  footer.append(status);
 }
 
 function riskNormalizedBreakEvenTargets(pnl){
