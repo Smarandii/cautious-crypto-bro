@@ -4,11 +4,14 @@ document.querySelectorAll('.filters button').forEach(button=>button.addEventList
 
 async function hydrateLiveData(){
   try{
-    let data=window.DASHBOARD_DATA;
-    if(!data){
+    let data;
+    try{
       const response=await fetch('data.json',{cache:'no-store'});
       if(!response.ok) throw new Error('snapshot unavailable');
       data=await response.json();
+    }catch(error){
+      data=window.DASHBOARD_DATA;
+      if(!data) throw error;
     }
     const metrics=document.querySelectorAll('.metric');
     const signals=document.querySelectorAll('.signal-grid b');
@@ -32,7 +35,10 @@ async function hydrateLiveData(){
     if(data.funnel && funnel.length>=5){
       [data.funnel.signals,data.funnel.intents,data.funnel.plans,data.funnel.actions,data.funnel.strategies].forEach((value,index)=>{funnel[index].textContent=Number(value).toLocaleString()});
     }
-    if(data.risk?.risk_per_trade_pct!=null) metrics[2].querySelector('strong').innerHTML=`${data.risk.risk_per_trade_pct}<small>%</small>`;
+    if(data.risk?.risk_per_trade_pct!=null){
+      metrics[2].querySelector('strong').innerHTML=`${data.risk.risk_per_trade_pct}<small>%</small>`;
+      metrics[2].querySelector('h3').textContent='Risk in aggregate snapshot';
+    }
     renderLongRiskExperiment(data.risk?.demo_long_experiment);
     renderDemoExitExperiment(data.risk?.demo_exit_experiment);
     renderLongParticipationExperiment(data.risk?.demo_long_participation_experiment);
@@ -41,8 +47,98 @@ async function hydrateLiveData(){
     renderFillFollowthrough(data.fill_followthrough);
     renderOperations(data);
     renderBenchmark(data);
+    renderTradeHistory(lastTradeFeed??data);
     document.querySelector('.kicker').textContent=`● Bybit Demo snapshot · ${new Date(data.generated_at).toLocaleString()}`;
   }catch(error){ console.info('Dashboard is using the authored evidence view:',error.message); }
+  finally{ refreshTradeFeed(); }
+}
+
+function renderTradeHistory(data, refreshFailed=false){
+  let section=document.querySelector('#trade-history');
+  if(!section){
+    section=document.createElement('section');
+    section.id='trade-history';
+    section.className='trade-history shell';
+    document.querySelector('#scorecard').before(section);
+  }
+  section.replaceChildren();
+  const add=(tag,text,parent=section)=>{
+    const element=document.createElement(tag);
+    element.textContent=text;
+    parent.append(element);
+    return element;
+  };
+  add('small','RECONCILED DEMO TRADES').className='eyebrow';
+  add('h2','Actual trade outcomes');
+  const history=data?.trade_history;
+  const asOf=Date.parse(history?.as_of);
+  const age=Date.now()-asOf;
+  const stale=!Number.isFinite(asOf)||age>30*60*1000||age < -5*60*1000;
+  const status=add('p',refreshFailed?'Refresh failed · last available evidence retained. ':!Number.isFinite(asOf)?'Coverage time unavailable. ':stale?'STALE exchange evidence. ':'Recent exchange evidence · ');
+  status.setAttribute('role','status');
+  status.append(document.createTextNode(Number.isFinite(asOf)?`Coverage through ${new Date(asOf).toISOString()}. `:''));
+  status.append(document.createTextNode('Refresh every minute; publication cadence 15 minutes. This is not a streaming feed.'));
+  const risk=data?.risk??{};
+  const number=(value,digits=2)=>Number.isFinite(value)?value.toLocaleString('en-US',{maximumFractionDigits:digits}):'Unknown';
+  const settings=add('dl','');
+  settings.className='trade-settings';
+  for(const [label,value] of [
+    ['Base risk · new plans',risk.risk_per_trade_pct==null?'Unknown':`${number(risk.risk_per_trade_pct)}%`],
+    ['LONG risk multiplier',number(risk.long_risk_multiplier)],
+    ['Momentum gate',risk.long_momentum_gate_enabled===true?'On':risk.long_momentum_gate_enabled===false?'Off':'Unknown'],
+    ['Participation skip',Number.isFinite(risk.long_participation_skip_fraction)?`${number(risk.long_participation_skip_fraction*100)}%`:'Unknown'],
+    ['Portfolio stop-risk cap',risk.portfolio_stop_risk_cap_usdt==null?'Unknown':`${number(risk.portfolio_stop_risk_cap_usdt)} USDT`],
+    ['Exit profile',risk.exit_profile??'Unknown'],
+  ]){
+    const pair=add('div','',settings);
+    add('dt',label,pair);
+    add('dd',value,pair);
+  }
+  add('p','Historical rows retain their frozen risk policy. Partial exits count as one whole trade only after complete reconciliation. PnL includes reconciled fees and funding.');
+  if(!history?.available){
+    add('p','Trade evidence unavailable. No outcomes inferred.');
+    return;
+  }
+  const rows=history.rows??[];
+  add('p',`Showing ${rows.length} of ${history.total_completed??'unknown'} complete trades · ${history.omitted_count??0} older rows omitted.`);
+  if(!rows.length){ add('p','No complete trades in this evidence window.'); return; }
+  const scroll=add('div','');
+  scroll.className='trade-table-scroll';
+  scroll.tabIndex=0;
+  scroll.setAttribute('role','region');
+  scroll.setAttribute('aria-label','Complete Demo trades; scroll horizontally for all columns');
+  const table=add('table','',scroll);
+  add('caption','Latest complete Demo trades · UTC close times',table);
+  const heading=add('tr','',add('thead','',table));
+  for(const title of ['Symbol','Side','Quantity','Net PnL · USDT','Net R','Frozen risk · %','Closed · UTC']){
+    add('th',title,heading).scope='col';
+  }
+  const tbody=add('tbody','',table);
+  const signed=(value)=>Number.isFinite(value)?`${value>0?'+':''}${number(value,4)}`:'Unknown';
+  for(const trade of rows){
+    const row=add('tr','',tbody);
+    const date=Date.parse(trade.closed_at);
+    for(const value of [trade.symbol,trade.side,number(trade.quantity,8),signed(trade.net_pnl_usdt),signed(trade.net_r),number(trade.risk_per_trade_pct),Number.isFinite(date)?new Date(date).toISOString():'Unknown']){
+      add('td',value,row);
+    }
+  }
+}
+
+let lastTradeFeed;
+let tradeRefreshPending=false;
+async function refreshTradeFeed(){
+  if(tradeRefreshPending) return;
+  tradeRefreshPending=true;
+  try{
+    const response=await fetch('trades.json',{cache:'no-store'});
+    if(!response.ok) throw new Error('trade feed unavailable');
+    const feed=await response.json();
+    if(feed.schema_version!==1) throw new Error('unsupported trade feed');
+    renderTradeHistory(feed);
+    lastTradeFeed=feed;
+  }catch(error){
+    renderTradeHistory(lastTradeFeed??window.DASHBOARD_DATA,true);
+  }finally{ tradeRefreshPending=false; }
 }
 
 function renderLongRiskExperiment(experiment){
@@ -80,8 +176,18 @@ function renderLongParticipationExperiment(experiment){
   const metric=document.querySelectorAll('.metric')[2];
   if(experiment.sizing_cutover) metric.querySelector('p').textContent+=` Participation sizing cohort starts ${experiment.sizing_cutover}; earlier assignments are reported separately.`;
   if(experiment.unknown_time_assignment_count) metric.querySelector('p').textContent+=` ${experiment.unknown_time_assignment_count} assignments have unknown creation times and cannot establish review readiness.`;
-  metric.querySelector('p').textContent+=` Randomized participation: ${experiment.take_assigned_count} take / ${experiment.skip_assigned_count} skip Long assignments; take arm has ${experiment.take_unresolved_count??'—'} unresolved.`;
-  metric.querySelector('footer').innerHTML+=` · Participation ${experiment.take_assigned_count}/${experiment.review_target_per_arm} take assigned · ${experiment.skip_records_valid_count}/${experiment.review_target_per_arm} verified skips · ${experiment.take_completed_position_count??'—'} take complete <b>${experiment.status.replaceAll('_',' ')}</b>`;
+  const description=experiment.assignment_basis&&experiment.assignment?experiment.assignment:'Historical assignments; randomized provenance was not recorded.';
+  metric.querySelector('p').textContent+=` Participation history: ${experiment.take_assigned_count} take / ${experiment.skip_assigned_count} skip LONG assignments; take arm has ${experiment.take_unresolved_count??'—'} unresolved. Assignment: ${description}.`;
+  const cohorts=Object.entries(experiment.assignment_cohorts??{}).filter(([,cohort])=>cohort.planned_count>0);
+  if(cohorts.length){
+    metric.querySelector('p').textContent+=` Separate cohorts: ${cohorts.map(([name,cohort])=>`${name.replaceAll('_',' ')} ${cohort.take_assigned_count} take / ${cohort.skip_assigned_count} skip (${cohort.status.replaceAll('_',' ')})`).join('; ')}.`;
+  }
+  const footer=metric.querySelector('footer');
+  footer.classList.add('has-participation');
+  const status=document.createElement('span');
+  status.className='participation-status';
+  status.textContent=`Participation ${experiment.take_assigned_count} take assigned · ${experiment.skip_records_valid_count} verified skips · ${experiment.take_completed_position_count??'—'} take complete · ${experiment.status.replaceAll('_',' ')}`;
+  footer.append(status);
 }
 
 function riskNormalizedBreakEvenTargets(pnl){
@@ -241,3 +347,4 @@ if(window.DASHBOARD_DATA){
   dataScript.onerror=hydrateLiveData;
   document.head.appendChild(dataScript);
 }
+setInterval(refreshTradeFeed,60000);

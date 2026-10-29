@@ -10,14 +10,98 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.23] - 2026-10-29
+
 ### Fixed
 
-- Separate LONG participation reports by frozen assignment mechanism inside
-  each sizing cohort (#243). Deterministic momentum decisions, hash fallback,
-  historical untagged records and unknown provenance remain visible separately.
+- Separate LONG participation reports by frozen assignment mechanism within each
+  sizing cohort (#243/#244). Deterministic momentum decisions, hash fallback,
+  historical untagged records and unknown provenance remain separately visible.
   Gated, mixed and unknown samples cannot satisfy randomized review gates;
-  historical untagged readiness is descriptive and no longer claims an ITT effect.
-  Trading policy, sizing, saved plans and schema are unchanged.
+  historical untagged readiness is descriptive and claims no causal/ITT effect.
+- Dashboard participation labels follow the recorded assignment mechanism rather
+  than labeling every historical cohort randomized. Current settings and the
+  independently refreshed whole-trade feed remain separate.
+
+### Validation and rollback
+
+- Regression fixtures exercise all-gated and mixed cohorts, frozen metadata,
+  unknown provenance and unresolved takes through CLI/dashboard report boundaries.
+  Verify rendered labels with a synthetic deterministic cohort.
+- No schema migration or trading-policy change. Roll back to the prior image and
+  Pages source if needed; retain the public feed's own evidence timestamp.
+- #248 remains open for a naturally closed Demo trade at the requested magnitude.
+  Cohort labels and configured sizing are not proof of improved expectancy.
+
+## [2.2.22] - 2026-10-29
+
+### Added
+
+- Publish a bounded, public Demo whole-trade feed and readable dashboard table
+  (#253, child of #248): quantity, signed net PnL/R, UTC close time and frozen risk.
+  Current sizing/coverage settings appear separately. Missing, stale and failed
+  refreshes are explicit; aggregate cards keep their separate snapshot date.
+- Local read-only 15-minute refresh through the existing Pages workflow, with
+  strict public-field validation and public-site verification. Bybit credentials
+  remain local; GitHub credentials come from the host's credential manager.
+  PnL-only forensic exports can omit market candles without changing research defaults.
+
+### Validation and rollback
+
+- Exercise actual partial-close reconciliation, public-field privacy, unknown
+  values, bounded rows, Pages installation and PnL-only private history requests.
+  Check the phone layout and empty/stale/unavailable views with synthetic fixtures.
+- No database migration or trading-policy change. Stop the local feed publisher
+  and redeploy the previous image to roll back. The publisher needs an explicitly
+  installed host process and existing repository Actions write access.
+- #248 remains open until a natural new-risk Demo close demonstrates the requested
+  magnitude. A published table or a larger configured budget is not that evidence;
+  neither establishes improved expectancy or mainnet readiness.
+
+## [2.2.21] - 2026-10-29
+
+Operator-directed wallet-utilization checkpoint (#248, standing top priority).
+
+### Added
+
+- Observe exchange executions for already enrolled zone-order identities
+  (#245/#249), using existing ledger ownership and execution-ID checks.
+  Recording is observational groundwork: it does not enable independent-zone
+  trading or certify complete historical evidence. Existing entry, exit and
+  position-protection behavior is unchanged.
+
+### Changed
+
+- Raise the stored execution policy's base per-trade risk from 1% to 3% of
+  the live wallet (~212 USDT stop budget per trade) so the strategy's verified
+  good win/loss shape operates at real magnitude; outcomes in the ~±100 USDT
+  ballpark are the operator's goal and a rare full stop-out (~-212 USDT) is
+  explicitly accepted. Exits, entries, stops, profiles and every strategy
+  behavior are untouched.
+- Disable the momentum gate and the participation skip fraction so every
+  actionable post trades; the operator confirmed the signal source and
+  per-trade security are good. The momentum-gate cohort evidence (#223/#183)
+  remains recorded and inspectable; plans from this boundary form an
+  unlabeled-gate cohort and pooled comparisons across it are descriptive only.
+- Portfolio cap stays 4000 USDT (~18 concurrent full-risk plans); Compose
+  carries the two flag changes and the policy row is updated through the
+  existing `scripts/set_execution_policy.py` with a stopped-writer state
+  backup taken first.
+
+### Upgrade, validation and limitations
+
+- Schema and strategy behavior unchanged. Rollback restores the policy to 1%
+  and the flags (gate on, skip 0.50) for future plans; saved plans and
+  positions are never rewritten. Take a stopped-writer, restore-verified state
+  backup before applying the policy update; verify the deployed revision,
+  the printed policy (risk_pct=3), the two Compose flags, Demo
+  authentication, supervision health and native stop protection after
+  deployment. Watch trade-level outcomes via Bybit Closed-PnL and record the
+  first |100 USDT|-scale close in #248.
+- This release delivers the requested settings checkpoint, not the complete
+  profit-magnitude objective. The public trade-level dashboard and an observed
+  outcome at the requested scale remain acceptance items in #248. Larger sizing
+  alone does not establish improved expectancy or guarantee that outcome.
 
 ## [2.2.20] - 2026-10-28
 

@@ -29,6 +29,7 @@ from cautious_crypto_bro.bybit.normalize import (  # noqa: E402
     closed_pnl_record_from_item,
 )
 from cautious_crypto_bro.dashboard_metrics import (  # noqa: E402
+    public_trade_history,
     summarize_intent_outcomes,
     summarize_open_positions,
     summarize_portfolio_stop_risk,
@@ -229,6 +230,29 @@ def _account_pnl_history(
     )
 
 
+def forensic_as_of(bundle: Path | None) -> str | None:
+    """Use the exchange coverage timestamp, never the dashboard build time."""
+    if bundle is None:
+        return None
+    with ZipFile(bundle) as archive:
+        names = archive.namelist()
+        if not names:
+            return None
+        metadata_name = names[0].split("/", 1)[0] + "/metadata.json"
+        if metadata_name not in names:
+            return None
+        metadata = json.loads(archive.read(metadata_name))
+    value = metadata.get("closed_pnl_as_of") or metadata.get("created_at")
+    if not isinstance(value, str):
+        return None
+    try:
+        if datetime.fromisoformat(value.replace("Z", "+00:00")).tzinfo is None:
+            return None
+        return _utc_datetime(value).isoformat()
+    except (ValueError, TypeError):
+        return None
+
+
 def build_snapshot(
     database: sqlite3.Connection,
     *,
@@ -241,6 +265,7 @@ def build_snapshot(
     demo_long_participation_skip_fraction: float | None = None,
     demo_exit_profile: str | None = None,
     demo_portfolio_stop_risk_cap_usdt: float | None = None,
+    demo_long_momentum_gate_enabled: bool | None = None,
 ) -> dict[str, object]:
     policy = database.execute(
         "SELECT risk_per_trade_pct FROM execution_policy WHERE id = 1"
@@ -251,6 +276,12 @@ def build_snapshot(
         )
     if demo_exit_profile is None:
         demo_exit_profile = os.environ.get("DEMO_EXIT_PROFILE", "baseline")
+    if demo_long_momentum_gate_enabled is None:
+        gate = os.environ.get("DEMO_LONG_MOMENTUM_GATE")
+        if gate is not None:
+            if gate.lower() not in ("true", "false", "1", "0"):
+                raise ValueError("Invalid Demo momentum gate setting")
+            demo_long_momentum_gate_enabled = gate.lower() in ("true", "1")
     if demo_long_exit_control_fraction is None:
         demo_long_exit_control_fraction = float(
             os.environ.get("DEMO_LONG_EXIT_CONTROL_FRACTION", "0")
@@ -382,6 +413,10 @@ def build_snapshot(
         }
 
     total_intents = sum(statuses.values())
+    trade_history = public_trade_history(
+        reconciled_positions, available=forensic_bundle is not None
+    )
+    trade_history["as_of"] = forensic_as_of(forensic_bundle)
     snapshot = {
         "generated_at": snapshot_at.isoformat(),
         "source": database_source,
@@ -411,6 +446,11 @@ def build_snapshot(
         },
         "risk": {
             "risk_per_trade_pct": float(policy[0]) if policy else None,
+            "long_risk_multiplier": demo_long_risk_multiplier,
+            "long_momentum_gate_enabled": demo_long_momentum_gate_enabled,
+            "long_participation_skip_fraction": demo_long_participation_skip_fraction,
+            "portfolio_stop_risk_cap_usdt": demo_portfolio_stop_risk_cap_usdt,
+            "exit_profile": demo_exit_profile,
             "demo_long_experiment": risk_experiment,
             "demo_long_participation_experiment": participation_experiment,
             "demo_exit_experiment": exit_experiment,
@@ -420,6 +460,7 @@ def build_snapshot(
             snapshot_at,
         ),
         "strategy_pnl": strategy_pnl,
+        "trade_history": trade_history,
         "fill_followthrough": (
             fill_followthrough_summary(forensic_bundle)
             if forensic_bundle is not None
@@ -705,7 +746,8 @@ def _participation_cohort(
     valid_takes = all(item["approval_mode"] == "AUTO" for item in take)
     status = (
         "inactive"
-        if skip_fraction <= 0 and mechanism in {"legacy_untagged", "hash_fallback"}
+        if skip_fraction <= 0
+        and (not assignments or mechanism in {"legacy_untagged", "hash_fallback"})
         else "awaiting_forensic_data"
         if not forensic_available
         else "descriptive_only"

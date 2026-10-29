@@ -2,9 +2,59 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
 from math import isfinite
 from statistics import fmean
+
+
+def public_trade_history(
+    positions: Iterable[Mapping[str, object]], *, available: bool, limit: int = 100
+) -> dict[str, object]:
+    """Public fields only; private lineage must never travel with a trade row."""
+    if limit < 1:
+        raise ValueError("Public trade limit must be positive")
+    complete = [p for p in positions if p.get("complete") is True]
+    rows = []
+    for position in complete:
+        symbol, side = position.get("symbol"), position.get("side")
+        if not isinstance(symbol, str) or not re.fullmatch(
+            r"[A-Z0-9]{2,40}USDT", symbol
+        ):
+            raise ValueError("Invalid public trade symbol")
+        if side not in ("LONG", "SHORT"):
+            raise ValueError("Invalid public trade side")
+        closed_ms = _optional_number(position.get("closed_at"))
+        closed_at = None
+        if closed_ms is not None and closed_ms > 0:
+            try:
+                closed_at = datetime.fromtimestamp(closed_ms / 1000, UTC).isoformat()
+            except (ValueError, OverflowError, OSError):
+                pass
+        # Zen of Python: "Explicit is better than implicit." Whitelist fields;
+        # never relabel a historical trade with the currently configured risk.
+        rows.append(
+            {
+                "symbol": symbol,
+                "side": side,
+                "quantity": _optional_number(position.get("entry_qty")),
+                "net_pnl_usdt": _optional_number(position.get("net_pnl")),
+                "net_r": _optional_number(position.get("net_r")),
+                "closed_at": closed_at,
+                "risk_per_trade_pct": _optional_number(
+                    position.get("risk_per_trade_pct")
+                ),
+            }
+        )
+    rows.sort(key=lambda row: str(row["closed_at"] or ""), reverse=True)
+    return {
+        "available": available,
+        "rows": rows[:limit] if available else [],
+        "total_completed": len(complete) if available else None,
+        "omitted_count": max(0, len(rows) - limit) if available else None,
+        "limit": limit,
+    }
 
 
 def summarize_reconciled_positions(

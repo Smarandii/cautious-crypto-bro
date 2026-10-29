@@ -78,7 +78,9 @@ def test_duplicate_owners_pause_and_alert_after_restart(
                 }
                 assert after_failure == before
                 assert not await store.get_pending_strategy_alerts()
-                assert len(exchange.requests) == request_count
+                # One read-only zone execution-history read precedes the
+                # aborted strategy pass on this fresh supervisor instance.
+                assert len(exchange.requests) == request_count + 1
                 with closing(sqlite3.connect(database)) as db:
                     db.execute("DROP TRIGGER fail_second_pause")
                     db.commit()
@@ -130,7 +132,9 @@ def test_duplicate_owners_pause_and_alert_after_restart(
                         for call in sender.call_args_list
                     )
                 assert not await IntentStore(database).get_pending_strategy_alerts()
-                assert len(exchange.requests) == request_count
+                # Two read-only zone execution-history reads in total: the
+                # original instance's window and the restarted instance's.
+                assert len(exchange.requests) == request_count + 2
             finally:
                 await bot.close()
 

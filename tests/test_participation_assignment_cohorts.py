@@ -19,6 +19,14 @@ from export_dashboard_data import (  # noqa: E402
 pytestmark = pytest.mark.integration
 
 
+def test_disabled_empty_participation_remains_inactive():
+    result = _participation_cohort(
+        [], [], skip_fraction=0, forensic_available=False, reviewable=True
+    )
+    assert result["active"] is False
+    assert result["status"] == "inactive"
+
+
 def _sample(tag: str | None, count: int = 20) -> tuple[list[dict], list[dict]]:
     assignments, positions = [], []
     for arm in ("take", "skip"):

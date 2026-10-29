@@ -388,6 +388,53 @@ class ZoneLedgerRepositoryImpl(_Store):
                 )
             await db.commit()
 
+    async def zone_bound_orders(self, group_id: UUID) -> tuple[ZoneOrder, ...]:
+        """Confirmed order identities bound to a group's zones."""
+        async with sqlite_connection(self._database_path) as db:
+            await db.execute("PRAGMA query_only=ON")
+            await db.execute("BEGIN")
+            cursor = await db.execute(
+                "SELECT o.payload_json FROM zone_orders o "
+                "JOIN zone_allocations z USING(zone_id) WHERE z.group_id=?",
+                (str(group_id),),
+            )
+            orders = tuple(
+                ZoneOrder.model_validate_json(row[0]) for row in await cursor.fetchall()
+            )
+        return orders
+
+    async def zone_order_symbols(self) -> dict[str, tuple[UUID, ...]]:
+        """Group ids per symbol, only for groups with confirmed bindings."""
+        async with sqlite_connection(self._database_path) as db:
+            await db.execute("PRAGMA query_only=ON")
+            await db.execute("BEGIN")
+            cursor = await db.execute(
+                "SELECT g.symbol, g.group_id FROM zone_groups g WHERE EXISTS ("
+                "SELECT 1 FROM zone_orders o "
+                "JOIN zone_allocations z USING(zone_id) "
+                "WHERE z.group_id = g.group_id)"
+            )
+            rows = await cursor.fetchall()
+        groups: dict[str, list[UUID]] = {}
+        for symbol, group_id in rows:
+            groups.setdefault(str(symbol), []).append(UUID(str(group_id)))
+        return {symbol: tuple(ids) for symbol, ids in groups.items()}
+
+    async def zone_execution_watermark(self, group_id: UUID) -> int | None:
+        """Latest recorded execution millisecond for a group, if any."""
+        async with sqlite_connection(self._database_path) as db:
+            await db.execute("PRAGMA query_only=ON")
+            await db.execute("BEGIN")
+            cursor = await db.execute(
+                "SELECT MAX(CAST(json_extract(e.payload_json,'$.executed_at_ms') "
+                "AS INTEGER)) FROM zone_executions e "
+                "JOIN zone_orders o USING(order_id) "
+                "JOIN zone_allocations z USING(zone_id) WHERE z.group_id=?",
+                (str(group_id),),
+            )
+            row = await cursor.fetchone()
+        return None if row is None or row[0] is None else int(row[0])
+
     async def zone_group_snapshot(
         self, group_id: UUID, account: AccountStateSummary | None = None
     ) -> dict:
