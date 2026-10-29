@@ -24,6 +24,7 @@ from cautious_crypto_bro.storage import LATEST_SCHEMA_SQL, IntentStore
 from cautious_crypto_bro.storage.schema import (
     PLANNING_CANDIDATE_SCHEMA_SQL,
     SOURCE_DECISION_SCHEMA_SQL,
+    ZONE_HISTORY_SCHEMA_SQL,
     ZONE_LEDGER_SCHEMA_SQL,
 )
 
@@ -251,6 +252,7 @@ def test_schema10_upgrade_preserves_rows_and_does_not_invent_decisions(tmp_path)
             LATEST_SCHEMA_SQL.replace(PLANNING_CANDIDATE_SCHEMA_SQL, "")
             .replace(SOURCE_DECISION_SCHEMA_SQL, "")
             .replace(ZONE_LEDGER_SCHEMA_SQL, "")
+            .replace(ZONE_HISTORY_SCHEMA_SQL, "")
         )
         db.execute("PRAGMA user_version = 10")
         source = make_intent().source

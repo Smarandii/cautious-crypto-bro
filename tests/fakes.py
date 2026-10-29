@@ -30,6 +30,7 @@ from cautious_crypto_bro.execution import (
     ExecutionPlanner,
     InstrumentContext,
 )
+from cautious_crypto_bro.execution_history import ExecutionHistoryPage
 
 
 def _now() -> datetime:
@@ -164,6 +165,12 @@ class FakeAccountGateway:
     ) -> list[tuple[int, Decimal]]:
         self.minute_closes_calls.append(symbol)
         return self.minute_closes.get(symbol, [])
+
+    async def execution_history_page(self, symbol, start_ms, end_ms, cursor=""):
+        rows = await self.execution_history(symbol, start_ms)
+        return ExecutionHistoryPage(
+            tuple(r for r in rows if int(r.get("execTime") or 0) <= end_ms), ""
+        )
 
     async def execution_history(
         self,

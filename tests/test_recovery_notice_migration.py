@@ -55,6 +55,7 @@ def test_schema9_upgrade_preserves_records_and_backfills_only_interrupted_notice
                 db.execute("DROP TABLE source_decisions")
                 db.execute("DROP TABLE planning_candidates")
                 for table in (
+                    "zone_history_queries",
                     "zone_executions",
                     "zone_orders",
                     "zone_allocations",

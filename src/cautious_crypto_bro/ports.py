@@ -34,6 +34,7 @@ from .domain import (
     SymbolExposure,
     TradingIntent,
 )
+from .execution_history import ExecutionHistoryPage, HistoryQuery
 from .storage.planning_candidate import PlanningCandidate
 from .zone_ledger import ZoneExecution, ZoneOrder
 
@@ -43,6 +44,9 @@ from .zone_ledger import ZoneExecution, ZoneOrder
 
 
 class AccountGateway(Protocol):
+    async def execution_history_page(
+        self, symbol: str, start_ms: int, end_ms: int, cursor: str = ""
+    ) -> ExecutionHistoryPage: ...
     async def market_context(self, symbol: str) -> InstrumentContext: ...
 
     async def one_minute_closes(
@@ -580,6 +584,21 @@ class SignalServiceStore(
     ) -> bool: ...
 
 
+class ZoneHistoryRepository(Protocol):
+    async def prepare_zone_history_queries(
+        self, symbols: Sequence[str], now_ms: int
+    ) -> tuple[HistoryQuery, ...]: ...
+
+    async def finish_zone_history_query(
+        self,
+        query: HistoryQuery,
+        next_cursor: str,
+        now_ms: int,
+        *,
+        error: str | None = None,
+    ) -> None: ...
+
+
 class ZoneLedgerRepository(Protocol):
     """Durable zone-allocation evidence the coordinator enrolls into."""
 
@@ -617,6 +636,7 @@ class PositionSupervisorStore(
     PositionActionRepository,
     IntentRepository,
     ZoneLedgerRepository,
+    ZoneHistoryRepository,
     Protocol,
 ):
     """Everything PositionSupervisor needs from durable storage."""

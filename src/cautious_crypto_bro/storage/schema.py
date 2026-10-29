@@ -1,6 +1,26 @@
 from __future__ import annotations
 
-LATEST_SCHEMA_VERSION = 14
+LATEST_SCHEMA_VERSION = 15
+
+ZONE_HISTORY_SCHEMA_SQL = """
+CREATE TABLE zone_history_queries (
+    symbol TEXT NOT NULL,
+    lane TEXT NOT NULL CHECK(lane IN ('recent','archive')),
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    cursor TEXT NOT NULL DEFAULT '',
+    seen_cursors_json TEXT NOT NULL DEFAULT '[]',
+    last_attempt_ms INTEGER NOT NULL DEFAULT 0,
+    limited_before_ms INTEGER NOT NULL,
+    last_error TEXT,
+    completed_start_ms INTEGER,
+    completed_end_ms INTEGER,
+    completed_at_ms INTEGER,
+    PRIMARY KEY(symbol,lane),
+    CHECK(start_ms > 0 AND end_ms >= start_ms),
+    CHECK(end_ms - start_ms <= 604800000)
+);
+"""
 
 ZONE_LEDGER_SCHEMA_SQL = """
 CREATE TABLE zone_groups (
@@ -57,6 +77,7 @@ LATEST_SCHEMA_SQL = "\nCREATE TABLE source_messages (\n    channel_id INTEGER NO
 LATEST_SCHEMA_SQL += RECOVERY_NOTICE_SCHEMA_SQL
 LATEST_SCHEMA_SQL += SOURCE_DECISION_SCHEMA_SQL
 LATEST_SCHEMA_SQL += ZONE_LEDGER_SCHEMA_SQL
+LATEST_SCHEMA_SQL += ZONE_HISTORY_SCHEMA_SQL
 
 PLANNING_CANDIDATE_SCHEMA_SQL = """
 CREATE TABLE planning_candidates (

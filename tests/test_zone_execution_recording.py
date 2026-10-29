@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from decimal import Decimal as D
 
@@ -71,7 +72,7 @@ async def _bind_entries(store, group_id, plans):
 
 
 async def _recorded_rows(store, group_id):
-    with sqlite3.connect(store._database_path) as db:
+    with closing(sqlite3.connect(store._database_path)) as db:
         rows = db.execute(
             "SELECT e.payload_json FROM zone_executions e "
             "JOIN zone_orders o USING(order_id) "
@@ -79,6 +80,150 @@ async def _recorded_rows(store, group_id):
             (str(group_id),),
         ).fetchall()
     return [ZoneExecution.model_validate_json(row[0]) for row in rows]
+
+
+def _make_replay_due(store):
+    # Advance only the disposable fixture's durable scheduling metadata.
+    # Restart itself must not bypass the new rate limit.
+    with closing(sqlite3.connect(store._database_path)) as db:
+        db.execute("UPDATE zone_history_queries SET last_attempt_ms=0")
+        db.commit()
+
+
+@pytest.mark.parametrize("new_binding", [False, True])
+def test_late_and_equal_time_fills_survive_restart(tmp_path, new_binding):
+    async def run():
+        database = tmp_path / "late-executions.sqlite3"
+        store, group_id, plans = await zones(database)
+        first = plans[0].orders[0]
+        await store.bind_zone_order(
+            ZoneOrder(
+                zone_id=plans[0].intent_id,
+                order_id="owned-first",
+                order_link_id="ccb-owned-first",
+                role="ENTRY",
+                quantity=first.quantity,
+            )
+        )
+        timestamp = int(datetime.now(UTC).timestamp() * 1000) - 1000
+        initial = _row("initial", "owned-first", "Buy", "0.1", "0", "100", timestamp)
+        gateway = RecordingGateway([initial])
+        await _supervisor(store, gateway).reconcile_once()
+        late_order = "owned-first"
+        if new_binding:
+            late_order = "owned-later-binding"
+            await store.bind_zone_order(
+                ZoneOrder(
+                    zone_id=plans[1].intent_id,
+                    order_id=late_order,
+                    order_link_id="ccb-owned-later",
+                    role="ENTRY",
+                    quantity=plans[1].orders[0].quantity,
+                )
+            )
+        gateway.execution_rows["BTCUSDT"] = [
+            initial,
+            _row("late-equal", late_order, "Buy", "0.1", "0", "100", timestamp),
+            _row("late-older", late_order, "Buy", "0.1", "0", "100", timestamp - 500),
+            _row("newer", "owned-first", "Buy", "0.1", "0", "100", timestamp + 500),
+        ]
+        restarted = IntentStore(database)
+        await restarted.initialize()
+        _make_replay_due(restarted)
+        await _supervisor(restarted, gateway).reconcile_once()
+        rows = await _recorded_rows(restarted, group_id)
+        assert {row.execution_id for row in rows} == {
+            "initial",
+            "late-equal",
+            "late-older",
+            "newer",
+        }
+        assert sum(row.quantity for row in rows) == D("0.4")
+        assert sum(row.fee for row in rows) == D("0.04")
+        _make_replay_due(restarted)
+        await _supervisor(IntentStore(database), gateway).reconcile_once()
+        assert len(await _recorded_rows(restarted, group_id)) == 4
+
+    asyncio.run(run())
+
+
+def test_archival_replay_keeps_terminal_strategies_eligible(tmp_path):
+    async def run():
+        database = tmp_path / "terminal-archive.sqlite3"
+        store, group, plans = await zones(database)
+        await _bind_entries(store, group, plans)
+        old_time = int(datetime.now(UTC).timestamp() * 1000) - 3 * 24 * 60 * 60 * 1000
+        order_id = f"id-{plans[0].intent_id.hex[:6]}-e1"
+        gateway = RecordingGateway(
+            [_row("late-terminal", order_id, "Buy", "0.1", "0", "100", old_time)]
+        )
+        with closing(sqlite3.connect(database)) as db:
+            db.execute(
+                "INSERT INTO position_strategies(strategy_id,symbol,side,status,created_at,updated_at) VALUES (?,'BTCUSDT','LONG','CLOSED',?,?)",
+                (
+                    str(plans[0].intent_id),
+                    datetime.now(UTC).isoformat(),
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            db.commit()
+        await _supervisor(store, gateway).reconcile_once()
+        assert await _recorded_rows(store, group) == []
+        with closing(sqlite3.connect(database)) as db:
+            db.execute(
+                "UPDATE zone_history_queries SET start_ms=?,end_ms=?,cursor='',seen_cursors_json='[]',last_attempt_ms=0 WHERE lane='archive'",
+                (old_time - 1, old_time + 1),
+            )
+            db.commit()
+        await _supervisor(IntentStore(database), gateway).reconcile_once()
+        rows = await _recorded_rows(store, group)
+        assert [r.execution_id for r in rows] == ["late-terminal"]
+        assert rows[0].quantity == D("0.1") and rows[0].fee == D("0.01")
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("side", "Unknown"),
+        ("execQty", "bad"),
+        ("execFee", None),
+        ("execId", ""),
+        ("execType", None),
+    ],
+)
+def test_malformed_owned_history_stays_incomplete_and_retryable(tmp_path, field, value):
+    async def run():
+        database = tmp_path / "malformed.sqlite3"
+        store, group, plans = await zones(database)
+        await _bind_entries(store, group, plans)
+        order_id = f"id-{plans[0].intent_id.hex[:6]}-e1"
+        row = _row(
+            "owned-fill",
+            order_id,
+            "Buy",
+            "0.1",
+            "0",
+            "100",
+            int(datetime.now(UTC).timestamp() * 1000) - 1000,
+        )
+        gateway = RecordingGateway([{**row, field: value}])
+        await _supervisor(store, gateway).reconcile_once()
+        assert await _recorded_rows(store, group) == []
+        with closing(sqlite3.connect(database)) as db:
+            error, completed = db.execute(
+                "SELECT last_error,completed_end_ms FROM zone_history_queries WHERE lane='recent'"
+            ).fetchone()
+            assert error and completed is None
+        gateway.execution_rows["BTCUSDT"] = [row]
+        _make_replay_due(store)
+        await _supervisor(IntentStore(database), gateway).reconcile_once()
+        assert [r.execution_id for r in await _recorded_rows(store, group)] == [
+            "owned-fill"
+        ]
+
+    asyncio.run(run())
 
 
 def test_observed_fills_bind_to_enrolled_zones_idempotently(tmp_path) -> None:
@@ -134,14 +279,18 @@ def test_observed_fills_bind_to_enrolled_zones_idempotently(tmp_path) -> None:
             "exec-2",
         ]
 
-        # A restarted process catches up incrementally from the durable
-        # watermark: only newer evidence is fetched or recorded.
+        # A due restarted process replays the recent window; observed maxima
+        # never exclude equal-time or older late-visible executions.
         gateway.execution_rows["BTCUSDT"].append(
             _row("exec-3", second_order_id, "Buy", "2", "0", "100", now_ms - 100)
         )
         restarted = _supervisor(store, gateway)
+        _make_replay_due(store)
         await restarted.reconcile_once()
-        assert gateway.execution_history_calls[-1][1] == now_ms - 499
+        assert any(
+            since <= now_ms - 1000
+            for _, since in gateway.execution_history_calls[calls_after_first:]
+        )
         final = await _recorded_rows(store, group_id)
         assert sorted(r.execution_id for r in final) == [
             "exec-1",
@@ -187,6 +336,7 @@ def test_direction_conflict_halts_the_group_without_losing_evidence(tmp_path) ->
         # A restarted process retries the same window and halts again:
         # the failure stays visible instead of disappearing.
         restarted = _supervisor(store, gateway)
+        _make_replay_due(store)
         await restarted.reconcile_once()
         assert [row.execution_id for row in await _recorded_rows(store, group_id)] == []
 
@@ -198,6 +348,7 @@ def test_direction_conflict_halts_the_group_without_losing_evidence(tmp_path) ->
             if row["execId"] != "exec-bad"
         ]
         third = _supervisor(store, gateway)
+        _make_replay_due(store)
         await third.reconcile_once()
         final = await _recorded_rows(store, group_id)
         assert [row.execution_id for row in final] == ["exec-ok"]

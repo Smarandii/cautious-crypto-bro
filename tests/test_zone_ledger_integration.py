@@ -23,6 +23,7 @@ from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.storage import LATEST_SCHEMA_SQL, IntentStore
 from cautious_crypto_bro.storage.schema import (
     PLANNING_CANDIDATE_SCHEMA_SQL,
+    ZONE_HISTORY_SCHEMA_SQL,
     ZONE_LEDGER_SCHEMA_SQL,
 )
 from cautious_crypto_bro.zone_ledger import ZoneExecution, ZoneOrder
@@ -298,9 +299,9 @@ def test_schema11_upgrade_preserves_old_rows_and_does_not_invent_allocations(tmp
     database = tmp_path / "state.db"
     with sqlite3.connect(database) as db:
         db.executescript(
-            LATEST_SCHEMA_SQL.replace(ZONE_LEDGER_SCHEMA_SQL, "").replace(
-                PLANNING_CANDIDATE_SCHEMA_SQL, ""
-            )
+            LATEST_SCHEMA_SQL.replace(ZONE_LEDGER_SCHEMA_SQL, "")
+            .replace(PLANNING_CANDIDATE_SCHEMA_SQL, "")
+            .replace(ZONE_HISTORY_SCHEMA_SQL, "")
         )
         db.execute("PRAGMA user_version=11")
         before = {

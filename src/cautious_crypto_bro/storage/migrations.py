@@ -9,6 +9,7 @@ from .schema import (
     PLANNING_CANDIDATE_SCHEMA_SQL,
     RECOVERY_NOTICE_SCHEMA_SQL,
     SOURCE_DECISION_SCHEMA_SQL,
+    ZONE_HISTORY_SCHEMA_SQL,
     ZONE_LEDGER_SCHEMA_SQL,
 )
 
@@ -68,7 +69,7 @@ async def initialize_database(database_path: Path) -> None:
         if version == LATEST_SCHEMA_VERSION:
             return
 
-        if version in {4, 5, 6, 7, 8, 9, 10, 11, 12, 13}:
+        if version in {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}:
             try:
                 steps = (
                     (4, MIGRATION_4_TO_5_SQL),
@@ -81,6 +82,7 @@ async def initialize_database(database_path: Path) -> None:
                     (11, ZONE_LEDGER_SCHEMA_SQL),
                     (12, PLANNING_CANDIDATE_SCHEMA_SQL),
                     (13, MIGRATION_13_TO_14_SQL),
+                    (14, ZONE_HISTORY_SCHEMA_SQL),
                 )
                 migration_sql = "\n".join(
                     sql for source_version, sql in steps if version <= source_version
@@ -105,7 +107,7 @@ async def initialize_database(database_path: Path) -> None:
         if version != 0:
             raise RuntimeError(
                 "Unsupported database schema version: "
-                f"{version}; expected 0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, "
+                f"{version}; expected 0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, "
                 f"or {LATEST_SCHEMA_VERSION}"
             )
 

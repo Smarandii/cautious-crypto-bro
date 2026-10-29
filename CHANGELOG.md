@@ -10,6 +10,34 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.25] - 2026-10-29
+
+### Fixed
+
+- Recover later-visible zone executions with equal or older timestamps (#256).
+  Observed event maxima no longer exclude history. Durable recent and archival
+  query lanes replay explicit windows against confirmed order ownership, including
+  closed strategies, while execution IDs keep quantity and fee evidence idempotent.
+- Bound each recording pass to four single-page reads, each containing at most
+  100 rows. Persist cursor history and query scheduling across restart. Conflicts,
+  malformed pages, repeated cursors and the 100-page query limit remain explicit
+  failures; they never advance a query's completed-window record.
+
+### Validation and rollback
+
+- HTTP-adapter/SQLite integration covers delayed/equal-time fills, new bindings,
+  terminal strategies, incomplete-page retry, cursor restart, fair query budgets,
+  retained quantities/fees and schema preservation. Legacy migration/ownership
+  checks remain in place. The published 2.2.24 reader rejects schema 15 unchanged.
+- Schema 15 adds query-progress state and preserves existing records. Stop all
+  writers and keep a restore-verified pre-upgrade backup. Rollback requires the
+  matching schema-14 backup and exchange reconciliation, retaining post-upgrade
+  evidence first; never lower the version pragma or start an old image on schema 15.
+- The 730-day query lookback is a recorded limitation; exchange retention can be
+  shorter. Consumed windows are replayed and do not prove immutable history.
+  No entry/exit/risk-policy change, historical signal replay or new trading
+  mutation. Independent-zone activation and #245/#123 remain incomplete.
+
 ## [2.2.24] - 2026-10-29
 
 ### Fixed

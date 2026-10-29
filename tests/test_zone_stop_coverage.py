@@ -116,7 +116,7 @@ def test_distinct_stops_and_parent_quantities_survive_restart_without_writes(
         ] is None
         with sqlite3.connect(database) as db:
             assert list(db.iterdump()) == before
-            assert db.execute("PRAGMA user_version").fetchone() == (14,)
+            assert db.execute("PRAGMA user_version").fetchone() == (15,)
 
     asyncio.run(run())
 

@@ -31,6 +31,7 @@ from ..domain import (
     TradeExecutionError,
 )
 from ..execution import ExecutionPlanner
+from ..execution_history import HISTORY_WINDOW_MS, ExecutionHistoryPage
 from .client import DEMO_BASE_URL, BybitClient
 from .normalize import (
     account_order_from_item,
@@ -73,6 +74,53 @@ class BybitDemoExecutor:
             self._market_context_sync,
             symbol,
         )
+
+    async def execution_history_page(
+        self, symbol: str, start_ms: int, end_ms: int, cursor: str = ""
+    ) -> ExecutionHistoryPage:
+        if start_ms <= 0 or not start_ms <= end_ms <= start_ms + HISTORY_WINDOW_MS:
+            raise ValueError("Execution history requires a bounded seven-day window")
+        return await _run_sync(
+            self._execution_history_page_sync, symbol, start_ms, end_ms, cursor
+        )
+
+    def _execution_history_page_sync(
+        self, symbol: str, start_ms: int, end_ms: int, cursor: str
+    ) -> ExecutionHistoryPage:
+        self._sync_clock()
+        result = self._client.private_get(
+            "/v5/execution/list",
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "startTime": start_ms,
+                "endTime": end_ms,
+                "limit": 100,
+                "cursor": cursor,
+            },
+        ).get("result")
+        if not isinstance(result, dict):
+            raise TradeExecutionError(
+                "Bybit execution history returned an invalid result"
+            )
+        rows, next_cursor = result.get("list"), result.get("nextPageCursor")
+        if (
+            not isinstance(rows, list)
+            or len(rows) > 100
+            or any(not isinstance(row, dict) for row in rows)
+        ):
+            raise TradeExecutionError(
+                "Bybit execution history returned an invalid page"
+            )
+        if (
+            not isinstance(next_cursor, str)
+            or len(next_cursor) > 2048
+            or (next_cursor and next_cursor == cursor)
+        ):
+            raise TradeExecutionError(
+                "Bybit execution history returned an invalid cursor"
+            )
+        return ExecutionHistoryPage(tuple(rows), next_cursor)
 
     async def execution_history(
         self,
