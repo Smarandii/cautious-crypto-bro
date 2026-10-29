@@ -12,7 +12,7 @@ from test_workflow_integration import ExchangeTransport, workflow
 
 from cautious_crypto_bro.domain import IncomingPost
 from cautious_crypto_bro.llm_provider import LLMResponse
-from cautious_crypto_bro.openrouter import IntentExtractor
+from cautious_crypto_bro.signals.extraction import IntentExtractor
 from cautious_crypto_bro.source_coverage import (
     coverage_summary,
     decision_disposition,

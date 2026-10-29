@@ -18,7 +18,7 @@ from cautious_crypto_bro.execution import (
     ExecutionPlanner,
     ExecutionPlanningError,
 )
-from cautious_crypto_bro.openrouter import _signals_from_extraction
+from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 
 
 @pytest.mark.parametrize(

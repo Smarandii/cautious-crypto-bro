@@ -10,6 +10,27 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.26] - 2026-10-29
+
+### Changed
+
+- Move provider-neutral signal extraction, transport normalization and lifecycle
+  evidence into capability-owned `signals` modules (#263). OpenRouter retains
+  its transport adapter; runtime factories, audit/replay tools and tests import
+  interpretation rules directly from their owners. Remove the former extractor
+  module and generic extraction facade exports without compatibility wrappers.
+
+### Validation and rollback
+
+- Compare all 32 moved definitions against the previous syntax trees, including
+  the model prompt; exercise provider, cache, lifecycle, source recovery and
+  SQLite workflow integration through existing tests. No dependency, model
+  schema, fingerprint, entry/exit strategy or risk-setting change.
+- Schema 15 is unchanged. Preserve a restore-verified state backup before
+  deployment; the previous schema-15 image remains compatible. Never replay
+  historical signals as part of this refactor. The broader #262 architecture/UI
+  work, independent-zone activation and #248 outcome evaluation remain open.
+
 ## [2.2.25] - 2026-10-29
 
 ### Fixed

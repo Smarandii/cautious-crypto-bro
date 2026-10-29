@@ -5,8 +5,6 @@ STATIC_IGNORED_PROVIDERS = (
     "parasail",
 )
 
-DEFAULT_REDUCTION_PCT = 50.0
-
 
 class OpenRouterProviderFailure(ValueError):
     def __init__(

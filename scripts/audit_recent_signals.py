@@ -28,18 +28,18 @@ from cautious_crypto_bro.domain import (
 from cautious_crypto_bro.llm_factory import (
     build_intent_extractor,
 )
-from cautious_crypto_bro.openrouter import (
-    SYSTEM_PROMPT,
-    IntentExtractor,
-    _evaluation_fingerprint,
-    _signals_from_extraction,
-)
 from cautious_crypto_bro.runtime_store import (
     RedisRuntimeStore,
 )
 from cautious_crypto_bro.signal_context import (
     build_position_context,
 )
+from cautious_crypto_bro.signals.extraction import (
+    SYSTEM_PROMPT,
+    IntentExtractor,
+    _evaluation_fingerprint,
+)
+from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 from cautious_crypto_bro.source_coverage import (
     decision_disposition,
     production_decision,
