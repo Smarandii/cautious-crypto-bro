@@ -1,16 +1,4 @@
-"""The landing page makes factual claims about this repository.
-
-A stale claim on a public page is a small lie, and this project is built
-on the idea that the code owns the facts. The checks below are cheap and
-selection-independent: they read the repository's own configuration
-rather than relying on session state.
-
-The advertised test count is deliberately NOT checked here. Pinning it
-exactly needs `pytest --collect-only` in a subprocess, measured at 11s,
-and `session.testscollected` is only meaningful on a full-suite run, so
-either option is too slow or too fragile for every invocation. The count
-is maintained by hand.
-"""
+"""Keep public evidence and visible safety claims tied to repository contracts."""
 
 import json
 import re
@@ -31,7 +19,8 @@ def _landing_page() -> str:
 
 def _flat_page() -> str:
     """Whitespace-collapsed, so a phrase is not broken by HTML line wrapping."""
-    return re.sub(r"\s+", " ", _landing_page()).lower()
+    visible = re.sub(r"<!--.*?-->", "", _landing_page(), flags=re.DOTALL)
+    return re.sub(r"\s+", " ", visible).lower()
 
 
 def _pyproject() -> str:
@@ -42,17 +31,13 @@ def _dashboard_script() -> str:
     return DASHBOARD_SCRIPT.read_text(encoding="utf-8")
 
 
-def test_landing_page_has_a_test_count_chip() -> None:
-    """Not the value, just that the claim is present and well formed.
-
-    Without this a future edit could silently drop the claim, and the
-    reason it is not asserted exactly would be lost.
-    """
+def test_landing_page_starts_with_unavailable_evidence() -> None:
     page = _landing_page()
-
-    assert re.search(r'<span class="chip">[\d,]+ tests</span>', page), (
-        "landing page no longer has a well-formed test-count chip"
+    assert (
+        "settings and outcomes are unavailable until the feed responds" in _flat_page()
     )
+    assert "Historical snapshot unavailable" in page
+    assert not re.search(r"[\d,]+ tests|4 / 4 passing|STABLE|B<small>", page)
 
 
 def test_landing_page_complexity_ceiling_matches_pyproject() -> None:
