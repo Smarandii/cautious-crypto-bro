@@ -13,7 +13,7 @@ from test_workflow_integration import ExchangeTransport, workflow
 
 from cautious_crypto_bro import telegram_replay, telegram_source
 from cautious_crypto_bro.llm_provider import LLMResponse
-from cautious_crypto_bro.openrouter import IntentExtractor
+from cautious_crypto_bro.signals.extraction import IntentExtractor
 from cautious_crypto_bro.storage import IntentStore
 
 pytestmark = pytest.mark.integration

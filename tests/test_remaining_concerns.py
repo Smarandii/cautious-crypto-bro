@@ -32,10 +32,10 @@ from cautious_crypto_bro.domain import (
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
-from cautious_crypto_bro.openrouter import _signals_from_extraction
 from cautious_crypto_bro.position_supervisor import PositionSupervisor
 from cautious_crypto_bro.service import SignalService
 from cautious_crypto_bro.signal_context import SignalContextProvider
+from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 from cautious_crypto_bro.storage import IntentStore
 
 D = Decimal

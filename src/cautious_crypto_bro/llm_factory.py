@@ -7,14 +7,12 @@ from .llm_provider import (
     NamedLLMProvider,
 )
 from .opencode_go import OpenCodeGoProvider
-from .openrouter import (
-    IntentExtractor,
-    OpenRouterProvider,
-)
+from .openrouter import OpenRouterProvider
 from .ports import (
     EvaluationCache,
     ProviderCooldownStore,
 )
+from .signals.extraction import IntentExtractor
 
 
 def _required_api_key(

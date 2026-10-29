@@ -7,11 +7,9 @@ from cautious_crypto_bro.domain import (
     IntentExtraction,
     SourceMessage,
 )
-from cautious_crypto_bro.openrouter import (
-    IntentExtractor,
-    OpenRouterProvider,
-    _signals_from_extraction,
-)
+from cautious_crypto_bro.openrouter import OpenRouterProvider
+from cautious_crypto_bro.signals.extraction import IntentExtractor
+from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 
 
 def _openrouter_extractor(
@@ -798,9 +796,7 @@ def test_market_string_with_price_is_normalized_safely() -> None:
         EntryType,
         IntentExtraction,
     )
-    from cautious_crypto_bro.openrouter import (
-        _signals_from_extraction,
-    )
+    from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 
     extraction = IntentExtraction.model_validate(
         {
@@ -841,9 +837,7 @@ def test_hold_with_open_fields_is_non_executable() -> None:
     from cautious_crypto_bro.domain import (
         IntentExtraction,
     )
-    from cautious_crypto_bro.openrouter import (
-        _signals_from_extraction,
-    )
+    from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 
     extraction = IntentExtraction.model_validate(
         {
@@ -885,9 +879,7 @@ def test_invalid_open_candidate_does_not_drop_valid_close(invalid_fields) -> Non
         IntentExtraction,
         PositionActionType,
     )
-    from cautious_crypto_bro.openrouter import (
-        _signals_from_extraction,
-    )
+    from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 
     extraction = IntentExtraction.model_validate(
         {
@@ -932,9 +924,7 @@ def test_image_only_close_cannot_authorize_lifecycle_action() -> None:
     from cautious_crypto_bro.domain import (
         IntentExtraction,
     )
-    from cautious_crypto_bro.openrouter import (
-        _signals_from_extraction,
-    )
+    from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 
     extraction = IntentExtraction.model_validate(
         {
@@ -999,9 +989,7 @@ def test_current_caption_authorizes_close_when_model_omits_evidence() -> None:
     from cautious_crypto_bro.domain import (
         PositionActionType,
     )
-    from cautious_crypto_bro.openrouter import (
-        _signals_from_extraction,
-    )
+    from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 
     extraction = _audit_position_action_extraction(
         symbol="LSKUSDT",
@@ -1034,9 +1022,7 @@ def test_current_caption_authorizes_close_when_model_omits_evidence() -> None:
     ],
 )
 def test_negated_close_is_not_authorized(text) -> None:
-    from cautious_crypto_bro.openrouter import (
-        _signals_from_extraction,
-    )
+    from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 
     extraction = _audit_position_action_extraction(
         symbol="ARKUSDT",
@@ -1058,9 +1044,7 @@ def test_take_profit_ordinal_ignores_movement_percentage() -> None:
         IntentExtraction,
         PositionActionType,
     )
-    from cautious_crypto_bro.openrouter import (
-        _signals_from_extraction,
-    )
+    from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 
     extraction = IntentExtraction.model_validate(
         {
@@ -1292,7 +1276,7 @@ def test_observed_partial_close_captions_are_scoped(caption, expected_pct) -> No
 
 
 def test_prompt_guards_promotional_recap_cards() -> None:
-    from cautious_crypto_bro.openrouter import SYSTEM_PROMPT
+    from cautious_crypto_bro.signals.extraction import SYSTEM_PROMPT
 
     prompt = " ".join(SYSTEM_PROMPT.split())
 
