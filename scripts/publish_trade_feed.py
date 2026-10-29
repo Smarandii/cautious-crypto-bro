@@ -36,6 +36,7 @@ def _run(
         capture_output=True,
         text=True,
         timeout=timeout,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         env=os.environ | {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"},
     )
     if result.returncode:

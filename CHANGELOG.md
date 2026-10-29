@@ -10,6 +10,25 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.28] - 2026-10-29
+
+### Fixed
+
+- Keep the scheduled public trade publisher's Windows child commands windowless
+  (#268). A `pythonw.exe` parent alone does not hide Git or WSL consoles; request
+  `CREATE_NO_WINDOW` explicitly at the command boundary. Preserve captured output,
+  noninteractive authentication, timeouts and private failure diagnostics.
+
+### Validation and rollback
+
+- Focused platform-boundary regression checks cover Windows no-console flags,
+  unchanged non-Windows execution, command capture, private errors and timeouts.
+  Verify a real Windows child has no console and the scheduled publisher remains
+  enabled. No new dependency, trading behavior or source-intake change.
+- Schema 15 is unchanged; retain a restore-verified state backup and the previous
+  schema-15 image. The broader #262 refactor, independent-zone activation and
+  #248 magnitude evaluation remain open.
+
 ## [2.2.27] - 2026-10-29
 
 ### Changed
