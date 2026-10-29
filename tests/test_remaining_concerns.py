@@ -210,6 +210,8 @@ class Exchange:
             )
             order["orderStatus"] = "Cancelled"
             result = {"orderId": order["orderId"]}
+        elif path == "/v5/execution/list":
+            result = {"list": [], "nextPageCursor": ""}
         elif path == "/v5/position/trading-stop":
             if "stopLoss" in body:
                 self.stop = D(body["stopLoss"])

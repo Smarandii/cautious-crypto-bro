@@ -24,6 +24,7 @@ from .domain import (
     StrategyV2Policy,
     TradeExecutionError,
 )
+from .execution_history import HistoryQuery
 from .ports import AccountGateway, PositionSupervisorStore
 from .position_management.exit_installer import (
     ExitInstaller,
@@ -36,10 +37,7 @@ from .zone_ledger import ZoneExecution
 
 logger = logging.getLogger(__name__)
 
-# Zones enrolled before the first recording pass bootstrap from this lookback.
-ZONE_EXECUTION_BOOTSTRAP_MS = 48 * 60 * 60 * 1000
-# Rate-aware window: one execution-history read per symbol at most this often,
-# not on every two-second supervision pass.
+# Page work has both a process throttle and a durable per-query throttle.
 ZONE_EXECUTION_RECORD_INTERVAL_S = 60.0
 
 
@@ -131,102 +129,105 @@ class PositionSupervisor:
             logger.exception("Failed to publish successful supervision progress")
 
     async def _record_zone_executions(self) -> None:
-        """Bind observed fills to enrolled zones; never adopt unknown orders.
-
-        Bounded and rate-aware: one execution-history read per symbol per
-        window (not every supervision pass), never before the first window
-        elapses more than once per process. Evidence only: a failure stops
-        *that* group until a later window retries it, so the durable
-        watermark never jumps past unrecorded evidence, and the whole pass
-        never breaks strategy reconciliation.
-        """
+        """Replay bounded pages against exact ownership, including terminal groups."""
         now = asyncio.get_running_loop().time()
         if now < self._zone_execution_due_at:
             return
         self._zone_execution_due_at = now + ZONE_EXECUTION_RECORD_INTERVAL_S
         try:
             groups_by_symbol = await self._store.zone_order_symbols()
-            for symbol, group_ids in groups_by_symbol.items():
+            queries = await self._store.prepare_zone_history_queries(
+                tuple(groups_by_symbol), int(datetime.now(UTC).timestamp() * 1000)
+            )
+            for query in queries:
                 try:
-                    await self._record_symbol_executions(symbol, group_ids)
-                except Exception:
+                    await self._record_history_query(
+                        query, groups_by_symbol[query.symbol]
+                    )
+                except Exception as exc:
+                    await self._store.finish_zone_history_query(
+                        query,
+                        "",
+                        int(datetime.now(UTC).timestamp() * 1000),
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
                     logger.exception(
-                        "Zone execution recording failed for symbol %s", symbol
+                        "Zone execution query remains incomplete for %s/%s",
+                        query.symbol,
+                        query.lane,
                     )
         except Exception:
             logger.exception("Zone execution recording pass failed")
 
-    async def _record_symbol_executions(
+    async def _record_history_query(
         self,
-        symbol: str,
+        query: HistoryQuery,
         group_ids: tuple[UUID, ...],
     ) -> None:
-        contexts: list[tuple[UUID, set[str], int]] = []
-        since_values: list[int] = []
-        now_ms = int(datetime.now(UTC).timestamp() * 1000)
+        page = await self._executor.execution_history_page(
+            query.symbol, query.start_ms, query.end_ms, query.cursor
+        )
+        if any(
+            not isinstance(row.get("execType"), str)
+            or (
+                row["execType"] == "Trade"
+                and (not row.get("orderId") or not row.get("execId"))
+            )
+            for row in page.rows
+        ):
+            raise StoreError("History page lacks execution identity/type evidence")
         for group_id in group_ids:
             bound = {
                 order.order_id
                 for order in await self._store.zone_bound_orders(group_id)
             }
-            if not bound:
-                continue
-            watermark = await self._store.zone_execution_watermark(group_id)
-            since = (
-                watermark + 1
-                if watermark is not None
-                else now_ms - ZONE_EXECUTION_BOOTSTRAP_MS
-            )
-            contexts.append((group_id, bound, since))
-            since_values.append(since)
-        if not contexts:
-            return
-        rows = await self._executor.execution_history(symbol, min(since_values))
-        ordered = tuple(sorted(rows, key=lambda row: int(row.get("execTime") or 0)))
-        for group_id, bound, since in contexts:
-            await self._record_group_executions(group_id, bound, since, ordered)
+            await self._record_group_executions(bound, query, page.rows)
+        await self._store.finish_zone_history_query(
+            query, page.next_cursor, int(datetime.now(UTC).timestamp() * 1000)
+        )
 
     async def _record_group_executions(
         self,
-        group_id: UUID,
         bound: set[str],
-        since_ms: int,
+        query: HistoryQuery,
         rows: tuple[dict, ...],
     ) -> None:
-        for row in rows:
-            order_id = str(row.get("orderId") or "")
+        owned = [
+            row
+            for row in rows
+            if row.get("orderId") in bound and row.get("execType") == "Trade"
+        ]
+        executions = []
+        for row in owned:
             if (
-                order_id not in bound
-                or row.get("execType") != "Trade"
-                or int(row.get("execTime") or 0) < since_ms
+                row.get("side") not in {"Buy", "Sell"}
+                or row.get("symbol") != query.symbol
             ):
-                continue
-            try:
-                await self._store.record_zone_execution(
-                    ZoneExecution(
-                        execution_id=str(row["execId"]),
-                        order_id=order_id,
-                        side=(Side.LONG if row.get("side") == "Buy" else Side.SHORT),
-                        quantity=Decimal(str(row["execQty"])),
-                        closed_quantity=Decimal(str(row.get("closedSize") or 0)),
-                        price=Decimal(str(row["execPrice"])),
-                        fee=Decimal(str(row.get("execFee") or 0)),
-                        executed_at_ms=int(row["execTime"]),
-                    )
+                raise StoreError(
+                    "Bound execution has invalid symbol/direction evidence"
                 )
-            except StoreError:
-                # Durable conflict/failure: stop this group so the watermark
-                # cannot advance past the evidence; a later window retries it.
-                logger.exception(
-                    "Zone execution recording halted for group %s at order %s",
-                    group_id,
-                    order_id,
+            execution = ZoneExecution(
+                execution_id=row["execId"],
+                order_id=row["orderId"],
+                side=Side.LONG if row["side"] == "Buy" else Side.SHORT,
+                quantity=Decimal(str(row["execQty"])),
+                closed_quantity=Decimal(str(row.get("closedSize") or 0)),
+                price=Decimal(str(row["execPrice"])),
+                fee=Decimal(str(row["execFee"])),
+                executed_at_ms=int(row["execTime"]),
+            )
+            if not query.start_ms <= execution.executed_at_ms <= query.end_ms:
+                raise StoreError(
+                    "Bound execution lies outside its requested history window"
                 )
-                return
-            except (KeyError, TypeError, ValueError, ArithmeticError):
-                logger.exception(
-                    "Zone execution row rejected as malformed for order %s", order_id
-                )
+            executions.append(execution)
+        # Zen of Python: "In the face of ambiguity, refuse the temptation to guess."
+        # An observed maximum is never a completeness checkpoint. Only consumed
+        # query pages advance, and retained execution IDs make replay idempotent.
+        for execution in sorted(
+            executions, key=lambda e: (e.executed_at_ms, e.execution_id)
+        ):
+            await self._store.record_zone_execution(execution)
 
     async def reconcile_once(self) -> None:
         # The durable strategy snapshot must be loaded while holding the

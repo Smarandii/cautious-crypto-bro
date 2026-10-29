@@ -287,9 +287,9 @@ Pause alerts are retried from SQLite every 30 seconds, independently of exchange
 reconciliation. Delivery is at least once: a crash after Telegram accepts an alert
 but before SQLite records it can produce a duplicate.
 
-SQLite schema 12 supports migrations from 4–11 and preserves existing strategy rows.
+SQLite schema 15 supports migrations from 4–14 and preserves existing strategy rows.
 Before upgrading, stop the old app and back up its complete state; do not run old
-and new writers concurrently. Earlier images reject schema 12. Rollback requires
+and new writers concurrently. Earlier images reject schema 15. Rollback requires
 stopping the new app, reconciling any exchange changes since backup, and restoring
 a matching pre-upgrade database before starting the old image. Do not merely lower
 the schema version or overwrite current exchange protection.
@@ -331,8 +331,8 @@ budget. Group snapshots report per-zone quantities and discrepancies, including
 overclosure, overfill, unknown/changed orders and net-position mismatches. Quantity
 agreement does not verify stop protection or complete historical execution data.
 
-The legacy trading path does not enroll or supervise these groups. The ledger is
-evidence, not ownership permission: multi-zone execution remains disabled pending
+Enrollment and observed-fill recording do not transfer live protection ownership.
+The ledger is evidence, not ownership permission: multi-zone execution remains disabled pending
 native protection, portfolio admission and recovery integration. No historical
 zone allocations are guessed on upgrade. `scripts/report_zone_ledger.py --database
 PATH` prints an aggregate ledger report without exchange/model calls; it always
@@ -340,6 +340,25 @@ identifies missing live/protection proof. Budgets/source evidence in state backu
 remain private. Restart reads the frozen allocation; it must not replace it with
 a later mutable/rebased plan. Unknown orders require explicit investigation,
 never adoption by order-link prefix alone.
+
+Schema 15 adds durable execution-history query progress (#256). Each recording
+pass (normally once per minute) consumes at most four pages globally, with at most
+100 rows per page.
+The recent lane repeatedly reads 48-hour windows; an independent archival lane
+cycles through seven-day windows within a conservative 730-day lookback. Terminal
+strategies remain eligible. Pages, cursor history and scheduling survive restart;
+restart cannot bypass the one-minute query throttle. A query stops at 100 pages
+with an explicit error rather than claiming completion of an unbounded response.
+
+`zone_history_queries` retains the current window/cursor, last error, most recently
+consumed window and `limited_before_ms`. That boundary explicitly excludes older
+evidence; exchange/account retention may be shorter. A consumed window is not a
+promise that no fills will appear later, so successful windows are replayed in
+later cycles. Malformed/conflicting evidence never advances query progress, and
+failed queries restart their current window using execution-ID idempotency.
+No signal replay or new exchange mutations are involved. Before rolling back,
+preserve the post-upgrade state as well as the pre-upgrade schema-14 backup;
+restore the matching backup and reconcile exchange changes before resuming.
 
 ## Randomized Demo LONG participation test
 

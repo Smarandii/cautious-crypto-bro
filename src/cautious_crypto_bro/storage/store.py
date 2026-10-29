@@ -14,6 +14,7 @@ from .position_action import PositionActionRepositoryImpl
 from .position_strategy import PositionStrategyRepositoryImpl
 from .recovery import RecoveryRepositoryImpl
 from .zone import ZoneLedgerRepositoryImpl
+from .zone_history import ZoneHistoryRepositoryImpl
 
 
 class SQLiteStore(
@@ -30,6 +31,7 @@ class SQLiteStore(
     PlanningCandidateRepositoryImpl,
     RecoveryRepositoryImpl,
     ZoneLedgerRepositoryImpl,
+    ZoneHistoryRepositoryImpl,
 ):
     async def initialize(self) -> None:
         await initialize_database(self._database_path)

@@ -27,6 +27,7 @@ from cautious_crypto_bro.storage import (
 )
 from cautious_crypto_bro.storage.schema import (
     PLANNING_CANDIDATE_SCHEMA_SQL,
+    ZONE_HISTORY_SCHEMA_SQL,
     ZONE_LEDGER_SCHEMA_SQL,
 )
 
@@ -926,6 +927,7 @@ def test_schema_8_upgrade_preserves_legacy_strategy_and_is_idempotent(tmp_path):
     legacy_schema = LATEST_SCHEMA_SQL.replace(ZONE_LEDGER_SCHEMA_SQL, "").replace(
         PLANNING_CANDIDATE_SCHEMA_SQL, ""
     )
+    legacy_schema = legacy_schema.replace(ZONE_HISTORY_SCHEMA_SQL, "")
     for column in (
         "    expected_exits_json TEXT,\n",
         "    pause_reason TEXT,\n",

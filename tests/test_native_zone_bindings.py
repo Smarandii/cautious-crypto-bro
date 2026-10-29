@@ -11,6 +11,7 @@ from test_zone_ledger_integration import account, fill, zones
 from cautious_crypto_bro.bybit.normalize import account_order_from_item
 from cautious_crypto_bro.domain import Side, StoreError
 from cautious_crypto_bro.storage import LATEST_SCHEMA_SQL, IntentStore
+from cautious_crypto_bro.storage.schema import ZONE_HISTORY_SCHEMA_SQL
 from cautious_crypto_bro.zone_ledger import ZoneOrder
 
 pytestmark = pytest.mark.integration
@@ -173,6 +174,7 @@ def test_populated_schema13_upgrade_preserves_payloads_and_execution_links(tmp_p
                 INSERT INTO old_orders SELECT * FROM zone_orders;
                 DROP TABLE zone_orders;
                 ALTER TABLE old_orders RENAME TO zone_orders;
+                DROP TABLE zone_history_queries;
                 PRAGMA user_version=13;
             """)
             tables = (
@@ -188,7 +190,7 @@ def test_populated_schema13_upgrade_preserves_payloads_and_execution_links(tmp_p
         with sqlite3.connect(database) as db:
             for table, rows in before.items():
                 assert db.execute("SELECT * FROM " + table).fetchall() == rows
-            assert db.execute("PRAGMA user_version").fetchone() == (14,)
+            assert db.execute("PRAGMA user_version").fetchone() == (15,)
             assert db.execute("PRAGMA foreign_key_check").fetchall() == []
         await reopened.bind_zone_order(entry)
         child = ZoneOrder(
@@ -215,7 +217,7 @@ def test_failed_migration_rolls_back_schema_and_all_rows_then_can_retry(tmp_path
     old_sql = LATEST_SCHEMA_SQL.replace(
         "order_link_id TEXT UNIQUE CHECK(order_link_id IS NULL OR length(order_link_id)>0)",
         "order_link_id TEXT NOT NULL UNIQUE",
-    )
+    ).replace(ZONE_HISTORY_SCHEMA_SQL, "")
     with sqlite3.connect(database) as db:
         db.executescript(old_sql)
         db.execute(
@@ -244,4 +246,4 @@ def test_failed_migration_rolls_back_schema_and_all_rows_then_can_retry(tmp_path
         db.execute("DELETE FROM zone_orders")
     asyncio.run(IntentStore(database).initialize())
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone() == (14,)
+        assert db.execute("PRAGMA user_version").fetchone() == (15,)
