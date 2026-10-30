@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 
+from .entry_settlement import entry_orders_settled
+
 LONG_RISK_SHADOW_FROZEN_AFTER = "2026-10-07T16:40:50+00:00"
 LONG_RISK_SHADOW_MULTIPLIER = 0.25
 LONG_RISK_CURVE_FROZEN_AFTER = "2026-10-07T19:50:18+00:00"
@@ -236,6 +238,22 @@ def reconcile(path: Path | BinaryIO) -> list[dict]:
             if f"{root}/analysis/probe_order_ids.jsonl" in archive.namelist()
             else []
         )
+        members = set(archive.namelist())
+        history = (
+            jsonl(archive, root, "bybit/entry_order_history.jsonl")
+            if f"{root}/bybit/entry_order_history.jsonl" in members
+            else None
+        )
+        pending = (
+            jsonl(archive, root, "bybit/open_entry_orders.jsonl")
+            if f"{root}/bybit/open_entry_orders.jsonl" in members
+            else None
+        )
+        capture = (
+            json.loads(archive.read(f"{root}/metadata.json"))
+            if f"{root}/metadata.json" in members
+            else {}
+        )
 
     probe_order_ids = {
         str(order_id)
@@ -272,6 +290,9 @@ def reconcile(path: Path | BinaryIO) -> list[dict]:
                     owned_order_ids.setdefault(order_id, intent_id)
     _assign_closed_pnl(by_symbol, closed_pnl, owned_order_ids, probe_order_ids)
     _assign_funding(by_symbol, settlements)
+    _verify_entry_settlement(
+        positions, lineage, history, pending, capture, executions_by_order
+    )
     _finish_positions(positions)
     return positions
 
@@ -300,15 +321,81 @@ def _filled_entry_legs(fills: list[dict], evidence: dict | None) -> list[str]:
 
 
 def _reconciled_attempt_state(item: dict) -> dict:
-    evidence = item.get("entry_evidence")
-    if evidence is None:
-        return {}
+    evidence = item.get("entry_evidence") or {}
     return {
-        "attempt_status": item.get("status"),
+        "attempt_status": item.get("status", "EXECUTED"),
         "strategy_status": evidence.get("strategy_status"),
         "entry_identity_complete": evidence.get("entry_identity_complete") is True,
         "entry_orders_settled": evidence.get("entry_orders_settled") is True,
     }
+
+
+def _verify_entry_settlement(
+    positions, lineage, history, pending, capture, fills
+) -> None:
+    items = {
+        str(item.get("intent_id") or ""): item
+        for source in lineage
+        for item in source["intents"]
+    }
+    for position in positions:
+        item = items.get(position["intent_id"], {})
+        evidence = item.get("entry_evidence") or {}
+        claimed_settled = evidence.get("entry_orders_settled") is True
+        position["entry_orders_settled"] = False
+        position["entry_settlement_status"] = "unresolved" if evidence else "unknown"
+        if not claimed_settled or not position["entry_identity_complete"]:
+            continue
+        try:
+            times = [
+                datetime.fromisoformat(str(capture[name]).replace("Z", "+00:00"))
+                for name in (
+                    "entry_order_history_coverage_start",
+                    "entry_order_history_as_of",
+                    "open_entry_orders_as_of",
+                    "created_at",
+                )
+            ]
+            if any(value.tzinfo is None for value in times):
+                continue
+            start, history_at, pending_at, captured_at = [
+                value.timestamp() * 1000 for value in times
+            ]
+            if (
+                not start
+                <= position["start"]
+                <= max(position["start"], position["closed_at"])
+                <= history_at
+                <= pending_at
+                <= captured_at
+            ):
+                continue
+            expected = evidence["entry_orders"]
+            ids = [entry["order_id"] for entry in expected]
+            if len(ids) != len(set(ids)) or set(ids) != set(item["entry_order_ids"]):
+                continue
+            if any(
+                int(fill["execTime"]) > history_at
+                for order_id in ids
+                for fill in fills.get(order_id, [])
+            ) or any(
+                int(order["updatedTime"]) > history_at
+                for order in (history or [])
+                if order.get("orderId") in ids
+            ):
+                continue
+            position["entry_orders_settled"] = entry_orders_settled(
+                expected,
+                position["symbol"],
+                "Buy" if position["side"] == "LONG" else "Sell",
+                history,
+                pending,
+                fills,
+            )
+            if position["entry_orders_settled"]:
+                position["entry_settlement_status"] = "settled"
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
 
 
 def _entry_positions(
@@ -477,8 +564,8 @@ def _finish_positions(positions: list[dict]) -> None:
             and position["closed_fraction"] <= 1.0 + 1e-9
             and position["ambiguous_rows"] == 0
             and position["pnl_rows"] > 0
-            and position.get("entry_identity_complete", True)
-            and position.get("entry_orders_settled", True)
+            and position.get("entry_identity_complete", False)
+            and position.get("entry_orders_settled", False)
         )
         # Bybit Closed P&L already nets opening/closing fees and funding.
         # Keep the transaction-log funding sum for reconciliation diagnostics,

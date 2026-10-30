@@ -9,7 +9,7 @@ from collections import defaultdict
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -17,6 +17,7 @@ from cautious_crypto_bro.bybit.client import DEMO_BASE_URL, BybitClient
 from cautious_crypto_bro.bybit.normalize import account_order_from_item
 from cautious_crypto_bro.config import get_settings
 from cautious_crypto_bro.domain import ExecutionPlan, TradeExecutionError
+from cautious_crypto_bro.entry_settlement import entry_orders_settled
 from cautious_crypto_bro.zone_ledger import ZoneOrder
 
 WINDOW = timedelta(days=7)
@@ -69,9 +70,6 @@ def _entry_attempt(
         row["status"] == "EXECUTED" and saved_ids
     ):
         return None
-    if not bindings and not plan.get("entry_slices"):
-        return _EntryAttempt(row, plan, saved_ids, saved_ids[:1], saved_ids, None)
-
     frozen = ExecutionPlan.model_validate(plan)
     if str(frozen.intent_id) != row["intent_id"]:
         raise ValueError("Stored entry plan has conflicting intent identity")
@@ -112,13 +110,11 @@ def _entry_attempt(
     owned_ids = tuple(
         dict.fromkeys((*entry_ids, *(order.order_id for order in bindings)))
     )
-    evidence = None
-    if frozen.entry_slices or row["status"] != "EXECUTED":
-        evidence = {
-            "strategy_status": strategy_status,
-            "entry_identity_complete": len(entry_ids) == len(expected),
-            "entry_orders": descriptions,
-        }
+    evidence = {
+        "strategy_status": strategy_status,
+        "entry_identity_complete": len(entry_ids) == len(expected),
+        "entry_orders": descriptions,
+    }
     return _EntryAttempt(row, plan, entry_ids, primary_ids, owned_ids, evidence)
 
 
@@ -129,19 +125,13 @@ def _entry_orders_settled(
     fills: dict[str, list[dict]],
 ) -> bool:
     assert attempt.evidence is not None
-    current_ids = {str(order.get("orderId") or "") for order in current}
-    records = {str(order.get("orderId") or ""): order for order in history}
-    side = "Buy" if attempt.plan["side"] == "LONG" else "Sell"
-    return all(
-        item["order_id"] not in current_ids
-        and _settled_entry_order(
-            item,
-            records.get(item["order_id"], {}),
-            fills.get(item["order_id"], []),
-            attempt.plan["symbol"],
-            side,
-        )
-        for item in attempt.evidence["entry_orders"]
+    return entry_orders_settled(
+        attempt.evidence["entry_orders"],
+        attempt.plan["symbol"],
+        "Buy" if attempt.plan["side"] == "LONG" else "Sell",
+        history,
+        current,
+        fills,
     )
 
 
@@ -173,53 +163,6 @@ def _attached_closing_orders(
         if qualified:
             closers[child.order_id] = child.parent_order_link_id
     return closers
-
-
-def _settled_entry_order(
-    expected: dict, order: dict, fills: list[dict], symbol: str, side: str
-) -> bool:
-    if order.get("orderStatus") not in {
-        "Filled",
-        "Cancelled",
-        "Rejected",
-        "Deactivated",
-        "PartiallyFilledCanceled",
-    }:
-        return False
-    if (
-        order.get("orderLinkId") != expected["order_link_id"]
-        or order.get("symbol") != symbol
-        or order.get("side") != side
-        or order.get("reduceOnly") is not False
-    ):
-        return False
-    try:
-        quantity = Decimal(str(order["qty"]))
-        executed = Decimal(str(order["cumExecQty"]))
-        if (
-            not quantity.is_finite()
-            or not executed.is_finite()
-            or quantity != Decimal(expected["quantity"])
-            or not 0 <= executed <= quantity
-        ):
-            return False
-        total = Decimal("0")
-        for fill in fills:
-            size = Decimal(str(fill["execQty"]))
-            fee = Decimal(str(fill["execFee"]))
-            if (
-                not size.is_finite()
-                or size <= 0
-                or not fee.is_finite()
-                or Decimal(str(fill.get("closedSize", "0"))) != 0
-                or fill.get("symbol") != symbol
-                or fill.get("side") != side
-            ):
-                return False
-            total += size
-        return total == executed
-    except (KeyError, TypeError, ValueError, InvalidOperation):
-        return False
 
 
 def _is_uuid(value: str) -> bool:

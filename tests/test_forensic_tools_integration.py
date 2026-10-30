@@ -8,6 +8,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+from forensic_fixture import settled_entry_fixture
+
 
 def test_research_consumers_reconcile_without_analyzer_script(tmp_path) -> None:
     root = Path(__file__).parents[1]
@@ -69,6 +71,14 @@ def test_research_consumers_reconcile_without_analyzer_script(tmp_path) -> None:
         ],
         "database/position_actions.jsonl": [],
     }
+    rows.update(
+        settled_entry_fixture(
+            rows["analysis/trade_lineage.jsonl"][0]["intents"],
+            rows["bybit/executions.jsonl"],
+            {"order": "2"},
+            fee=".25",
+        )
+    )
     with zipfile.ZipFile(bundle, "w") as archive:
         for name, records in rows.items():
             archive.writestr(

@@ -215,11 +215,13 @@ def test_reconcile_attributes_by_closing_order_and_ignores_probe_closes(
     # Without order-identity attribution the probe row over-closes this
     # position (5/2 = 2.5) and the 99-100% completion tolerance excludes it.
     assert old["closed_qty"] == 2.0
-    assert old["complete"] is True
+    assert old["complete"] is False
+    assert old["entry_settlement_status"] == "unknown"
     assert old["net_pnl"] == 10
     new = by_intent["intent-new"]
     assert new["closed_qty"] == 4.0
-    assert new["complete"] is True
+    assert new["complete"] is False
+    assert new["entry_settlement_status"] == "unknown"
     assert new["net_pnl"] == 36
 
 
@@ -357,7 +359,8 @@ def test_reconcile_uses_the_bundle_probe_list_for_shared_link_shapes(
     # Both rehearsal closes are excluded even though their links reuse the
     # app's shapes; the position's own close attributes exactly.
     assert position["closed_qty"] == 2.0
-    assert position["complete"] is True
+    assert position["complete"] is False
+    assert position["entry_settlement_status"] == "unknown"
     assert position["net_pnl"] == -10
 
 
@@ -381,6 +384,35 @@ def test_reconcile_does_not_double_count_funding_in_closed_pnl(
 ) -> None:
     bundle = tmp_path / "forensic.zip"
     with zipfile.ZipFile(bundle, "w") as archive:
+        archive.writestr(
+            "forensic/metadata.json",
+            json.dumps(
+                {
+                    "entry_order_history_coverage_start": "1970-01-01T00:00:00+00:00",
+                    "entry_order_history_as_of": "1970-01-01T00:00:05+00:00",
+                    "open_entry_orders_as_of": "1970-01-01T00:00:06+00:00",
+                    "created_at": "1970-01-01T00:00:07+00:00",
+                }
+            ),
+        )
+        _write_jsonl(archive, "bybit/open_entry_orders.jsonl", [])
+        _write_jsonl(
+            archive,
+            "bybit/entry_order_history.jsonl",
+            [
+                {
+                    "orderId": "entry-1",
+                    "orderLinkId": "strategy-E1",
+                    "symbol": "BTCUSDT",
+                    "side": "Buy",
+                    "reduceOnly": False,
+                    "orderStatus": "Filled",
+                    "qty": "2",
+                    "cumExecQty": "2",
+                    "updatedTime": "1000",
+                }
+            ],
+        )
         _write_jsonl(
             archive,
             "analysis/trade_lineage.jsonl",
@@ -389,6 +421,18 @@ def test_reconcile_does_not_double_count_funding_in_closed_pnl(
                     "intents": [
                         {
                             "intent_id": "intent-1",
+                            "entry_evidence": {
+                                "entry_identity_complete": True,
+                                "entry_orders_settled": True,
+                                "entry_orders": [
+                                    {
+                                        "order_id": "entry-1",
+                                        "order_link_id": "strategy-E1",
+                                        "leg_name": "E1",
+                                        "quantity": "2",
+                                    }
+                                ],
+                            },
                             "entry_order_ids": ["entry-1"],
                             "metadata": {
                                 "source_channel_id": 123,
@@ -421,6 +465,9 @@ def test_reconcile_does_not_double_count_funding_in_closed_pnl(
                     "execPrice": "100",
                     "closedSize": "0",
                     "orderLinkId": "strategy-E1",
+                    "symbol": "BTCUSDT",
+                    "side": "Buy",
+                    "execFee": "0.25",
                 }
             ],
         )

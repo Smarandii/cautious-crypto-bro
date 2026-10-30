@@ -49,6 +49,7 @@ async def executed_attempt(
     exchange_class=QuantityLimitedExchange,
     native_stop=False,
     ceiling="2",
+    fill_primary=False,
 ):
     exchange = exchange_class(database)
     exchange.side = side
@@ -96,6 +97,10 @@ async def executed_attempt(
     state, plan = records[0]
     if failure:
         assert state.status is StrategyStatus.UNCERTAIN
+    if fill_primary:
+        for order in exchange.accepted_entries:
+            if order["orderLinkId"].endswith("-e1"):
+                exchange.fill(order["orderLinkId"])
     size = exchange.size
     assert size > 0
     for order in exchange.orders.values():
@@ -172,7 +177,7 @@ async def close_attempt(store, exchange, plan, side, bind_close, native_stop):
 
 
 def export_attempt(database, exchange, bundle, monkeypatch, edit_pages=None):
-    timestamp = int(datetime.now(UTC).timestamp() * 1000)
+    timestamp = int(datetime.now(UTC).timestamp() * 1000) - 1000
     executions = []
     for index, order in enumerate(exchange.orders.values()):
         quantity = Decimal(order["cumExecQty"])

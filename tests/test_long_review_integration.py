@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from forensic_fixture import settled_entry_fixture
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import analyze_long_participation as analysis  # noqa: E402
@@ -123,6 +124,9 @@ def test_review_requires_complete_valid_and_resolved_sample(
             "bybit/executions.jsonl": fills,
             "bybit/closed_pnl.jsonl": closes,
             "bybit/transaction_log.jsonl": [],
+            **settled_entry_fixture(
+                intents, fills, {item["intent_id"]: "2" for item in intents}
+            ),
         }
         bundle = tmp_path / "review.zip"
         with zipfile.ZipFile(bundle, "w") as archive:

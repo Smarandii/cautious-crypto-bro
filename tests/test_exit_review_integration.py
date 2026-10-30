@@ -9,6 +9,7 @@ from functools import partial
 from pathlib import Path
 
 import pytest
+from forensic_fixture import settled_entry_fixture
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import analyze_forensic_pnl as analysis
@@ -116,6 +117,12 @@ def test_exit_review_uses_plan_creation_not_late_fill(
                 "bybit/executions.jsonl": fills,
                 "bybit/closed_pnl.jsonl": closes,
                 "bybit/transaction_log.jsonl": [],
+                **settled_entry_fixture(
+                    lineage,
+                    fills,
+                    {fill["orderId"]: fill["execQty"] for fill in fills},
+                    fee="0.02",
+                ),
             }.items():
                 archive.writestr(
                     "forensic/" + name, "".join(json.dumps(row) + "\n" for row in rows)

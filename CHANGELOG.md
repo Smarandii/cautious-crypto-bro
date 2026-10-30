@@ -10,6 +10,37 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.41] - 2026-10-31
+
+### Fixed
+
+- Require terminal entry-order, fill/fee and captured pending-order evidence for
+  every completed whole-trade sample, including ordinary pre-v2.2.40 entries
+  (#297). A closed primary does not complete a strategy with live E2/E3 orders.
+- Reuse one terminal-entry validator in the exporter and reconciler. Recheck raw
+  archive snapshots and their explicit capture times; missing, stale or
+  contradictory evidence remains unresolved. Legacy archives remain readable,
+  with unknown settlement rather than an implicit completed sample.
+- Preserve actual PnL, fees, funding and frozen cohort metadata. Completion
+  filters now also apply this evidence boundary to research reviews, dashboard
+  aggregates and public trade rows. No orders are cancelled to complete a report.
+
+### Validation and compatibility
+
+- Add 32 real SQLite/native HTTP/export/reconciliation cases covering both
+  directions and MARKET/LIMIT/RANGE, pending and settled scale-ins, partial IOC,
+  missing/stale/contradictory archive evidence, and actual dashboard/public filters.
+- A read-only production comparison on one captured snapshot retains economic
+  totals while certifying 35 of 92 previously counted completed trades. The other
+  57 lack terminal-entry history in the captured exchange response; this does
+  not imply that all 57 have open exposure. Bybit history retention can prevent
+  retrospective certification. Counts are descriptive at the audit capture.
+- Schema15, dependencies, risk and entry/exit policy are unchanged. No migration,
+  exchange mutation, historical source replay or synthetic live order is needed.
+  Rollback preserves state readability, but older report readers can overstate
+  verified completion when settlement evidence is absent. Mainnet and profitable
+  expectancy remain unproven; #248 and the full #262 audit stay open.
+
 ## [2.2.40] - 2026-10-31
 
 ### Fixed
