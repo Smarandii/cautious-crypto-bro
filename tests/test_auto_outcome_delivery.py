@@ -176,7 +176,7 @@ def test_action_outcome_retries_from_durable_facts_without_guessing_fills(tmp_pa
                 requests_before = list(exchange.requests)
                 sender = AsyncMock()
                 with patch.object(bot._bot, "send_message", new=sender):
-                    await service.recover_auto_outcome_deliveries()
+                    await service.delivery.recover_auto_outcomes()
                 text = sender.call_args.kwargs["text"]
                 assert (
                     "AUTO-EXECUTED" in text
@@ -222,8 +222,8 @@ def test_send_acceptance_then_ack_failure_can_duplicate_notice_but_not_trade(tmp
                     with sqlite3.connect(database) as db:
                         db.execute("DROP TRIGGER reject_ack")
                     make_due(database)
-                    await service.recover_auto_outcome_deliveries()
-                    await service.recover_auto_outcome_deliveries()
+                    await service.delivery.recover_auto_outcomes()
+                    await service.delivery.recover_auto_outcomes()
                 notices = [
                     call.kwargs["text"]
                     for call in sender.call_args_list
@@ -331,7 +331,7 @@ def test_failed_and_withdrawn_auto_work_has_durable_notices(tmp_path, status):
             sender = AsyncMock()
             try:
                 with patch.object(bot._bot, "send_message", new=sender):
-                    await service.recover_auto_outcome_deliveries()
+                    await service.delivery.recover_auto_outcomes()
                 assert (
                     sender.await_count == 1
                     and status.value in sender.call_args.kwargs["text"]
@@ -399,7 +399,7 @@ def test_corrupt_auto_notice_backs_off_without_blocking_other_notices(tmp_path, 
             sender = AsyncMock()
             try:
                 with patch.object(bot._bot, "send_message", new=sender):
-                    await service.recover_auto_outcome_deliveries()
+                    await service.delivery.recover_auto_outcomes()
                     assert sender.await_count == 1
                     assert str(healthy.intent_id) in sender.call_args.kwargs["text"]
                     assert not await store.pending_auto_outcome_deliveries()
@@ -414,8 +414,8 @@ def test_corrupt_auto_notice_backs_off_without_blocking_other_notices(tmp_path, 
                             (plan.model_dump_json(), str(broken.intent_id)),
                         )
                     make_due(database)
-                    await service.recover_auto_outcome_deliveries()
-                    await service.recover_auto_outcome_deliveries()
+                    await service.delivery.recover_auto_outcomes()
+                    await service.delivery.recover_auto_outcomes()
                 assert sender.await_count == 2
                 assert str(broken.intent_id) in sender.call_args.kwargs["text"]
                 assert "AUTO outcome retry failed" in caplog.text
@@ -456,7 +456,7 @@ def test_delivery_batches_eventually_drain_more_than_one_hundred_records(tmp_pat
             try:
                 with patch.object(bot._bot, "send_message", new=sender):
                     for _ in range(3):
-                        await service.recover_auto_outcome_deliveries()
+                        await service.delivery.recover_auto_outcomes()
                 assert sender.await_count == 101
                 assert not await store.pending_auto_outcome_deliveries()
                 assert not await store.get_pending_auto_intent_ids()
