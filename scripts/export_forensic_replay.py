@@ -13,6 +13,8 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from cautious_crypto_bro.bybit.client import DEMO_BASE_URL, BybitClient
 from cautious_crypto_bro.bybit.normalize import account_order_from_item
 from cautious_crypto_bro.config import get_settings
@@ -70,7 +72,25 @@ def _entry_attempt(
         row["status"] == "EXECUTED" and saved_ids
     ):
         return None
-    frozen = ExecutionPlan.model_validate(plan)
+    try:
+        frozen = ExecutionPlan.model_validate(plan)
+    except ValidationError:
+        if bindings or plan.get("entry_slices"):
+            raise
+        # Legacy request metadata can be incomplete. Retain actual economic
+        # rows without manufacturing the geometry needed to certify settlement.
+        return _EntryAttempt(
+            row,
+            plan,
+            saved_ids,
+            saved_ids[:1],
+            saved_ids,
+            {
+                "strategy_status": strategy_status,
+                "entry_identity_complete": False,
+                "entry_orders": [],
+            },
+        )
     if str(frozen.intent_id) != row["intent_id"]:
         raise ValueError("Stored entry plan has conflicting intent identity")
     prefix = f"ccb-v2-{frozen.intent_id.hex[:20]}-"

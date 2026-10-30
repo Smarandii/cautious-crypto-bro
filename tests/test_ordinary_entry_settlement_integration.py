@@ -107,6 +107,24 @@ def test_legacy_partial_primary_retains_economics_without_guessing_submitted_qty
     assert position["fill_pattern"] == ("E1+E2+E3" if fill_scale_ins else "E1")
 
 
+@pytest.mark.parametrize("side", list(Side))
+@pytest.mark.parametrize("terminal", ["Deactivated", "Rejected"])
+def test_unfilled_terminal_scale_ins_do_not_block_verified_completion(
+    tmp_path, monkeypatch, side, terminal
+):
+    database = tmp_path / "terminal.sqlite3"
+    exchange, _ = legacy_attempt(database, side, EntryType.MARKET, True)
+
+    def expire(pages):
+        for order in pages["/v5/order/history"]:
+            if order["orderLinkId"].endswith(("-e2", "-e3")):
+                order["orderStatus"] = terminal
+
+    bundle = tmp_path / "terminal.zip"
+    export_attempt(database, exchange, bundle, monkeypatch, expire)
+    assert reconcile(bundle)[0]["complete"] is True
+
+
 @pytest.mark.parametrize(
     "gap",
     [

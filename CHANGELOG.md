@@ -27,7 +27,7 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ### Validation and compatibility
 
-- Add 32 real SQLite/native HTTP/export/reconciliation cases covering both
+- Add 36 real SQLite/native HTTP/export/reconciliation cases covering both
   directions and MARKET/LIMIT/RANGE, pending and settled scale-ins, partial IOC,
   missing/stale/contradictory archive evidence, and actual dashboard/public filters.
 - A read-only production comparison on one captured snapshot retains economic
