@@ -9,11 +9,15 @@ from collections import defaultdict
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import UUID
 
 from cautious_crypto_bro.bybit.client import DEMO_BASE_URL, BybitClient
+from cautious_crypto_bro.bybit.normalize import account_order_from_item
 from cautious_crypto_bro.config import get_settings
+from cautious_crypto_bro.domain import ExecutionPlan, TradeExecutionError
+from cautious_crypto_bro.zone_ledger import ZoneOrder
 
 WINDOW = timedelta(days=7)
 KLINE_CHUNK_MS = 1_000 * 60_000
@@ -26,6 +30,196 @@ class ForensicAccess:
     database_path: Path
     bybit_api_key: str = field(repr=False)
     bybit_api_secret: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class _EntryAttempt:
+    row: sqlite3.Row
+    plan: dict
+    entry_ids: tuple[str, ...]
+    primary_ids: tuple[str, ...]
+    owned_ids: tuple[str, ...]
+    evidence: dict | None
+
+
+def _bound_orders(database: sqlite3.Connection) -> dict[str, list[ZoneOrder]]:
+    by_zone: dict[str, list[ZoneOrder]] = defaultdict(list)
+    for row in database.execute(
+        "SELECT zone_id,order_id,order_link_id,payload_json FROM zone_orders"
+    ):
+        order = ZoneOrder.model_validate_json(row["payload_json"])
+        if (str(order.zone_id), order.order_id, order.order_link_id or None) != (
+            row["zone_id"],
+            row["order_id"],
+            row["order_link_id"],
+        ):
+            raise ValueError("Zone order payload contradicts its durable identity")
+        by_zone[str(order.zone_id)].append(order)
+    return by_zone
+
+
+def _entry_attempt(
+    row: sqlite3.Row, bindings: list[ZoneOrder], strategy_status: str | None
+) -> _EntryAttempt | None:
+    plan = json.loads(row["payload_json"])
+    saved_ids = tuple(json.loads(row["bybit_order_ids_json"] or "[]"))
+    if plan.get("strategy_version", 1) != 2:
+        return None
+    if not any(order.role == "ENTRY" for order in bindings) and not (
+        row["status"] == "EXECUTED" and saved_ids
+    ):
+        return None
+    if not bindings and not plan.get("entry_slices"):
+        return _EntryAttempt(row, plan, saved_ids, saved_ids[:1], saved_ids, None)
+
+    frozen = ExecutionPlan.model_validate(plan)
+    if str(frozen.intent_id) != row["intent_id"]:
+        raise ValueError("Stored entry plan has conflicting intent identity")
+    prefix = f"ccb-v2-{frozen.intent_id.hex[:20]}-"
+    expected = {prefix + order.name.lower(): order for order in frozen.entry_orders}
+    legs = {s.name: s.leg_name for s in frozen.entry_slices} or {
+        order.name: order.name for order in frozen.orders
+    }
+    by_link = dict(zip(expected, saved_ids, strict=True)) if saved_ids else {}
+    for binding in bindings:
+        if binding.role != "ENTRY":
+            continue
+        submitted = expected.get(binding.order_link_id)
+        if submitted is None or submitted.quantity != binding.quantity:
+            raise ValueError(
+                "Bound entry is inconsistent with its frozen physical request"
+            )
+        previous = by_link.get(binding.order_link_id)
+        if previous is not None and previous != binding.order_id:
+            raise ValueError("Conflicting confirmed entry order identities")
+        by_link[binding.order_link_id] = binding.order_id
+    descriptions = [
+        {
+            "order_id": by_link[link],
+            "order_link_id": link,
+            "leg_name": legs[order.name],
+            "quantity": str(order.quantity),
+        }
+        for link, order in expected.items()
+        if link in by_link
+    ]
+    entry_ids = tuple(item["order_id"] for item in descriptions)
+    if len(entry_ids) != len(set(entry_ids)):
+        raise ValueError("Duplicate confirmed physical entry identity")
+    primary_ids = tuple(
+        item["order_id"] for item in descriptions if item["leg_name"] == "E1"
+    )
+    owned_ids = tuple(
+        dict.fromkeys((*entry_ids, *(order.order_id for order in bindings)))
+    )
+    evidence = None
+    if frozen.entry_slices or row["status"] != "EXECUTED":
+        evidence = {
+            "strategy_status": strategy_status,
+            "entry_identity_complete": len(entry_ids) == len(expected),
+            "entry_orders": descriptions,
+        }
+    return _EntryAttempt(row, plan, entry_ids, primary_ids, owned_ids, evidence)
+
+
+def _entry_orders_settled(
+    attempt: _EntryAttempt,
+    history: list[dict],
+    current: list[dict],
+    fills: dict[str, list[dict]],
+) -> bool:
+    assert attempt.evidence is not None
+    current_ids = {str(order.get("orderId") or "") for order in current}
+    records = {str(order.get("orderId") or ""): order for order in history}
+    side = "Buy" if attempt.plan["side"] == "LONG" else "Sell"
+    return all(
+        item["order_id"] not in current_ids
+        and _settled_entry_order(
+            item,
+            records.get(item["order_id"], {}),
+            fills.get(item["order_id"], []),
+            attempt.plan["symbol"],
+            side,
+        )
+        for item in attempt.evidence["entry_orders"]
+    )
+
+
+def _attached_closing_orders(
+    attempt: _EntryAttempt, history: list[dict]
+) -> dict[str, str]:
+    if attempt.evidence is None:
+        return {}
+    parents = {item["order_link_id"]: item for item in attempt.evidence["entry_orders"]}
+    closers = {}
+    for row in history:
+        parent = parents.get(row.get("parentOrderLinkId"))
+        if parent is None:
+            continue
+        try:
+            child = account_order_from_item(row)
+        except (ValueError, TypeError, ArithmeticError, TradeExecutionError):
+            continue
+        qualified = (
+            child.order_id
+            and not child.order_link_id
+            and child.stop_order_type in {"PartialTakeProfit", "PartialStopLoss"}
+            and (child.reduce_only or child.close_on_trigger)
+            and child.symbol == attempt.plan["symbol"]
+            and child.side.value != attempt.plan["side"]
+            and child.quantity.is_finite()
+            and 0 < child.quantity <= Decimal(parent["quantity"])
+        )
+        if qualified:
+            closers[child.order_id] = child.parent_order_link_id
+    return closers
+
+
+def _settled_entry_order(
+    expected: dict, order: dict, fills: list[dict], symbol: str, side: str
+) -> bool:
+    if order.get("orderStatus") not in {
+        "Filled",
+        "Cancelled",
+        "Rejected",
+        "Deactivated",
+        "PartiallyFilledCanceled",
+    }:
+        return False
+    if (
+        order.get("orderLinkId") != expected["order_link_id"]
+        or order.get("symbol") != symbol
+        or order.get("side") != side
+        or order.get("reduceOnly") is not False
+    ):
+        return False
+    try:
+        quantity = Decimal(str(order["qty"]))
+        executed = Decimal(str(order["cumExecQty"]))
+        if (
+            not quantity.is_finite()
+            or not executed.is_finite()
+            or quantity != Decimal(expected["quantity"])
+            or not 0 <= executed <= quantity
+        ):
+            return False
+        total = Decimal("0")
+        for fill in fills:
+            size = Decimal(str(fill["execQty"]))
+            fee = Decimal(str(fill["execFee"]))
+            if (
+                not size.is_finite()
+                or size <= 0
+                or not fee.is_finite()
+                or Decimal(str(fill.get("closedSize", "0"))) != 0
+                or fill.get("symbol") != symbol
+                or fill.get("side") != side
+            ):
+                return False
+            total += size
+        return total == executed
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        return False
 
 
 def _is_uuid(value: str) -> bool:
@@ -160,6 +354,7 @@ def export_bundle(
     database_uri = settings.database_path.resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(database_uri, uri=True)) as database:
         database.row_factory = sqlite3.Row
+        database.execute("BEGIN")
         plan_rows = list(
             database.execute(
                 """
@@ -216,11 +411,27 @@ def export_bundle(
                 ]
                 if action_id and _is_uuid(action_id)
             }
+        bindings = _bound_orders(database) if "zone_orders" in tables else {}
+        strategy_states = (
+            {
+                row["strategy_id"]: row["status"]
+                for row in database.execute(
+                    "SELECT strategy_id,status FROM position_strategies"
+                )
+            }
+            if "position_strategies" in tables
+            else {}
+        )
 
     plans = []
     participation_assignments = []
     for row in plan_rows:
         plan = json.loads(row["payload_json"])
+        attempt = _entry_attempt(
+            row,
+            bindings.get(row["intent_id"], []),
+            strategy_states.get(row["intent_id"]),
+        )
         policy = plan.get("policy") or {}
         strategy = policy.get("strategy_v2") or {}
         arm = strategy.get("long_participation_arm")
@@ -232,7 +443,9 @@ def export_bundle(
                     "created_at": row["created_at"],
                     "status": row["status"],
                     "approval_mode": row["approval_mode"],
-                    "bybit_order_ids": json.loads(row["bybit_order_ids_json"] or "[]"),
+                    "bybit_order_ids": list(attempt.entry_ids)
+                    if attempt
+                    else json.loads(row["bybit_order_ids_json"] or "[]"),
                     "arm": arm,
                     "long_participation_momentum": strategy.get(
                         "long_participation_momentum"
@@ -247,24 +460,11 @@ def export_bundle(
                     ),
                 }
             )
-        order_ids = json.loads(row["bybit_order_ids_json"] or "[]")
-        if (
-            plan.get("strategy_version", 1) == 2
-            and row["status"] == "EXECUTED"
-            and order_ids
-        ):
-            plans.append(
-                (
-                    plan,
-                    order_ids,
-                    row["intent_id"],
-                    row["created_at"],
-                    json.loads(row["intent_payload_json"]),
-                )
-            )
+        if attempt is not None:
+            plans.append(attempt)
 
     if not plans:
-        raise ValueError("No executed V2 plans with stored Bybit order IDs")
+        raise ValueError("No accepted V2 entry orders with durable ownership")
 
     client = BybitClient(
         base_url=DEMO_BASE_URL,
@@ -274,7 +474,7 @@ def export_bundle(
     client.sync_clock()
     end_ms = int(datetime.now(UTC).timestamp() * 1000)
     start_ms = (
-        min(_timestamp_ms(created_at) for _, _, _, created_at, _ in plans) - 86_400_000
+        min(_timestamp_ms(attempt.row["created_at"]) for attempt in plans) - 86_400_000
     )
 
     executions = _historical_rows(
@@ -286,7 +486,7 @@ def export_bundle(
         limit=100,
     )
     entry_order_ids = {
-        str(order_id) for plan, order_ids, *_ in plans for order_id in order_ids
+        str(order_id) for attempt in plans for order_id in attempt.entry_ids
     }
     order_history = _historical_rows(
         client,
@@ -383,20 +583,33 @@ def export_bundle(
     lineage = []
     symbols = set()
     first_fill_times = []
-    for plan, order_ids, intent_id, created_at, intent_payload in plans:
+    for attempt in plans:
+        plan = attempt.plan
+        order_ids = attempt.entry_ids
+        intent_id = attempt.row["intent_id"]
+        created_at = attempt.row["created_at"]
+        intent_payload = json.loads(attempt.row["intent_payload_json"])
         # V2 submits E1 first; later entry legs are modeled by the replay candidate.
         primary_fills = [
             execution
-            for execution in executions_by_order.get(str(order_ids[0]), [])
+            for order_id in attempt.primary_ids
+            for execution in executions_by_order.get(str(order_id), [])
             if execution.get("execType") == "Trade"
         ]
-        if not primary_fills:
+        entry_fills = [
+            execution
+            for order_id in order_ids
+            for execution in executions_by_order.get(str(order_id), [])
+        ]
+        if not entry_fills:
             continue
         # Every execution of this plan's own orders (entries, installed exits
         # and coordinator closes) so Closed-PnL can be attributed by identity.
+        attached = _attached_closing_orders(attempt, order_history)
+        owned_ids = tuple(dict.fromkeys((*attempt.owned_ids, *attached)))
         plan_executions = [
             execution
-            for order_id in order_ids
+            for order_id in owned_ids
             for execution in executions_by_order.get(str(order_id), [])
             if execution.get("execType") == "Trade"
         ]
@@ -404,46 +617,56 @@ def export_bundle(
         entry = intent_payload.get("entry") or {}
         policy = plan.get("policy") or {}
         symbols.add(plan["symbol"].upper())
-        first_fill_times.extend(int(fill["execTime"]) for fill in primary_fills)
-        lineage.append(
-            {
-                "status": "EXECUTED",
-                "intent_id": intent_id,
-                "created_at": created_at,
-                "entry_order_ids": order_ids,
-                "metadata": {
-                    "source_channel_id": source.get("channel_id"),
-                    "confidence": intent_payload.get("confidence"),
-                    "entry_type": entry.get("type")
-                    if isinstance(entry, dict)
-                    else None,
-                    "risk_per_trade_pct": policy.get("risk_per_trade_pct"),
-                    "planned_max_loss_usdt": plan.get("planned_max_loss_usdt"),
-                    "exit_profile": (policy.get("strategy_v2") or {}).get(
-                        "exit_profile", "baseline"
-                    ),
-                    "long_participation_arm": (policy.get("strategy_v2") or {}).get(
-                        "long_participation_arm"
-                    ),
-                    "long_participation_momentum": (
-                        policy.get("strategy_v2") or {}
-                    ).get("long_participation_momentum"),
-                    "entry_order_ttl_minutes": (policy.get("strategy_v2") or {}).get(
-                        "entry_order_ttl_minutes", 0
-                    ),
-                },
-                "intent": {
-                    "symbol": plan["symbol"],
-                    "side": plan["side"],
-                    "stop_loss": plan["stop_loss"],
-                    "take_profit": plan.get("take_profit"),
-                },
-                "bybit": {
-                    "executions": primary_fills,
-                    "plan_executions": plan_executions,
-                },
+        first_fill_times.extend(int(fill["execTime"]) for fill in entry_fills)
+        item = {
+            "status": attempt.row["status"],
+            "intent_id": intent_id,
+            "created_at": created_at,
+            "entry_order_ids": list(order_ids),
+            "metadata": {
+                "source_channel_id": source.get("channel_id"),
+                "confidence": intent_payload.get("confidence"),
+                "entry_type": entry.get("type") if isinstance(entry, dict) else None,
+                "risk_per_trade_pct": policy.get("risk_per_trade_pct"),
+                "planned_max_loss_usdt": plan.get("planned_max_loss_usdt"),
+                "exit_profile": (policy.get("strategy_v2") or {}).get(
+                    "exit_profile", "baseline"
+                ),
+                "long_participation_arm": (policy.get("strategy_v2") or {}).get(
+                    "long_participation_arm"
+                ),
+                "long_participation_momentum": (policy.get("strategy_v2") or {}).get(
+                    "long_participation_momentum"
+                ),
+                "entry_order_ttl_minutes": (policy.get("strategy_v2") or {}).get(
+                    "entry_order_ttl_minutes", 0
+                ),
+            },
+            "intent": {
+                "symbol": plan["symbol"],
+                "side": plan["side"],
+                "stop_loss": plan["stop_loss"],
+                "take_profit": plan.get("take_profit"),
+            },
+            "bybit": {
+                "executions": primary_fills,
+                "plan_executions": plan_executions,
+            },
+        }
+        if attempt.evidence is not None:
+            item["entry_evidence"] = attempt.evidence | {
+                "attached_closing_orders": [
+                    {"order_id": key, "parent_order_link_id": value}
+                    for key, value in attached.items()
+                ],
+                "entry_orders_settled": _entry_orders_settled(
+                    attempt,
+                    entry_order_history,
+                    current_entry_orders,
+                    executions_by_order,
+                ),
             }
-        )
+        lineage.append(item)
 
     if not lineage:
         raise ValueError("No filled V2 primary-entry orders found in Bybit history")
