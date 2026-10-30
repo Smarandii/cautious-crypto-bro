@@ -178,7 +178,7 @@ def test_partial_batch_recovers_after_restart_without_reextracting(tmp_path, rec
                             "CREATE TRIGGER reject_recovered_delivery BEFORE INSERT ON manual_deliveries "
                             "BEGIN SELECT RAISE(ABORT, 'synthetic delivery persistence failure'); END"
                         )
-                    await restarted.recover_planning_candidates()
+                    await restarted.queued_opens.recover()
                     with sqlite3.connect(database) as db:
                         assert db.execute(
                             "SELECT COUNT(*) FROM intents"
@@ -267,17 +267,17 @@ def test_partial_batch_recovers_after_restart_without_reextracting(tmp_path, rec
                         with patch.object(
                             auto_bot._bot, "send_message", new=AsyncMock()
                         ):
-                            await auto_service.recover_planning_candidates()
+                            await auto_service.queued_opens.recover()
                             assert exchange.orders == {}
                             with sqlite3.connect(database) as db:
                                 db.execute(
                                     "UPDATE intents SET status='PENDING' WHERE intent_id=?",
                                     (recovered_id,),
                                 )
-                            await auto_service.recover_planning_candidates()
+                            await auto_service.queued_opens.recover()
                             submitted = dict(exchange.orders)
                             assert submitted
-                            await auto_service.recover_planning_candidates()
+                            await auto_service.queued_opens.recover()
                             assert exchange.orders == submitted
                             with sqlite3.connect(database) as db:
                                 assert db.execute(

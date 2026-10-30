@@ -154,7 +154,7 @@ def test_skipped_participation_arm_is_not_dispatched() -> None:
     )
 
     asyncio.run(
-        service._dispatch_planned_intents(
+        service.queued_opens.dispatch(
             [(intent, object())],
             snapshot=AccountSnapshotDelivery(),
         )

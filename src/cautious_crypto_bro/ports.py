@@ -558,7 +558,22 @@ class RecoveryRepository(Protocol):
 # ---------------------------------------------------------------------------
 
 
+class PlanningCandidateRepository(Protocol):
+    async def claim_planning_candidate(self) -> PlanningCandidate | None: ...
+
+    async def pending_transferred_auto_candidates(self) -> tuple[UUID, ...]: ...
+
+    async def finish_planning_candidate(
+        self, intent_id: UUID, claim_token: str, *, status: str, error: str
+    ) -> bool: ...
+
+    async def transfer_planning_candidate(
+        self, candidate: PlanningCandidate, intent: TradingIntent, plan: ExecutionPlan
+    ) -> bool: ...
+
+
 class SignalServiceStore(
+    PlanningCandidateRepository,
     SourceRepository,
     GuidanceRepository,
     ExecutionPolicyRepository,
@@ -572,18 +587,6 @@ class SignalServiceStore(
     Protocol,
 ):
     """Everything SignalService needs from durable storage."""
-
-    async def claim_planning_candidate(self) -> PlanningCandidate | None: ...
-
-    async def pending_transferred_auto_candidates(self) -> tuple[UUID, ...]: ...
-
-    async def finish_planning_candidate(
-        self, intent_id: UUID, claim_token: str, *, status: str, error: str
-    ) -> bool: ...
-
-    async def transfer_planning_candidate(
-        self, candidate: PlanningCandidate, intent: TradingIntent, plan: ExecutionPlan
-    ) -> bool: ...
 
 
 class ZoneHistoryRepository(Protocol):
