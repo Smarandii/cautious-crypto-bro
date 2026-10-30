@@ -1072,7 +1072,7 @@ class BybitDemoExecutor:
             raise EntryPreflightError(
                 "Existing position prevents entry leverage preparation"
             )
-        if position.get("positionStatus") != "Normal":
+        if position.get("positionStatus") not in ("Normal", ""):
             raise EntryPreflightError(
                 "Current position status does not permit entry preparation"
             )
@@ -1098,9 +1098,7 @@ class BybitDemoExecutor:
                 )
 
         tiers = self._risk_tiers_sync(plan.symbol)
-        mark = parse_decimal(position.get("markPrice"))
-        if not mark.is_finite() or mark <= 0:
-            raise EntryPreflightError("Current mark cannot establish entry notional")
+        mark = self._mark_price(plan.symbol)
         # Whole-net-position ownership requires a flat symbol with no entry
         # orders. Reserve all new legs at their reference price or the current
         # mark, whichever is higher; never resize frozen risk geometry here.
@@ -1408,6 +1406,27 @@ class BybitDemoExecutor:
                 f"quote={market_price}, risk={current_risk}, "
                 f"budget={plan.policy.risk_budget_usdt}"
             )
+
+    def _mark_price(self, symbol: str) -> Decimal:
+        response = self._client.public_get(
+            "/v5/market/tickers", {"category": "linear", "symbol": symbol}
+        )
+        result = response.get("result")
+        items = result.get("list") if isinstance(result, dict) else None
+        if (
+            not isinstance(items, list)
+            or len(items) != 1
+            or not isinstance(items[0], dict)
+            or items[0].get("symbol") != symbol
+        ):
+            raise TradeExecutionError("Bybit ticker mark evidence is incomplete")
+        try:
+            mark = parse_decimal(items[0].get("markPrice"))
+        except (ArithmeticError, ValueError) as exc:
+            raise TradeExecutionError("Bybit ticker mark is invalid") from exc
+        if mark <= 0:
+            raise TradeExecutionError("Bybit ticker mark must be positive")
+        return mark
 
     def _last_price(
         self,

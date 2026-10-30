@@ -10,7 +10,28 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
-## [2.2.31] - 2026-10-30
+## [2.2.32] - 2026-10-30
+
+### Fixed
+
+- Admit explicit flat one-way Bybit rows with empty status/position mark fields
+  (#279). Read and validate the exact symbol's public ticker mark for projected
+  notional; missing, malformed, nonpositive or nonfinite marks fail explicitly.
+  Do not substitute last-traded price. Non-flat/mode/tier/ownership guards remain.
+
+### Validation and rollback
+
+- Reproduce the deployed failure for MARKET/LIMIT/RANGE with real SQLite/HTTP,
+  then cover missing/unknown/liquidating status and invalid/wrong-symbol ticker
+  marks alongside tier, refreshed-market, durable-plan and cancellation cases.
+- The v2.2.31 deployment was rolled back before tagging because its live probe
+  rejected valid empty flat-position fields. This checkpoint includes #277's
+  tier-aware preparation after that correction; v2.2.31 was never released.
+- Schema 15 and trading settings remain unchanged. Retain the restore-verified
+  backup and previous pinned image for rollback; no historical replay. #248's
+  natural trade magnitude and the full #262 architecture audit remain unfinished.
+
+## [2.2.31] - 2026-10-30 (unreleased; deployment rolled back)
 
 ### Fixed
 

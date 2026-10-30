@@ -146,7 +146,15 @@ class Exchange:
         if path == "/v5/market/time":
             result = {"timeSecond": str(int(datetime.now(UTC).timestamp()))}
         elif path == "/v5/market/tickers":
-            result = {"list": [{"lastPrice": str(self.mark)}]}
+            result = {
+                "list": [
+                    {
+                        "symbol": body["symbol"],
+                        "lastPrice": str(self.mark),
+                        "markPrice": str(self.mark),
+                    }
+                ]
+            }
         elif path == "/v5/market/instruments-info":
             result = {
                 "list": [

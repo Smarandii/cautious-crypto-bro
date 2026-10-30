@@ -264,6 +264,8 @@ def test_projected_tier_uses_mark_price_when_last_trade_is_lower(tmp_path):
                 body["result"]["list"][0]["markPrice"] = "1000"
             elif request.url.path == "/v5/market/risk-limit":
                 body["result"]["list"][0]["riskLimitValue"] = "1000"
+            elif request.url.path == "/v5/market/tickers":
+                body["result"]["list"][0]["markPrice"] = "1000"
             return httpx.Response(200, json=body)
 
     async def run():
