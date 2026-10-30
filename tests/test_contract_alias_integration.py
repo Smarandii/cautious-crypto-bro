@@ -107,13 +107,12 @@ def test_post_resolution_outage_retains_raw_identity_for_restart(tmp_path):
                 snapshot = await service._context_provider.snapshot(
                     intent.source.channel_id
                 )
-                candidates = []
                 with patch.object(
-                    service,
+                    service._planning,
                     "_capital_frozen_policy",
                     new=AsyncMock(side_effect=RuntimeError("synthetic policy outage")),
                 ):
-                    planned, errors = await service._plan_open_intents(
+                    planning = await service._planning.plan_open_intents(
                         SignalExtraction(
                             open_intents=(
                                 intent,
@@ -127,10 +126,13 @@ def test_post_resolution_outage_retains_raw_identity_for_restart(tmp_path):
                             )
                         ),
                         snapshot,
-                        planning_rejections=[],
-                        retry_candidates=candidates,
                         original_duplicate=False,
                     )
+                planned, errors, candidates = (
+                    planning.planned,
+                    planning.errors,
+                    planning.retry_candidates,
+                )
                 assert not planned and errors
                 saved, duplicate, deadline = candidates[0]
                 assert (
@@ -205,7 +207,7 @@ def test_lifecycle_alias_is_bound_to_its_source_history(
         with executor_for(ContractExchange()) as executor:
             service, bot, _ = workflow(store, executor, ContractModel())
             try:
-                resolved = service._build_position_actions(
+                resolved = service._planning.plan_position_actions(
                     SignalExtraction(position_actions=(action,)),
                     account_state=None,
                     position_context=context,

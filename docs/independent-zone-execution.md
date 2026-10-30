@@ -21,7 +21,7 @@ budget were multiplied by two. Raw source evidence remains private.
 
 ## Existing boundaries
 
-- `SignalService._plan_open_intents` plans candidates separately, reserves batch
+- `SignalPlanning.plan_open_intents` plans candidates separately, reserves batch
   risk and routes repeated symbol/side candidates to manual review.
 - `ExecutionCoordinator._assert_open_preflight` rejects a second symbol owner
   under the account mutation lock. This also applies to manual approvals.

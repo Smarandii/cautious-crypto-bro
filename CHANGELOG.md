@@ -10,6 +10,28 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.29] - 2026-10-30
+
+### Changed
+
+- Give signal planning one owner under `signals/planning.py` (#265). Initial
+  processing and durable candidate recovery use the same planning boundary with
+  explicit plan, error, rejection and retry-candidate results. Source claims,
+  decision persistence, durable recovery and delivery remain in `SignalService`.
+- Remove moved routing, contract resolution, budget, policy and action-planning
+  implementations from the service. Planning collaborators expose only the
+  reads and approval-safety query they need; no exchange mutation moves here.
+
+### Validation and rollback
+
+- Compare existing initial/recovery workflows, contract aliases and duplicate
+  routing, partial batches, portfolio admission, deterministic participation,
+  policy snapshots and original retry identity/deadlines before and after.
+- Schema 15, current risk settings, strategy exits and public feed stay unchanged.
+  Keep a restore-verified state backup and prior schema-15 image for rollback.
+  The broader #262 architecture audit and #248 natural trade-magnitude evidence
+  remain incomplete; this checkpoint does not establish profitability.
+
 ## [2.2.28] - 2026-10-29
 
 ### Changed

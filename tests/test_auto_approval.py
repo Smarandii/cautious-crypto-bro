@@ -389,7 +389,7 @@ def test_service_auto_routing_requires_trusted_state() -> None:
     account_state = _state()
 
     assert (
-        service._open_approval_mode(
+        service._planning._open_approval_mode(
             intent,
             position_context=empty_context,
             account_state=account_state,
@@ -414,7 +414,7 @@ def test_service_auto_routing_requires_trusted_state() -> None:
     )
 
     assert (
-        service._open_approval_mode(
+        service._planning._open_approval_mode(
             intent,
             position_context=(existing_context),
             account_state=account_state,
@@ -433,7 +433,7 @@ def test_service_auto_routing_requires_trusted_state() -> None:
     )
 
     assert (
-        service._position_action_approval_mode(
+        service._planning._position_action_approval_mode(
             action,
             account_state=_state(_position()),
         )
@@ -446,7 +446,7 @@ def test_service_auto_routing_requires_trusted_state() -> None:
     )
 
     assert (
-        all_service._position_action_approval_mode(
+        all_service._planning._position_action_approval_mode(
             action,
             account_state=_state(_position()),
         )
@@ -521,7 +521,7 @@ def test_position_action_without_live_position_is_skipped() -> None:
     )
 
     assert (
-        service._position_action_approval_mode(
+        service._planning._position_action_approval_mode(
             action,
             account_state=_state(),
         )
@@ -529,7 +529,7 @@ def test_position_action_without_live_position_is_skipped() -> None:
     )
 
     assert (
-        service._position_action_approval_mode(
+        service._planning._position_action_approval_mode(
             action,
             account_state=_state(_position(Side.SHORT)),
         )
@@ -575,7 +575,7 @@ def test_auto_open_is_manual_when_disabled() -> None:
     intent = _intent(relation=OpenRelation.NEW)
 
     assert (
-        service._open_approval_mode(
+        service._planning._open_approval_mode(
             intent,
             position_context=_open_context(intent),
             account_state=_state(),
@@ -597,7 +597,7 @@ def test_auto_open_is_manual_for_non_entry_relations() -> None:
         intent = _intent(relation=relation)
 
         assert (
-            service._open_approval_mode(
+            service._planning._open_approval_mode(
                 intent,
                 position_context=_open_context(intent),
                 account_state=_state(_position()),
@@ -612,7 +612,7 @@ def test_auto_open_is_manual_when_the_same_symbol_appears_twice() -> None:
     intent = _intent(relation=OpenRelation.NEW)
 
     assert (
-        service._open_approval_mode(
+        service._planning._open_approval_mode(
             intent,
             position_context=_open_context(intent),
             account_state=_state(),
@@ -628,7 +628,7 @@ def test_auto_open_is_manual_without_trusted_account_state() -> None:
 
     # State fetch returned nothing.
     assert (
-        service._open_approval_mode(
+        service._planning._open_approval_mode(
             intent,
             position_context=_open_context(intent),
             account_state=None,
@@ -639,7 +639,7 @@ def test_auto_open_is_manual_without_trusted_account_state() -> None:
 
     # Or the provider reported it as unavailable despite having state.
     assert (
-        service._open_approval_mode(
+        service._planning._open_approval_mode(
             intent,
             position_context=_open_context(intent, available=False),
             account_state=_state(),
@@ -654,7 +654,7 @@ def test_auto_open_is_manual_when_coordinator_reports_a_hazard() -> None:
     intent = _intent(relation=OpenRelation.NEW)
 
     assert (
-        service._open_approval_mode(
+        service._planning._open_approval_mode(
             intent,
             position_context=_open_context(intent),
             account_state=_state(),
@@ -682,7 +682,7 @@ def test_auto_open_is_manual_when_history_already_copied_the_position() -> None:
     )
 
     assert (
-        service._open_approval_mode(
+        service._planning._open_approval_mode(
             intent,
             position_context=_open_context(intent, history=history),
             account_state=_state(),
@@ -711,7 +711,7 @@ def test_auto_open_allows_add_to_an_existing_copy() -> None:
     )
 
     assert (
-        service._open_approval_mode(
+        service._planning._open_approval_mode(
             intent,
             position_context=_open_context(intent, history=history),
             account_state=_state(),
@@ -741,7 +741,7 @@ def test_position_action_is_manual_without_account_state() -> None:
     service = _gate_service(mode=AutoApprovalMode.ALL)
 
     assert (
-        service._position_action_approval_mode(
+        service._planning._position_action_approval_mode(
             _action(PositionActionType.CLOSE, Side.LONG),
             account_state=None,
         )
@@ -753,7 +753,7 @@ def test_position_action_needs_all_mode_for_auto() -> None:
     service = _gate_service(mode=AutoApprovalMode.OPEN_ONLY)
 
     assert (
-        service._position_action_approval_mode(
+        service._planning._position_action_approval_mode(
             _action(PositionActionType.CLOSE, Side.LONG),
             account_state=_state(_position(Side.LONG)),
         )
@@ -769,7 +769,7 @@ def test_cancel_entries_auto_ignores_position_count() -> None:
 
     for state in (_state(), _state(_position(Side.SHORT))):
         assert (
-            service._position_action_approval_mode(
+            service._planning._position_action_approval_mode(
                 _action(PositionActionType.CANCEL_ENTRIES),
                 account_state=state,
             )

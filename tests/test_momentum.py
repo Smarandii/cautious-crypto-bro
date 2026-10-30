@@ -13,7 +13,7 @@ from fakes import FakeAccountGateway
 
 from cautious_crypto_bro.domain import AutoApprovalMode, ExecutionPolicy, Side
 from cautious_crypto_bro.momentum import classify
-from cautious_crypto_bro.service import SignalService
+from cautious_crypto_bro.signals.planning import SignalPlanning
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -29,15 +29,12 @@ def _minute_series(current_minute: int, *, rising: bool) -> list[tuple[int, Deci
     return closes
 
 
-def _service(gateway: FakeAccountGateway, *, gate: bool = True) -> SignalService:
-    return SignalService(
+def _planning(gateway: FakeAccountGateway, *, gate: bool = True) -> SignalPlanning:
+    return SignalPlanning(
         store=object(),
-        extractor=object(),
         planner=object(),
         executor=gateway,
-        approval_bot=object(),
         coordinator=object(),
-        context_provider=object(),
         auto_approval_mode=AutoApprovalMode.ALL,
         demo_long_participation_skip_fraction=Decimal("0.50"),
         demo_long_momentum_gate=gate,
@@ -62,7 +59,7 @@ def test_momentum_gate_assigns_participation_deterministically(
     current_minute = now_ms - now_ms % 60_000
     gateway.minute_closes["BTCUSDT"] = _minute_series(current_minute, rising=rising)
 
-    service = _service(gateway)
+    service = _planning(gateway)
     stratum = asyncio.run(service._prior_momentum_stratum("BTCUSDT"))
     assert stratum == expected
 
@@ -79,7 +76,7 @@ def test_momentum_gate_assigns_participation_deterministically(
 
 def test_momentum_gate_falls_back_to_the_bucket_when_candles_fail() -> None:
     gateway = FakeAccountGateway()
-    service = _service(gateway)
+    service = _planning(gateway)
 
     stratum = asyncio.run(service._prior_momentum_stratum("BTCUSDT"))
     assert stratum is None
@@ -105,7 +102,7 @@ def test_momentum_gate_off_keeps_the_randomized_era_unchanged() -> None:
     gateway.minute_closes["BTCUSDT"] = _minute_series(
         now_ms - now_ms % 60_000, rising=True
     )
-    service = _service(gateway, gate=False)
+    service = _planning(gateway, gate=False)
 
     policy = service._policy_for_intent_side(_policy(), Side.LONG, UUID(int=1))
     assert policy.strategy_v2.long_participation_momentum is None
