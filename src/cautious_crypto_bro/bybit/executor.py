@@ -20,7 +20,6 @@ from ..domain import (
     ExecutionOrderType,
     ExecutionPlan,
     InstrumentContext,
-    LeverageFilter,
     MarketPrimaryExecutionResult,
     PositionActionExecutionResult,
     PositionActionIntent,
@@ -34,6 +33,13 @@ from ..domain import (
 from ..execution import ExecutionPlanner
 from ..execution_history import HISTORY_WINDOW_MS, ExecutionHistoryPage
 from .client import DEMO_BASE_URL, BybitClient
+from .leverage import (
+    RiskTier,
+    instrument_leverage_filter,
+    risk_tier_id,
+    risk_tiers,
+    tier_leverage,
+)
 from .normalize import (
     account_order_from_item,
     account_position_from_item,
@@ -213,6 +219,9 @@ class BybitDemoExecutor:
             start,
             end,
         )
+
+    async def prepare_entry_plan(self, plan: ExecutionPlan) -> ExecutionPlan:
+        return await _run_sync(self._prepare_entry_plan_sync, plan)
 
     async def execute(
         self,
@@ -906,19 +915,7 @@ class BybitDemoExecutor:
         lot = instrument["lotSizeFilter"]
         price_filter = instrument["priceFilter"]
 
-        raw_leverage = instrument.get("leverageFilter")
-        if not isinstance(raw_leverage, dict):
-            raise TradeExecutionError("Bybit instrument leverage filter is unavailable")
-        try:
-            leverage_filter = LeverageFilter(
-                min_leverage=parse_decimal(raw_leverage.get("minLeverage")),
-                max_leverage=parse_decimal(raw_leverage.get("maxLeverage")),
-                step=parse_decimal(raw_leverage.get("leverageStep")),
-            )
-        except (ValueError, ArithmeticError, TradeExecutionError) as exc:
-            raise TradeExecutionError(
-                "Bybit instrument leverage filter is invalid"
-            ) from exc
+        leverage_filter = instrument_leverage_filter(instrument)
 
         return InstrumentContext(
             leverage_filter=leverage_filter,
@@ -1051,7 +1048,110 @@ class BybitDemoExecutor:
 
         return None
 
+    def _prepare_entry_plan_sync(self, plan: ExecutionPlan) -> ExecutionPlan:
+        self._require_v2(plan)
+        self._sync_clock()
+        limits = instrument_leverage_filter(self._instrument_info(plan.symbol))
+        positions = self._client.paginate_private_list(
+            "/v5/position/list", {"category": "linear", "symbol": plan.symbol}
+        )
+        if (
+            len(positions) != 1
+            or not isinstance(positions[0], dict)
+            or positions[0].get("symbol") != plan.symbol
+        ):
+            raise EntryPreflightError("Current symbol risk-tier evidence is incomplete")
+        position = positions[0]
+        if isinstance(position.get("positionIdx"), bool) or position.get(
+            "positionIdx"
+        ) not in (0, "0"):
+            raise EntryPreflightError(
+                "One-way position mode cannot be verified for leverage preparation"
+            )
+        if position_exposure_from_item(position) is not None:
+            raise EntryPreflightError(
+                "Existing position prevents entry leverage preparation"
+            )
+        if position.get("positionStatus") != "Normal":
+            raise EntryPreflightError(
+                "Current position status does not permit entry preparation"
+            )
+        current_id = risk_tier_id(position.get("riskId"))
+        orders = self._client.paginate_private_list(
+            "/v5/order/realtime",
+            {
+                "category": "linear",
+                "symbol": plan.symbol,
+                "openOnly": 0,
+                "limit": 50,
+            },
+        )
+        for item in orders:
+            order = account_order_from_item(item)
+            if order.symbol != plan.symbol:
+                raise EntryPreflightError("Entry-order symbol evidence is invalid")
+            if order.remaining_quantity > 0 and not (
+                order.reduce_only or order.close_on_trigger or order.is_protective
+            ):
+                raise EntryPreflightError(
+                    "Existing entry orders prevent leverage preparation"
+                )
+
+        tiers = self._risk_tiers_sync(plan.symbol)
+        mark = parse_decimal(position.get("markPrice"))
+        if not mark.is_finite() or mark <= 0:
+            raise EntryPreflightError("Current mark cannot establish entry notional")
+        # Whole-net-position ownership requires a flat symbol with no entry
+        # orders. Reserve all new legs at their reference price or the current
+        # mark, whichever is higher; never resize frozen risk geometry here.
+        projected_notional = sum(
+            (
+                order.quantity * max(mark, order.reference_price)
+                for order in plan.orders
+            ),
+            Decimal("0"),
+        )
+        selected = tier_leverage(
+            plan.leverage, limits, tiers, current_id, projected_notional
+        )
+        return (
+            plan
+            if selected == plan.leverage
+            else plan.model_copy(update={"leverage": selected})
+        )
+
+    def _risk_tiers_sync(self, symbol: str) -> tuple[RiskTier, ...]:
+        items: list[dict] = []
+        cursor = ""
+        seen_cursors: set[str] = set()
+        for _ in range(10):
+            params = {"category": "linear", "symbol": symbol}
+            if cursor:
+                params["cursor"] = cursor
+            response = self._client.public_get("/v5/market/risk-limit", params)
+            result = response.get("result")
+            if not isinstance(result, dict) or not isinstance(result.get("list"), list):
+                raise TradeExecutionError("Bybit risk-limit page is malformed")
+            items.extend(result["list"])
+            next_cursor = result.get("nextPageCursor", "")
+            if not isinstance(next_cursor, str):
+                raise TradeExecutionError("Bybit risk-limit cursor is malformed")
+            if not next_cursor:
+                break
+            if next_cursor in seen_cursors:
+                raise TradeExecutionError("Bybit risk-limit cursor repeated")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            raise TradeExecutionError("Bybit risk-limit pagination did not complete")
+        return risk_tiers(items, symbol)
+
     def _set_leverage_sync(self, plan: ExecutionPlan) -> None:
+        prepared = self._prepare_entry_plan_sync(plan)
+        if prepared.leverage != plan.leverage:
+            raise EntryPreflightError(
+                "Leverage constraints changed; prepare and persist the entry plan again"
+            )
         leverage = format_decimal(plan.leverage)
         self._client.private_post(
             "/v5/position/set-leverage",
@@ -1084,7 +1184,7 @@ class BybitDemoExecutor:
                 refreshed.planned_max_loss_usdt,
                 plan.policy.risk_budget_usdt,
             )
-            self._set_leverage_sync(plan)
+            self._set_leverage_sync(refreshed)
         except Exception as exc:
             raise EntryPreflightError(str(exc)) from exc
 

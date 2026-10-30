@@ -299,6 +299,17 @@ class ExecutionCoordinator:
         try:
             await self._assert_open_preflight(intent, plan, approval_mode)
 
+            prepared_plan = await self._executor.prepare_entry_plan(plan)
+            if prepared_plan.leverage > plan.leverage or prepared_plan.model_dump(
+                exclude={"leverage"}
+            ) != plan.model_dump(exclude={"leverage"}):
+                raise EntryPreflightError(
+                    "Entry preparation changed frozen risk geometry or increased leverage"
+                )
+            if prepared_plan.leverage != plan.leverage:
+                await self._store.update_execution_plan(prepared_plan)
+            plan = effective_plan = prepared_plan
+
             await self._store.ensure_position_strategy(plan)
             strategy_created = True
 

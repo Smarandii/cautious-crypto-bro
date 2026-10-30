@@ -240,8 +240,11 @@ history request can leave an older timestamp; a ledger read failure displays
 - Entries start with explicit trader leverage from text/images, with a 10x
   fallback, then apply validated instrument min/max/step constraints without
   increasing the request. The original request and selected plan remain
-  inspectable. Bybit must accept the leverage before entry orders are submitted;
-  account-tier and fresh submission-time validation remain tracked in #274.
+  inspectable. Fresh entry preparation also validates current/projected-notional
+  risk tiers and persists any lower leverage before strategy creation. Submission
+  revalidates constraints; changes, unknown tiers, existing exposure or entry
+  orders fail before submission. Quantities, stops and exits are not resized.
+  Bybit margin/permission failures remain bounded, without blind order replay.
 - Profit/holding updates do not authorize new entries. REDUCE/CLOSE require
   explicit current-caption evidence; images can identify symbol/side.
 - CANCEL_ENTRIES withdraws earlier pending entries from the same Telegram source

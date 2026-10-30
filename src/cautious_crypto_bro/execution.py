@@ -176,15 +176,10 @@ class ExecutionPlanner:
         # behavior. The live adapter requires and validates the exchange filter.
         if limits is None:
             return requested
-        if requested < limits.min_leverage:
-            raise ExecutionPlanningError(
-                "Requested leverage is below the instrument minimum"
-            )
-        capped = min(requested, limits.max_leverage)
-        steps = ((capped - limits.min_leverage) / limits.step).to_integral_value(
-            rounding=ROUND_DOWN
-        )
-        return limits.min_leverage + steps * limits.step
+        try:
+            return limits.select(requested)
+        except ValueError as exc:
+            raise ExecutionPlanningError(str(exc)) from exc
 
     def _risk_checked_orders(
         self,

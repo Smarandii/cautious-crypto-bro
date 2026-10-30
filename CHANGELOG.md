@@ -10,6 +10,29 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.31] - 2026-10-30
+
+### Fixed
+
+- Prepare tier-admissible leverage before entry mutation (#277). Read fresh
+  instrument limits, current symbol tier, paginated public tiers and all open
+  orders; reserve all planned legs for projected notional. Persist leverage-only
+  adjustments under the existing coordinator lock before strategy creation.
+  Retain original intent leverage, quantities, stops, exits and source deadlines.
+- Revalidate admission before setting leverage. Unknown/unsupported evidence,
+  exposure, entry orders and changed constraints fail explicitly; risk tiers and
+  margin modes are never changed. Margin/permission failures do not replay entries.
+
+### Validation and rollback
+
+- Real SQLite/coordinator/planner/HTTP integration covers MARKET/LIMIT/RANGE,
+  stale saved plans, persisted-before-mutation ordering, multi-page tiers, changing
+  constraints, malformed/unsupported evidence, server rejection and cancellation.
+- Schema 15 and settings are unchanged; older plans remain loadable. Rollback
+  uses the previous schema-15 image and restore-verified backup. No historical
+  replay or profitability claim. #274 retains its completion audit; #248 magnitude
+  evidence and the broader #262 refactor remain incomplete.
+
 ## [2.2.30] - 2026-10-30
 
 ### Fixed
