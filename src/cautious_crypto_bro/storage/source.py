@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import datetime
 from uuid import uuid4
@@ -234,7 +235,10 @@ class SourceRepositoryImpl(_Store):
         *,
         planning_candidates: Sequence[tuple[TradingIntent, bool, datetime]] = (),
     ) -> bool:
-        source = self._validate_batch_inputs(items, position_actions)
+        if planning_candidates and not (items or position_actions):
+            source = planning_candidates[0][0].source
+        else:
+            source = self._validate_batch_inputs(items, position_actions)
         self._validate_planning_candidates(source, planning_candidates)
 
         async with sqlite_connection(self._database_path) as db:
@@ -292,7 +296,10 @@ class SourceRepositoryImpl(_Store):
                             str(intent.intent_id),
                             source.channel_id,
                             source.message_id,
-                            intent.model_dump_json(),
+                            json.dumps(
+                                intent.model_dump(mode="json")
+                                | {"approval_mode": intent.approval_mode.value}
+                            ),
                             int(duplicate),
                             deadline.isoformat(),
                         ),

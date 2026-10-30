@@ -139,6 +139,15 @@ has moved past them. Active processing claims remain untouched. Position actions
 expire from the earlier of extraction time and original publication time; retrying
 an old close/reduce instruction does not make it fresh.
 
+After extraction, temporary planning-read failures retain the original candidate,
+even when the post has no other planned output. Bybit read responses 429, 10000,
+10006 and 10016 use bounded candidate recovery instead of terminal rejection.
+Source completion and candidate persistence commit together; coverage reports the
+candidate as unresolved until handled. Failed recovery backs off for five minutes
+and never extends the original deadline. Already-selected AUTO/MANUAL decisions
+are retained; older candidate payloads without that metadata remain MANUAL.
+Order submission errors do not gain automatic replay.
+
 ## Telegram reader recovery
 
 Reader outages leave the operator bot and position supervisor running. Network

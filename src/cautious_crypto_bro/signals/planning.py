@@ -13,7 +13,6 @@ from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
-from ..bybit.client import is_exchange_rejection
 from ..contract_symbols import (
     BYBIT_CONTRACT_ALIASES,
     ContractUnitError,
@@ -487,7 +486,10 @@ class SignalPlanning:
                 )
             except Exception as exc:
                 reason = f"{intent.symbol}: {type(exc).__name__}: {exc}"
-                if isinstance(exc, ContractUnitError) or is_exchange_rejection(exc):
+                if isinstance(exc, ContractUnitError) or (
+                    isinstance(exc, TradeExecutionError)
+                    and exc.is_permanent_read_rejection
+                ):
                     rejections.append(reason)
                 else:
                     errors.append(reason)
@@ -793,9 +795,9 @@ class SignalPlanning:
             return None
         except TradeExecutionError as exc:
             error = f"{intent.symbol}: {type(exc).__name__}: {exc}"
-            if is_exchange_rejection(exc):
-                # A retCode response is deterministic: completing the source
-                # once with a durable reason never enters the retry path.
+            if exc.is_permanent_read_rejection:
+                # Permanent rejections complete once; temporary read responses
+                # retain their candidate for the existing bounded recovery path.
                 planning_rejections.append(error)
                 logger.info("Execution candidate rejected by exchange: %s", error)
                 return None

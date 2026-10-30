@@ -330,7 +330,15 @@ normalized candidates, planning errors and produced record IDs. Approval and
 execution outcomes remain authoritative in their existing intent/action records.
 Decision writes require the current source claim and finish before a new signal
 batch can reach the exchange; a failed write leaves the source retryable. Completed
-attempts cannot be overwritten. This evidence has no Redis TTL and is included in
+attempts cannot be overwritten. Temporary planning reads retain original-ID
+candidates even when every OPEN in a post fails. Candidate-only batches commit
+atomically with source completion; pending candidates remain UNRESOLVED in
+coverage. Recovery preserves the original deadline and already-selected approval
+mode, backs off after failures, and never promotes a legacy/manual candidate to
+AUTO. New candidate JSON explicitly stores approval mode; old payloads remain
+readable with the conservative MANUAL default. Read disposition comes from
+validated exchange response metadata, not error-message parsing. Mutation failures
+retain existing failure/uncertain-strategy handling and never gain blind replay. This evidence has no Redis TTL and is included in
 the normal SQLite state backup. It contains private source/account context; do not
 publish the database or raw decision rows. Images and credentials are not copied.
 
