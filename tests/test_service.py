@@ -231,7 +231,7 @@ def test_participation_skip_is_persistable_and_does_not_reserve_cap() -> None:
     skip_id = next(
         UUID(int=index)
         for index in range(1, 500)
-        if service._policy_for_intent_side(
+        if service._planning._policy_for_intent_side(
             base_policy, Side.LONG, UUID(int=index)
         ).strategy_v2.long_participation_arm
         == "skip"
@@ -239,7 +239,7 @@ def test_participation_skip_is_persistable_and_does_not_reserve_cap() -> None:
     take_id = next(
         UUID(int=index)
         for index in range(500, 1000)
-        if service._policy_for_intent_side(
+        if service._planning._policy_for_intent_side(
             base_policy, Side.LONG, UUID(int=index)
         ).strategy_v2.long_participation_arm
         == "take"
@@ -269,15 +269,15 @@ def test_participation_skip_is_persistable_and_does_not_reserve_cap() -> None:
         account_state=AccountStateSummary(as_of=now, positions=(), open_orders=()),
         account_state_error=None,
     )
-    planned, errors = asyncio.run(
-        service._plan_open_intents(
+    planning = asyncio.run(
+        service._planning.plan_open_intents(
             SignalExtraction(
                 open_intents=(intent(skip_id, "BTCUSDT"), intent(take_id, "ETHUSDT"))
             ),
             context,
-            planning_rejections=[],
         )
     )
+    planned, errors = planning.planned, planning.errors
 
     assert errors == []
     assert len(planned) == 2
@@ -771,15 +771,19 @@ def test_deterministic_exchange_rejection_is_terminal_not_retryable() -> None:
     rejections: list[str] = []
     errors: list[str] = []
     executor = RaisingExecutor(deterministic)
-    service._executor = executor
-    plan = asyncio.run(service._plan_single_intent(intent, policy, errors, rejections))
+    service._planning._executor = executor
+    plan = asyncio.run(
+        service._planning._plan_single_intent(intent, policy, errors, rejections)
+    )
     assert plan is None
     assert len(rejections) == 1 and "symbol invalid" in rejections[0]
     assert errors == []
 
     rejections, errors = [], []
-    service._executor = RaisingExecutor(transient)
-    plan = asyncio.run(service._plan_single_intent(intent, policy, errors, rejections))
+    service._planning._executor = RaisingExecutor(transient)
+    plan = asyncio.run(
+        service._planning._plan_single_intent(intent, policy, errors, rejections)
+    )
     assert plan is None
     assert rejections == []
     assert len(errors) == 1 and "read timeout" in errors[0]

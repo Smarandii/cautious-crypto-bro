@@ -17,7 +17,7 @@ from cautious_crypto_bro.domain import (
     TradingIntent,
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
-from cautious_crypto_bro.service import SignalService
+from cautious_crypto_bro.signals.planning import SignalPlanning
 
 
 class PolicyStore:
@@ -48,7 +48,7 @@ def _settings(**overrides) -> Settings:
     )
 
 
-def _service(
+def _planning(
     store: PolicyStore,
     *,
     profile: str = "baseline",
@@ -56,15 +56,12 @@ def _service(
     control_fraction: Decimal = Decimal("0"),
     participation_skip_fraction: Decimal = Decimal("0"),
     entry_order_ttl_minutes: int = 0,
-) -> SignalService:
-    return SignalService(
+) -> SignalPlanning:
+    return SignalPlanning(
         store=store,
-        extractor=object(),
         planner=object(),
         executor=Wallet(),
-        approval_bot=object(),
         coordinator=object(),
-        context_provider=object(),
         demo_exit_profile=profile,
         demo_long_risk_multiplier=long_risk_multiplier,
         demo_long_exit_control_fraction=control_fraction,
@@ -76,7 +73,7 @@ def _service(
 def test_payoff_challenger_applies_only_to_new_policy_snapshot() -> None:
     async def run() -> None:
         store = PolicyStore()
-        service = _service(store, profile="payoff_challenger")
+        service = _planning(store, profile="payoff_challenger")
 
         policy = await service._capital_frozen_policy()
 
@@ -106,7 +103,7 @@ def test_payoff_challenger_applies_only_to_new_policy_snapshot() -> None:
 def test_payoff_early_trail_is_separately_tagged_and_uses_020r_activation() -> None:
     async def run() -> None:
         store = PolicyStore()
-        policy = await _service(
+        policy = await _planning(
             store, profile="payoff_early_trail"
         )._capital_frozen_policy()
 
@@ -126,7 +123,7 @@ def test_payoff_early_trail_is_separately_tagged_and_uses_020r_activation() -> N
 def test_payoff_early_tight_trail_is_separately_tagged_for_new_plans() -> None:
     async def run() -> None:
         store = PolicyStore()
-        policy = await _service(
+        policy = await _planning(
             store, profile="payoff_early_tight_trail"
         )._capital_frozen_policy()
 
@@ -147,7 +144,7 @@ def test_payoff_early_tight_trail_is_separately_tagged_for_new_plans() -> None:
 
 def test_long_015_profile_changes_only_long_activation_and_keeps_reduced_risk() -> None:
     async def run() -> None:
-        service = _service(
+        service = _planning(
             PolicyStore(),
             profile="payoff_early_tight_trail_long_015",
             long_risk_multiplier=Decimal("0.10"),
@@ -179,7 +176,7 @@ def test_long_exit_ab_assignment_is_stable_and_changes_only_profile_activation()
     None
 ):
     async def run() -> None:
-        service = _service(
+        service = _planning(
             PolicyStore(),
             profile="payoff_early_tight_trail_long_015",
             long_risk_multiplier=Decimal("0.10"),
@@ -245,7 +242,7 @@ def test_long_exit_ab_assignment_is_stable_and_changes_only_profile_activation()
 
 
 def test_long_exit_ab_requires_intent_id_and_long_015_profile() -> None:
-    service = _service(
+    service = _planning(
         PolicyStore(),
         profile="payoff_early_tight_trail_long_015",
         control_fraction=Decimal("0.5"),
@@ -258,7 +255,7 @@ def test_long_exit_ab_requires_intent_id_and_long_015_profile() -> None:
         )
 
     with pytest.raises(ValueError, match="requires the long_015 profile"):
-        _service(
+        _planning(
             PolicyStore(),
             profile="payoff_early_tight_trail",
             control_fraction=Decimal("0.5"),
@@ -266,7 +263,7 @@ def test_long_exit_ab_requires_intent_id_and_long_015_profile() -> None:
 
 
 def test_long_participation_assignment_is_stable_separate_and_auto_only() -> None:
-    service = _service(
+    service = _planning(
         PolicyStore(),
         profile="payoff_early_tight_trail_long_015",
         long_risk_multiplier=Decimal("0.10"),
@@ -312,14 +309,14 @@ def test_long_participation_assignment_is_stable_separate_and_auto_only() -> Non
 
 
 def test_long_participation_requires_intent_id_when_enabled() -> None:
-    service = _service(PolicyStore(), participation_skip_fraction=Decimal("0.50"))
+    service = _planning(PolicyStore(), participation_skip_fraction=Decimal("0.50"))
     with pytest.raises(ValueError, match="requires an intent ID"):
         service._policy_for_intent_side(ExecutionPolicy(), Side.LONG)
 
 
 def test_new_execution_plan_serializes_payoff_challenger_profile() -> None:
     async def run() -> None:
-        policy = await _service(
+        policy = await _planning(
             PolicyStore(), profile="payoff_challenger"
         )._capital_frozen_policy()
         now = datetime.now(UTC)
@@ -372,7 +369,7 @@ def test_new_execution_plan_serializes_payoff_challenger_profile() -> None:
 def test_baseline_demo_exit_profile_preserves_existing_policy() -> None:
     async def run() -> None:
         store = PolicyStore()
-        policy = await _service(store)._capital_frozen_policy()
+        policy = await _planning(store)._capital_frozen_policy()
 
         assert policy.strategy_v2 == store.policy.strategy_v2
 
@@ -383,7 +380,7 @@ def test_unsupported_demo_exit_profile_is_rejected() -> None:
     store = PolicyStore()
 
     with pytest.raises(ValueError, match="Unsupported Demo exit profile"):
-        _service(store, profile="unreviewed")
+        _planning(store, profile="unreviewed")
 
 
 def test_demo_exit_profile_setting_is_opt_in_and_validated() -> None:
@@ -438,7 +435,7 @@ def test_demo_entry_order_ttl_defaults_off_and_rejects_negative_values() -> None
 
 def test_entry_order_ttl_is_opt_in_and_serialized_into_new_plans() -> None:
     async def run() -> None:
-        policy = await _service(
+        policy = await _planning(
             PolicyStore(), entry_order_ttl_minutes=240
         )._capital_frozen_policy()
         now = datetime.now(UTC)
