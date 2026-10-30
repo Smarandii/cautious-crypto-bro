@@ -196,6 +196,8 @@ class Exchange:
             }
         elif path in ("/v5/order/realtime", "/v5/order/history"):
             orders = list(self.orders.values())
+            if "symbol" in body:
+                orders = [o for o in orders if o["symbol"] == body["symbol"]]
             if "orderId" in body:
                 orders = [o for o in orders if o["orderId"] == body["orderId"]]
             elif "orderLinkId" in body:

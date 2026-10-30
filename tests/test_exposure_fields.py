@@ -83,6 +83,9 @@ class ExposureFieldsExchange(Exchange):
         if positions or orders:
             row = {
                 "symbol": "ETHUSDT" if self.kind == "portfolio" else "BTCUSDT",
+                "positionIdx": 0,
+                "positionStatus": "Normal",
+                "riskId": 1,
                 "side": "Buy" if self.side is Side.LONG else "Sell",
                 "size": "10" if self.kind == "portfolio" else "1",
                 "avgPrice": "100",
