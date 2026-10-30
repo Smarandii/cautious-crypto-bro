@@ -20,6 +20,9 @@ Before strategy creation, entry preparation re-reads instrument limits, the flat
 one-way symbol's current risk-tier ID, every public risk-limit page and open orders.
 It selects leverage at or below the saved value, constrained by both current and
 projected-notional tiers, and persists any change under the coordinator lock.
+Flat rows may explicitly omit status/position mark values; mode and zero size
+remain mandatory, missing/unknown status is rejected, and projected notional uses
+a validated public ticker mark for the exact symbol.
 Projected notional reserves every new leg at the higher of its reference price
 and current mark; quantities, stops and exits are unchanged. Unknown tiers,
 portfolio margin, non-flat exposure, unowned entry orders or malformed evidence
