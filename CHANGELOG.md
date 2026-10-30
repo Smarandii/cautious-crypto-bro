@@ -14,6 +14,10 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ### Changed
 
+- Keep an idle application-owned SQLite connection until runtime shutdown so
+  the read-only Docker publisher can open live WAL state between app operations
+  (#271). Complete the initial read before idling to allow normal checkpoints;
+  close the connection with the existing cancellation-safe cleanup boundary.
 - Move periodic public trade publication into an opt-in Docker Compose publisher
   (#268). The service reuses the runtime image and read-only exporters directly,
   with no host WSL/Docker-exec/Git commands or Docker socket. Share policy values
