@@ -65,6 +65,11 @@ class ContractExchange(ExchangeTransport):
                                         "minNotionalValue": "5",
                                     },
                                     "priceFilter": {"tickSize": "0.000001"},
+                                    "leverageFilter": {
+                                        "minLeverage": "1",
+                                        "maxLeverage": "100",
+                                        "leverageStep": "0.01",
+                                    },
                                 }
                             ]
                         },

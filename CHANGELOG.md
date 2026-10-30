@@ -10,6 +10,29 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.30] - 2026-10-30
+
+### Fixed
+
+- Apply validated instrument leverage min/max/step constraints when building new
+  entry plans (#275). A request above the instrument maximum is reduced to a
+  supported value; a request below the minimum is rejected rather than increased.
+  Original intent leverage remains stored, while the plan reports the selected
+  value. Risk-based quantities, stop geometry and exits are unchanged.
+- Require valid live Bybit leverage-filter metadata; malformed or missing bounds
+  fail before planning. Offline contexts without a filter retain compatibility.
+
+### Validation and rollback
+
+- Reproduce the 50x versus 12.5x rejection through real planner/SQLite/HTTP
+  integration for market and limit paths, then verify supported submissions,
+  provenance, fractional steps, defaults, invalid bounds and unchanged geometry.
+- Schema 15 and trading settings are unchanged; older persisted plans remain
+  loadable. Rollback uses the prior schema-15 image and a restore-verified backup.
+  No historical signal is replayed. Parent #274 remains open for live account
+  risk-tier/notional and submission-time validation; #248 magnitude evidence
+  and the broader #262 refactor are also incomplete.
+
 ## [2.2.29] - 2026-10-30
 
 ### Changed

@@ -10,7 +10,13 @@ Each plan freezes Unified Account `totalWalletBalance`:
 Unrealized PnL is not used as capital. Later wallet changes do not resize the plan.
 The budget covers entry-to-stop price loss, not fees, funding or stop slippage.
 
-Plans freeze explicit trader leverage from text/images, or 10x when unspecified.
+New plans start with explicit trader leverage from text/images, or 10x when
+unspecified. Live instrument min/max/step constraints select a supported value
+at or below that request. Requests below the minimum are rejected; missing or
+invalid live filters prevent planning. The original intent retains its request,
+and the plan freezes the selected leverage. Offline contexts without a filter
+retain their previous behavior. Account-tier/notional and fresh submission-time
+constraint validation remain tracked in #274.
 Leverage does not multiply the risk-sized order quantities. Before MARKET E1 or
 the LIMIT/RANGE batch, Bybit must accept that leverage for both sides of the
 one-way symbol. An already-matching setting succeeds; unsupported leverage or
@@ -190,8 +196,9 @@ participation skip fraction so every actionable post trades. The operator
 verified the strategy and its exits work and requires magnitude: outcomes in
 the ~±100 USDT ballpark are the goal, a rare full stop-out is ~-212 USDT, and
 the $4000 portfolio cap (~18 concurrent full-risk plans) is unchanged.
-Exits, entries, stops, profiles, leverage and every strategy behavior are
-untouched. The policy row is updated through the existing
+That sizing rollout left exits, entries, stops, profiles and leverage unchanged.
+The separate instrument-validity correction described above applies to new plans.
+The policy row is updated through the existing
 `scripts/set_execution_policy.py` with a stopped-writer state backup taken
 first; plans created before the change keep their frozen budgets. Rollback
 restores the policy to 1% and the two Compose flags to their prior values
