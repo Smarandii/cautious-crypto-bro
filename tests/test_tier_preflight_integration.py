@@ -220,6 +220,7 @@ def test_prepared_tier_leverage_is_saved_before_submission(
         recorded = dict(exchange.pre_submission_plans[0])
         recorded.pop("leverage")
         recorded.pop("created_at")
+        assert all(s["index"] == 0 for s in recorded.pop("entry_slices"))
         assert recorded == original.model_dump(
             mode="json", exclude={"leverage", "created_at"}
         )

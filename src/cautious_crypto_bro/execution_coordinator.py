@@ -318,7 +318,11 @@ class ExecutionCoordinator:
 
             if staged_market:
                 plan = effective_plan = await self._prepare_physical_primary(plan)
-                primary = await self._executor.execute_market_primary(plan)
+                primary = (
+                    await self._executor.execute_prepared_market_primary(plan)
+                    if plan.entry_slices
+                    else await self._executor.execute_market_primary(plan)
+                )
                 primary_filled = True
 
                 context = await self._executor.market_context(plan.symbol)
@@ -367,7 +371,7 @@ class ExecutionCoordinator:
             )
 
         except Exception as exc:
-            if effective_plan.entry_slices and strategy_created:
+            if plan.entry_slices and strategy_created:
                 await self._recover_entry_bindings(effective_plan)
             logger.exception(
                 "Execution failed for %s",
@@ -393,7 +397,10 @@ class ExecutionCoordinator:
     async def _prepare_physical_primary(self, plan: ExecutionPlan) -> ExecutionPlan:
         if not plan.entry_slices:
             return plan
-        prepared = await self._executor.prepare_market_primary(plan)
+        try:
+            prepared = await self._executor.prepare_market_primary(plan)
+        except Exception as exc:
+            raise EntryPreflightError(str(exc)) from exc
         await self._store.update_execution_plan(prepared)
         if prepared.entry_slices:
             await self._store.register_zone(
@@ -433,6 +440,7 @@ class ExecutionCoordinator:
     async def _recover_entry_bindings(self, plan: ExecutionPlan) -> None:
         """Read accepted links after uncertain submission; never retry creation."""
         try:
+            plan = await self._store.get_execution_plan(plan.intent_id) or plan
             await recover_entry_bindings(plan, self._store, self._executor)
         except Exception:
             logger.exception(

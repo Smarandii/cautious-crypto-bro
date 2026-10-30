@@ -216,6 +216,9 @@ class FakeAccountGateway:
     async def execute(self, plan: ExecutionPlan) -> tuple[str, ...]:
         raise NotImplementedError
 
+    async def execute_prepared_market_primary(self, plan):
+        return await self.execute_market_primary(plan)
+
     async def execute_market_primary(
         self,
         plan: ExecutionPlan,

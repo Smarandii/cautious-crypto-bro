@@ -94,6 +94,10 @@ class AccountGateway(Protocol):
         plan: ExecutionPlan,
     ) -> tuple[str, ...]: ...
 
+    async def execute_prepared_market_primary(
+        self, plan: ExecutionPlan
+    ) -> MarketPrimaryExecutionResult: ...
+
     async def execute_position_action(
         self,
         action: PositionActionIntent,

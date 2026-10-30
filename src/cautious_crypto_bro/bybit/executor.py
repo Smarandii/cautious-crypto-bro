@@ -263,6 +263,11 @@ class BybitDemoExecutor:
             plan,
         )
 
+    async def execute_prepared_market_primary(
+        self, plan: ExecutionPlan
+    ) -> MarketPrimaryExecutionResult:
+        return await _run_sync(self._execute_prepared_market_primary_sync, plan)
+
     async def execute_position_action(
         self,
         action: PositionActionIntent,
@@ -1171,10 +1176,9 @@ class BybitDemoExecutor:
 
     def _set_leverage_sync(self, plan: ExecutionPlan) -> None:
         prepared = self._prepare_entry_plan_sync(plan)
-        if (
-            prepared.leverage != plan.leverage
-            or prepared.entry_slices != plan.entry_slices
-        ):
+        if prepared.leverage != plan.leverage or [
+            self._order_params(prepared, i) for i in range(len(prepared.entry_orders))
+        ] != [self._order_params(plan, i) for i in range(len(plan.entry_orders))]:
             raise EntryPreflightError(
                 "Entry constraints changed; prepare and persist the entry plan again"
             )
@@ -1269,6 +1273,27 @@ class BybitDemoExecutor:
             )
         self._validate_market_plan(plan, context.market_price)
         self._set_leverage_sync(plan)
+        return self._submit_primary_slices_sync(plan)
+
+    def _execute_prepared_market_primary_sync(
+        self, plan: ExecutionPlan
+    ) -> MarketPrimaryExecutionResult:
+        """Submit the refreshed requests already persisted by the coordinator."""
+        try:
+            self._validate_staged_market_plan(plan)
+            if not plan.entry_slices:
+                raise EntryPreflightError(
+                    "Prepared primary requires durable entry mapping"
+                )
+            self._validate_market_plan(plan, plan.orders[0].reference_price)
+            self._set_leverage_sync(plan)
+        except Exception as exc:
+            raise EntryPreflightError(str(exc)) from exc
+        return self._submit_primary_slices_sync(plan)
+
+    def _submit_primary_slices_sync(
+        self, plan: ExecutionPlan
+    ) -> MarketPrimaryExecutionResult:
         ids: list[str] = []
         fills = []
         total = Decimal("0")

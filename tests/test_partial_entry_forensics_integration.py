@@ -48,11 +48,12 @@ async def executed_attempt(
     entry_type=EntryType.MARKET,
     exchange_class=QuantityLimitedExchange,
     native_stop=False,
+    ceiling="2",
 ):
     exchange = exchange_class(database)
     exchange.side = side
     exchange.mark = Decimal("100")
-    exchange.max_market_qty = exchange.max_limit_qty = Decimal("2")
+    exchange.max_market_qty = exchange.max_limit_qty = Decimal(ceiling)
     exchange.failure = failure
     exchange.fill_mode = fill_mode
     entry = Entry(type=EntryType.MARKET)
