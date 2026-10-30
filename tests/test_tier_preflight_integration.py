@@ -277,6 +277,35 @@ def test_projected_tier_uses_mark_price_when_last_trade_is_lower(tmp_path):
     asyncio.run(run())
 
 
+def test_market_refresh_rechecks_the_prospective_scale_in_notional(tmp_path):
+    class RefreshTierExchange(TierExchange):
+        instrument_reads = 0
+
+        def handle(self, request):
+            if request.url.path == "/v5/market/instruments-info":
+                self.instrument_reads += 1
+                if self.instrument_reads == 3:
+                    self.mark = Decimal("101")
+            response = super().handle(request)
+            if request.url.path == "/v5/market/risk-limit":
+                body = response.json()
+                body["result"]["list"][0]["riskLimitValue"] = "110"
+                return httpx.Response(200, json=body)
+            return response
+
+    async def run():
+        database = tmp_path / "state.sqlite3"
+        exchange = RefreshTierExchange(database)
+        _, _, _, outcome = await run_entry(database, exchange, EntryType.MARKET)
+        # Moving closer to the stop keeps E1 capped but enlarges prospective
+        # E2/E3. The refreshed batch crosses the next tier before any mutation.
+        assert outcome.status is IntentStatus.FAILED
+        assert "prepare and persist" in outcome.message
+        assert exchange.selected_leverages == [] and exchange.orders == {}
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "failure",
     [

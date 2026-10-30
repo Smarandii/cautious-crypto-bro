@@ -1184,7 +1184,7 @@ class BybitDemoExecutor:
                 refreshed.planned_max_loss_usdt,
                 plan.policy.risk_budget_usdt,
             )
-            self._set_leverage_sync(plan)
+            self._set_leverage_sync(refreshed)
         except Exception as exc:
             raise EntryPreflightError(str(exc)) from exc
 
