@@ -53,7 +53,11 @@ No host process, Windows scheduled task, WSL/Git command or Docker socket is use
 by the running publisher. It does not expose a port or accept trading commands.
 
 `app_state` is mounted read-only at `/state`; the code opens only SQLite in
-read-only mode. This shared volume also contains existing app state files; it is
+read-only mode. The app retains an idle SQLite connection while running so WAL
+sidecars remain available to read-only readers. Its initial read completes before
+idling; it does not retain a snapshot or prevent checkpoints. Stop the publisher
+before deliberately stopping the app for state maintenance.
+This shared volume also contains existing app state files; it is
 not a per-file isolation boundary. Selected publisher credentials are mounted
 read-only at `/run/secrets`. Temporary forensic archives, the singleton lock and
 atomic health receipt live in a separate private `publisher_work` volume.

@@ -30,6 +30,22 @@ async def sqlite_connection(database_path: Path) -> AsyncIterator[aiosqlite.Conn
         await finish_before_cancellation(db.close())
 
 
+@asynccontextmanager
+async def keep_wal_readable(database_path: Path) -> AsyncIterator[None]:
+    """Retain WAL sidecars for external readers without pinning a snapshot.
+
+    SQLite removes the sidecars after its last connection closes. A reader on a
+    read-only mount cannot recreate them. Complete this read before yielding so
+    the idle connection holds no transaction and writers can still checkpoint.
+    The application owns this lifetime; per-operation transactions stay separate.
+    """
+    async with sqlite_connection(database_path) as db:
+        await db.execute("PRAGMA query_only=ON")
+        async with db.execute("SELECT count(*) FROM sqlite_master") as cursor:
+            await cursor.fetchone()
+        yield
+
+
 class _Store(Protocol):
     _database_path: Path
 

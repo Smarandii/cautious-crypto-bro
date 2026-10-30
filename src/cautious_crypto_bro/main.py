@@ -22,6 +22,7 @@ from .signal_context import SignalContextProvider
 from .source_recovery import SourceRecovery
 from .state_ownership import state_ownership
 from .storage import IntentStore
+from .storage._connection import keep_wal_readable
 from .supervision_health import supervision_health_lifecycle, supervision_health_path
 from .telegram_source import TelegramSource
 
@@ -68,8 +69,14 @@ async def async_main() -> None:
 
 
 async def _run_owned_application(settings: Settings) -> None:
+    async with AsyncExitStack() as cleanup:
+        await _run_with_cleanup(settings, cleanup)
+
+
+async def _run_with_cleanup(settings: Settings, cleanup: AsyncExitStack) -> None:
     store = IntentStore(settings.database_path)
     await store.initialize()
+    await cleanup.enter_async_context(keep_wal_readable(settings.database_path))
     await store.quarantine_interrupted_executions()
     stale_sources = await store.reset_stale_processing_sources(
         settings.source_processing_lease_seconds,
@@ -80,15 +87,14 @@ async def _run_owned_application(settings: Settings) -> None:
             stale_sources,
         )
 
-    async with AsyncExitStack() as cleanup:
-        runtime_store = await _build_runtime_store(settings, cleanup=cleanup)
-        runtime = await _build_runtime(
-            settings,
-            store=store,
-            runtime_store=runtime_store,
-            cleanup=cleanup,
-        )
-        await _run_application(runtime)
+    runtime_store = await _build_runtime_store(settings, cleanup=cleanup)
+    runtime = await _build_runtime(
+        settings,
+        store=store,
+        runtime_store=runtime_store,
+        cleanup=cleanup,
+    )
+    await _run_application(runtime)
 
 
 @dataclass(frozen=True, slots=True)
