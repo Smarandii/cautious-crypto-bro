@@ -10,6 +10,34 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.36] - 2026-10-30
+
+### Fixed
+
+- Validate every symbol position row before leverage preparation instead of
+  rejecting all multi-row replies (#287). Bybit Demo can return distinct flat
+  rows whose historical fields differ. Require exact symbol, explicit one-way
+  mode, zero validated exposure, permitted flat status and one agreed validated
+  risk ID. Multiple rows must each report an empty side; missing, conflicting,
+  exposed, hedged or malformed evidence still blocks before mutation.
+- Preserve current/projected tier ceilings, strict public mark, all-open-order
+  checks and frozen risk geometry. Do not select the first row and ignore others.
+  Single-row compatibility and the shared coordinator/cancellation path remain.
+
+### Validation and rollback
+
+- Real SQLite/coordinator/HTTP regressions reproduce rejected consistent flat
+  rows for MARKET/LIMIT/RANGE entries, then verify success and unchanged durable
+  geometry. Forty first/second-row conflict cases and empty responses verify no
+  leverage/order mutation or strategy creation. Existing execution, tier,
+  cancellation and source-recovery integration suites remain required.
+- Schema 15 and trading settings/entries/exits are unchanged. Keep the previous
+  pinned image and restore-verified backup. Verify actual affected-symbol
+  preparation with writes disabled, authenticated supervision/protection, visible
+  source intake and Docker publication before tagging. No historical replay;
+  #248 magnitude and the full #262 audit remain open. Oversized per-order
+  quantities are a separate remaining participation limitation.
+
 ## [2.2.35] - 2026-10-30
 
 ### Changed
