@@ -237,8 +237,11 @@ history request can leave an older timestamp; a ledger read failure displays
   ignore `UNAVAILABLE` rows rather than resuming their one-minute retry loop.
 - OPEN needs symbol, direction and explicit MARKET/LIMIT/RANGE semantics.
   Missing stops use a deterministic 2% fallback; missing targets use policy exits.
-- Entries copy explicit trader leverage from text/images, with a 10x fallback.
-  Bybit must accept the leverage before entry orders are submitted.
+- Entries start with explicit trader leverage from text/images, with a 10x
+  fallback, then apply validated instrument min/max/step constraints without
+  increasing the request. The original request and selected plan remain
+  inspectable. Bybit must accept the leverage before entry orders are submitted;
+  account-tier and fresh submission-time validation remain tracked in #274.
 - Profit/holding updates do not authorize new entries. REDUCE/CLOSE require
   explicit current-caption evidence; images can identify symbol/side.
 - CANCEL_ENTRIES withdraws earlier pending entries from the same Telegram source

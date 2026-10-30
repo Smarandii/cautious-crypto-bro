@@ -29,12 +29,34 @@ class ClosedPnlRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class LeverageFilter:
+    min_leverage: Decimal
+    max_leverage: Decimal
+    step: Decimal
+
+    def __post_init__(self) -> None:
+        if (
+            not all(
+                value.is_finite()
+                for value in (self.min_leverage, self.max_leverage, self.step)
+            )
+            or self.min_leverage < 1
+            or self.max_leverage < self.min_leverage
+            or self.step <= 0
+        ):
+            raise ValueError(
+                "Instrument leverage filter must have valid finite bounds and step"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class InstrumentContext:
     market_price: Decimal
     tick_size: Decimal
     qty_step: Decimal
     min_qty: Decimal
     min_notional: Decimal
+    leverage_filter: LeverageFilter | None = None
 
 
 class TradeExecutionError(RuntimeError):

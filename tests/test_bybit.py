@@ -141,6 +141,11 @@ def v2_market_plan(side: Side = Side.LONG) -> ExecutionPlan:
 
 def instrument_info(context: InstrumentContext) -> dict:
     return {
+        "leverageFilter": {
+            "minLeverage": "1",
+            "maxLeverage": "100",
+            "leverageStep": "0.01",
+        },
         "priceFilter": {"tickSize": str(context.tick_size)},
         "lotSizeFilter": {
             "qtyStep": str(context.qty_step),

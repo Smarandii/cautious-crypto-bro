@@ -20,6 +20,7 @@ from ..domain import (
     ExecutionOrderType,
     ExecutionPlan,
     InstrumentContext,
+    LeverageFilter,
     MarketPrimaryExecutionResult,
     PositionActionExecutionResult,
     PositionActionIntent,
@@ -905,7 +906,22 @@ class BybitDemoExecutor:
         lot = instrument["lotSizeFilter"]
         price_filter = instrument["priceFilter"]
 
+        raw_leverage = instrument.get("leverageFilter")
+        if not isinstance(raw_leverage, dict):
+            raise TradeExecutionError("Bybit instrument leverage filter is unavailable")
+        try:
+            leverage_filter = LeverageFilter(
+                min_leverage=parse_decimal(raw_leverage.get("minLeverage")),
+                max_leverage=parse_decimal(raw_leverage.get("maxLeverage")),
+                step=parse_decimal(raw_leverage.get("leverageStep")),
+            )
+        except (ValueError, ArithmeticError, TradeExecutionError) as exc:
+            raise TradeExecutionError(
+                "Bybit instrument leverage filter is invalid"
+            ) from exc
+
         return InstrumentContext(
+            leverage_filter=leverage_filter,
             market_price=market_price,
             tick_size=Decimal(price_filter["tickSize"]),
             qty_step=Decimal(lot["qtyStep"]),

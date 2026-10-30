@@ -147,11 +147,7 @@ class ExecutionPlanner:
             intent_id=intent.intent_id,
             symbol=intent.symbol,
             side=intent.side,
-            leverage=(
-                Decimal(str(intent.leverage))
-                if intent.leverage is not None
-                else Decimal("10")
-            ),
+            leverage=self._plan_leverage(intent, context),
             orders=orders,
             stop_loss=stop_loss,
             stop_loss_source=stop_source,
@@ -167,6 +163,28 @@ class ExecutionPlanner:
             policy=policy.model_copy(deep=True),
             planned_max_loss_usdt=(planned_max_loss),
         )
+
+    @staticmethod
+    def _plan_leverage(intent: TradingIntent, context: InstrumentContext) -> Decimal:
+        requested = (
+            Decimal(str(intent.leverage))
+            if intent.leverage is not None
+            else Decimal("10")
+        )
+        limits = context.leverage_filter
+        # Offline contexts created before leverage constraints retain their old
+        # behavior. The live adapter requires and validates the exchange filter.
+        if limits is None:
+            return requested
+        if requested < limits.min_leverage:
+            raise ExecutionPlanningError(
+                "Requested leverage is below the instrument minimum"
+            )
+        capped = min(requested, limits.max_leverage)
+        steps = ((capped - limits.min_leverage) / limits.step).to_integral_value(
+            rounding=ROUND_DOWN
+        )
+        return limits.min_leverage + steps * limits.step
 
     def _risk_checked_orders(
         self,
