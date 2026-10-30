@@ -165,16 +165,16 @@ def test_original_decisions_survive_restart_without_model_or_cache(
                     finally:
                         await restarted_bot.close()
                 if case == "transport":
-                    assert (
-                        source.message_id
-                        in await store.get_retryable_source_message_ids(
-                            source.channel_id, lease_seconds=300
-                        )
+                    assert not await store.get_retryable_source_message_ids(
+                        source.channel_id, lease_seconds=300
                     )
                     with sqlite3.connect(database) as db:
                         assert db.execute(
                             "SELECT status FROM source_messages"
-                        ).fetchone() == ("FAILED",)
+                        ).fetchone() == ("COMPLETED",)
+                        assert db.execute(
+                            "SELECT status FROM planning_candidates"
+                        ).fetchone() == ("PENDING",)
             finally:
                 await bot.close()
         # A new store process and no provider/cache are sufficient to audit.

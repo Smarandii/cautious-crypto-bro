@@ -15,15 +15,7 @@ logger = logging.getLogger(__name__)
 
 DEMO_BASE_URL = "https://api-demo.bybit.com"
 UNMATCHED_IP_REASON = "Bybit error 10010 (Unmatched IP)"
-
-
-def is_exchange_rejection(error: Exception) -> bool:
-    """True when Bybit explicitly rejected the request (deterministic).
-
-    Transport failures ("Bybit HTTP request failed", timeouts) are not
-    rejections and may succeed on a later attempt.
-    """
-    return bool(re.match(r"Bybit rejected request: -?\d+(?:\s|$)", str(error)))
+TRANSIENT_READ_CODES = frozenset({429, 10000, 10006, 10016})
 
 
 def exchange_failure_reason(error: Exception) -> str:
@@ -122,8 +114,11 @@ class BybitClient:
         data = self._response_data(response)
 
         if str(data["retCode"]) != "0":
+            code = int(data["retCode"])
             raise TradeExecutionError(
-                f"Bybit rejected request: {data.get('retCode')} {data.get('retMsg')}"
+                f"Bybit rejected request: {data.get('retCode')} {data.get('retMsg')}",
+                exchange_code=code,
+                retryable_read=code in TRANSIENT_READ_CODES,
             )
 
         return data
@@ -201,7 +196,11 @@ class BybitClient:
                 continue
 
             raise TradeExecutionError(
-                f"Bybit rejected request: {code} {data.get('retMsg')}"
+                f"Bybit rejected request: {code} {data.get('retMsg')}",
+                exchange_code=int(code),
+                retryable_read=(int(code) in TRANSIENT_READ_CODES)
+                if method == "GET"
+                else None,
             )
 
         raise TradeExecutionError("Bybit request failed after clock re-sync")

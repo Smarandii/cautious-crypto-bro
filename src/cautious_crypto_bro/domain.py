@@ -71,7 +71,22 @@ class InstrumentContext:
 
 
 class TradeExecutionError(RuntimeError):
-    pass
+    """Validated read disposition is separate from uncertain mutation outcomes."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        exchange_code: int | None = None,
+        retryable_read: bool | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.exchange_code = exchange_code
+        self.retryable_read = retryable_read
+
+    @property
+    def is_permanent_read_rejection(self) -> bool:
+        return self.exchange_code is not None and self.retryable_read is False
 
 
 class PositionActionPreflightError(TradeExecutionError):

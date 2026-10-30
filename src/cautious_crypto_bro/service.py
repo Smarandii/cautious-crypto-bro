@@ -351,7 +351,11 @@ class SignalService:
         if batch is None:
             return
 
-        if not batch.planned and not batch.position_actions:
+        if (
+            not batch.planned
+            and not batch.position_actions
+            and not batch.retry_candidates
+        ):
             await self._complete_or_fail_source(
                 source,
                 claim_token,

@@ -10,6 +10,36 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.34] - 2026-10-30
+
+### Fixed
+
+- Retain actionable candidates across temporary Bybit planning reads (#283).
+  Validated GET response codes 429/10000/10006/10016 carry explicit read-recovery
+  metadata; planning no longer parses a provider error message to decide whether
+  a rejection is permanent. Existing diagnostic messages remain readable.
+- Persist candidate-only batches under the existing source claim transaction
+  when every OPEN fails temporarily. Source completion cannot precede durable
+  candidate insertion; invalid owners/sources/deadlines and insert failures do
+  not leave a completed source without its candidate.
+- Preserve already-selected approval modes in candidate JSON, where ordinary
+  TradingIntent serialization excluded them. Legacy and previously MANUAL
+  candidates stay MANUAL. IDs/deadlines/backoff remain unchanged; mutation errors
+  keep existing failure/uncertain-strategy handling without automatic order replay.
+
+### Validation and rollback
+
+- Real SQLite/HTTP/source/recovery regressions cover public/private GET failures,
+  restart, original approval/deadline preservation, backoff/expiry, permanent and
+  malformed responses, candidate-only rollback/claim validation, legacy payloads
+  and accepted-mutation responses without replay. Coverage remains UNRESOLVED
+  while a candidate is pending and reflects execution after recovery.
+- Schema 15 and trading settings are unchanged. Candidate JSON adds an optional
+  approval_mode field accepted by earlier readers; legacy payloads are not
+  relabeled or promoted. Rollback retains the previous pinned schema-15 image
+  and restore-verified backup. No forced historical replay; #248 magnitude and
+  the full #262 architecture scope remain open.
+
 ## [2.2.33] - 2026-10-30
 
 ### Changed
