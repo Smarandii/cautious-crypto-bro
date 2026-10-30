@@ -17,6 +17,7 @@ from ..domain import (
     AccountStateSummary,
     ClosedPnlRecord,
     EntryPreflightError,
+    EntrySlice,
     ExecutionOrderType,
     ExecutionPlan,
     InstrumentContext,
@@ -33,6 +34,7 @@ from ..domain import (
 from ..execution import ExecutionPlanner
 from ..execution_history import HISTORY_WINDOW_MS, ExecutionHistoryPage
 from .client import DEMO_BASE_URL, BybitClient
+from .entry_limits import allocate_entry_slices
 from .leverage import (
     RiskTier,
     flat_position_risk_tier,
@@ -222,6 +224,17 @@ class BybitDemoExecutor:
 
     async def prepare_entry_plan(self, plan: ExecutionPlan) -> ExecutionPlan:
         return await _run_sync(self._prepare_entry_plan_sync, plan)
+
+    async def prepare_market_primary(self, plan: ExecutionPlan) -> ExecutionPlan:
+        context = await self.market_context(plan.symbol)
+        refreshed = self._planner.refresh_market_plan(
+            plan.model_copy(update={"entry_slices": ()}), context
+        )
+        return await self.prepare_remaining_entries(refreshed)
+
+    async def prepare_remaining_entries(self, plan: ExecutionPlan) -> ExecutionPlan:
+        instrument = await _run_sync(self._instrument_info, plan.symbol)
+        return allocate_entry_slices(plan, instrument)
 
     async def execute(
         self,
@@ -937,10 +950,6 @@ class BybitDemoExecutor:
             raise TradeExecutionError(
                 f"Strategy V{plan.strategy_version} is read-only; only V2 executes"
             )
-        if plan.entry_slices:
-            raise EntryPreflightError(
-                "Physical entry submission is unavailable in this compatibility checkpoint"
-            )
 
     @classmethod
     def _validate_staged_market_plan(
@@ -965,6 +974,9 @@ class BybitDemoExecutor:
         self,
         symbol: str,
         order_id: str,
+        *,
+        allow_empty: bool = False,
+        expected_request: dict[str, object] | None = None,
     ) -> MarketPrimaryExecutionResult:
         params: dict[str, object] = {
             "category": "linear",
@@ -976,7 +988,11 @@ class BybitDemoExecutor:
             record = self._find_order_record(params, order_id)
 
             if record is not None:
-                filled = self._filled_primary_result(record, order_id)
+                if expected_request is not None:
+                    self._validate_primary_identity(record, expected_request)
+                filled = self._filled_primary_result(
+                    record, order_id, allow_empty=allow_empty
+                )
 
                 if filled is not None:
                     return filled
@@ -985,6 +1001,19 @@ class BybitDemoExecutor:
                 time.sleep(0.25)
 
         raise TradeExecutionError("Timed out confirming V2 MARKET E1 fill")
+
+    @staticmethod
+    def _validate_primary_identity(record: dict, request: dict[str, object]) -> None:
+        if any(
+            record.get(key) != request[key]
+            for key in ("symbol", "side", "orderType", "orderLinkId")
+        ):
+            raise TradeExecutionError("Physical primary fill identity mismatch")
+        if (
+            parse_decimal(record.get("qty")) != Decimal(str(request["qty"]))
+            or record.get("reduceOnly") is not False
+        ):
+            raise TradeExecutionError("Physical primary fill quantity/role mismatch")
 
     def _find_order_record(
         self,
@@ -1022,6 +1051,8 @@ class BybitDemoExecutor:
     def _filled_primary_result(
         record: dict,
         order_id: str,
+        *,
+        allow_empty: bool = False,
     ) -> MarketPrimaryExecutionResult | None:
         status = str(record.get("orderStatus") or "")
 
@@ -1048,6 +1079,10 @@ class BybitDemoExecutor:
             "Deactivated",
             "PartiallyFilledCanceled",
         }:
+            if allow_empty and filled_quantity == 0:
+                return MarketPrimaryExecutionResult(
+                    order_id, Decimal("0"), Decimal("0")
+                )
             raise TradeExecutionError(f"V2 MARKET E1 ended without a fill: {status}")
 
         return None
@@ -1055,7 +1090,8 @@ class BybitDemoExecutor:
     def _prepare_entry_plan_sync(self, plan: ExecutionPlan) -> ExecutionPlan:
         self._require_v2(plan)
         self._sync_clock()
-        limits = instrument_leverage_filter(self._instrument_info(plan.symbol))
+        instrument = self._instrument_info(plan.symbol)
+        limits = instrument_leverage_filter(instrument)
         positions = self._client.paginate_private_list(
             "/v5/position/list", {"category": "linear", "symbol": plan.symbol}
         )
@@ -1095,11 +1131,17 @@ class BybitDemoExecutor:
         selected = tier_leverage(
             plan.leverage, limits, tiers, current_id, projected_notional
         )
-        return (
+        prepared = (
             plan
             if selected == plan.leverage
             else plan.model_copy(update={"leverage": selected})
         )
+        prepared = allocate_entry_slices(prepared, instrument)
+        if prepared.entry_slices and len(prepared.entry_orders) + len(orders) > 20:
+            raise EntryPreflightError(
+                "Existing protective orders exhaust partial-stop capacity"
+            )
+        return prepared
 
     def _risk_tiers_sync(self, symbol: str) -> tuple[RiskTier, ...]:
         items: list[dict] = []
@@ -1129,9 +1171,12 @@ class BybitDemoExecutor:
 
     def _set_leverage_sync(self, plan: ExecutionPlan) -> None:
         prepared = self._prepare_entry_plan_sync(plan)
-        if prepared.leverage != plan.leverage:
+        if (
+            prepared.leverage != plan.leverage
+            or prepared.entry_slices != plan.entry_slices
+        ):
             raise EntryPreflightError(
-                "Leverage constraints changed; prepare and persist the entry plan again"
+                "Entry constraints changed; prepare and persist the entry plan again"
             )
         leverage = format_decimal(plan.leverage)
         self._client.private_post(
@@ -1148,6 +1193,8 @@ class BybitDemoExecutor:
         self,
         plan: ExecutionPlan,
     ) -> MarketPrimaryExecutionResult:
+        if plan.entry_slices:
+            return self._execute_sliced_market_primary_sync(plan)
         try:
             self._validate_staged_market_plan(plan)
             self._sync_clock()
@@ -1185,9 +1232,87 @@ class BybitDemoExecutor:
         if not order_id:
             raise TradeExecutionError("Bybit returned success without E1 orderId")
 
-        return self._wait_for_market_fill_sync(
+        filled = self._wait_for_market_fill_sync(
             plan.symbol,
             str(order_id),
+        )
+        return MarketPrimaryExecutionResult(
+            order_id=filled.order_id,
+            average_fill_price=filled.average_fill_price,
+            filled_quantity=filled.filled_quantity,
+            entry_slices=(
+                EntrySlice(
+                    leg_name="E1",
+                    index=0,
+                    quantity=refreshed.orders[0].quantity,
+                    filled_quantity=filled.filled_quantity,
+                ),
+            ),
+        )
+
+    def _execute_sliced_market_primary_sync(
+        self,
+        plan: ExecutionPlan,
+    ) -> MarketPrimaryExecutionResult:
+        self._validate_staged_market_plan(plan)
+        self._sync_clock()
+        context = self._market_context_sync(plan.symbol)
+        refreshed = self._planner.refresh_market_plan(
+            plan.model_copy(update={"entry_slices": ()}), context
+        )
+        # E2/E3 are rebuilt from actual fills later. A favorable quote need
+        # not invalidate their prospective geometry; only a required primary
+        # downsize would change the already persisted physical requests.
+        if refreshed.orders[0].quantity < plan.orders[0].quantity:
+            raise EntryPreflightError(
+                "Market requires a primary downsize after durable slice preparation"
+            )
+        self._validate_market_plan(plan, context.market_price)
+        self._set_leverage_sync(plan)
+        ids: list[str] = []
+        fills = []
+        total = Decimal("0")
+        cost = Decimal("0")
+        for index, child in enumerate(plan.entry_slices):
+            if child.leg_name != "E1":
+                continue
+            request = self._order_params(plan, index)
+            response = self._client.private_post(
+                "/v5/order/create",
+                {"category": "linear", **request},
+            )
+            order_id = str(response.get("result", {}).get("orderId") or "")
+            if (
+                not order_id
+                or order_id in ids
+                or response.get("result", {}).get("orderLinkId")
+                != request["orderLinkId"]
+            ):
+                raise TradeExecutionError("Invalid physical primary acknowledgement")
+            ids.append(order_id)
+            result = self._wait_for_market_fill_sync(
+                plan.symbol,
+                order_id,
+                allow_empty=True,
+                expected_request=request,
+            )
+            if result.filled_quantity > child.quantity:
+                raise TradeExecutionError(
+                    "Physical primary fill exceeds submitted quantity"
+                )
+            total += result.filled_quantity
+            cost += result.filled_quantity * result.average_fill_price
+            fills.append(
+                child.model_copy(update={"filled_quantity": result.filled_quantity})
+            )
+        if total <= 0:
+            raise TradeExecutionError("Physical primary has no confirmed fill")
+        return MarketPrimaryExecutionResult(
+            order_id=ids[0],
+            average_fill_price=cost / total,
+            filled_quantity=total,
+            order_ids=tuple(ids),
+            entry_slices=tuple(fills),
         )
 
     def _execute_remaining_entries_sync(
@@ -1203,10 +1328,8 @@ class BybitDemoExecutor:
                 plan,
                 index,
             )
-            for index in (
-                1,
-                2,
-            )
+            for index, order in enumerate(plan.entry_orders)
+            if order.order_type is ExecutionOrderType.LIMIT
         ]
 
         return self._submit_entry_batch(plan.symbol, requests)
@@ -1239,7 +1362,8 @@ class BybitDemoExecutor:
                     "Market is already above the primary SHORT entry"
                 )
             requests = [
-                self._order_params(plan, index) for index in range(len(plan.orders))
+                self._order_params(plan, index)
+                for index in range(len(plan.entry_orders))
             ]
             self._set_leverage_sync(plan)
         except Exception as exc:
@@ -1253,11 +1377,17 @@ class BybitDemoExecutor:
         requests: list[dict[str, object]],
     ) -> tuple[str, ...]:
         try:
-            response = self._client.private_post(
-                "/v5/order/create-batch",
-                {"category": "linear", "request": requests},
-            )
-            return self._parse_batch_result(requests, response)
+            ids: list[str] = []
+            for offset in range(0, len(requests), 20):
+                batch = requests[offset : offset + 20]
+                response = self._client.private_post(
+                    "/v5/order/create-batch",
+                    {"category": "linear", "request": batch},
+                )
+                ids.extend(self._parse_batch_result(batch, response))
+            if len(ids) != len(set(ids)):
+                raise TradeExecutionError("Duplicate physical entry acknowledgement")
+            return tuple(ids)
         except Exception:
             # A lost or malformed acknowledgement does not prove rejection.
             # Cancel only submitted entry links; never replay their creation.
@@ -1273,7 +1403,7 @@ class BybitDemoExecutor:
     ) -> dict[str, object]:
         self._require_v2(plan)
 
-        order = plan.orders[index]
+        order = plan.entry_orders[index]
 
         params: dict[str, object] = {
             "symbol": plan.symbol,
@@ -1342,6 +1472,8 @@ class BybitDemoExecutor:
                 and isinstance(order_id, str)
                 and order_id.strip()
                 and order_id not in order_ids
+                and result.get("orderLinkId", requests[index]["orderLinkId"])
+                == requests[index]["orderLinkId"]
             ):
                 order_ids.append(order_id)
             else:

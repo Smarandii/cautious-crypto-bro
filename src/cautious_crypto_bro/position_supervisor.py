@@ -24,6 +24,7 @@ from .domain import (
     StrategyV2Policy,
     TradeExecutionError,
 )
+from .entry_ownership import recover_entry_bindings
 from .execution_history import HistoryQuery
 from .ports import AccountGateway, PositionSupervisorStore
 from .position_management.exit_installer import (
@@ -135,6 +136,9 @@ class PositionSupervisor:
             return
         self._zone_execution_due_at = now + ZONE_EXECUTION_RECORD_INTERVAL_S
         try:
+            for _state, plan in await self._store.get_active_position_strategies():
+                if plan.entry_slices:
+                    await recover_entry_bindings(plan, self._store, self._executor)
             groups_by_symbol = await self._store.zone_order_symbols()
             queries = await self._store.prepare_zone_history_queries(
                 tuple(groups_by_symbol), int(datetime.now(UTC).timestamp() * 1000)

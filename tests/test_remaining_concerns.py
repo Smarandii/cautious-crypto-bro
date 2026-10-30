@@ -160,6 +160,8 @@ class Exchange:
                 "list": [
                     {
                         "lotSizeFilter": {
+                            "maxMktOrderQty": "1000000",
+                            "maxOrderQty": "1000000",
                             "qtyStep": "0.001",
                             "minOrderQty": "0.001",
                             "minNotionalValue": "5",

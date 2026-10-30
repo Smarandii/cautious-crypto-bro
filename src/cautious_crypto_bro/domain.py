@@ -145,6 +145,8 @@ class MarketPrimaryExecutionResult:
     order_id: str
     average_fill_price: Decimal
     filled_quantity: Decimal
+    order_ids: tuple[str, ...] = ()
+    entry_slices: tuple[EntrySlice, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

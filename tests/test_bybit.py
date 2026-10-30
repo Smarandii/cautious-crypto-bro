@@ -148,6 +148,8 @@ def instrument_info(context: InstrumentContext) -> dict:
         },
         "priceFilter": {"tickSize": str(context.tick_size)},
         "lotSizeFilter": {
+            "maxMktOrderQty": "1000000",
+            "maxOrderQty": "1000000",
             "qtyStep": str(context.qty_step),
             "minOrderQty": str(context.min_qty),
             "minNotionalValue": str(context.min_notional),
