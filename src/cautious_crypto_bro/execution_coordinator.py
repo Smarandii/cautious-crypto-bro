@@ -24,6 +24,7 @@ from .domain import (
     StrategyStatus,
     TradingIntent,
 )
+from .entry_ownership import recover_entry_bindings
 from .execution import ExecutionPlanner
 from .portfolio_risk import open_stop_risk_usdt
 from .ports import AccountGateway, ExecutionCoordinatorStore
@@ -301,12 +302,12 @@ class ExecutionCoordinator:
 
             prepared_plan = await self._executor.prepare_entry_plan(plan)
             if prepared_plan.leverage > plan.leverage or prepared_plan.model_dump(
-                exclude={"leverage"}
-            ) != plan.model_dump(exclude={"leverage"}):
+                exclude={"leverage", "entry_slices"}
+            ) != plan.model_dump(exclude={"leverage", "entry_slices"}):
                 raise EntryPreflightError(
                     "Entry preparation changed frozen risk geometry or increased leverage"
                 )
-            if prepared_plan.leverage != plan.leverage:
+            if prepared_plan != plan:
                 await self._store.update_execution_plan(prepared_plan)
             plan = effective_plan = prepared_plan
 
@@ -316,16 +317,21 @@ class ExecutionCoordinator:
             staged_market = plan.orders[0].order_type is ExecutionOrderType.MARKET
 
             if staged_market:
+                plan = effective_plan = await self._prepare_physical_primary(plan)
                 primary = await self._executor.execute_market_primary(plan)
                 primary_filled = True
 
                 context = await self._executor.market_context(plan.symbol)
 
                 effective_plan = self._planner.rebase_market_plan(
-                    plan,
+                    plan.model_copy(update={"entry_slices": ()}),
                     fill_price=(primary.average_fill_price),
                     filled_quantity=(primary.filled_quantity),
                     context=context,
+                )
+
+                effective_plan = await self._prepare_physical_remaining(
+                    plan, effective_plan, primary
                 )
 
                 # Persist the fill-derived geometry
@@ -340,11 +346,15 @@ class ExecutionCoordinator:
                 )
 
                 order_ids = (
-                    primary.order_id,
+                    *(primary.order_ids or (primary.order_id,)),
                     *remaining_ids,
                 )
 
             else:
+                if plan.entry_slices:
+                    await self._store.register_zone(
+                        zone_group_id(plan.symbol, plan.side), plan.intent_id
+                    )
                 order_ids = await self._executor.execute(plan)
 
             await self._store.mark_executed(
@@ -352,9 +362,13 @@ class ExecutionCoordinator:
                 order_ids,
             )
 
-            await self._enroll_executed_zone(effective_plan, order_ids)
+            await self._enroll_executed_zone(
+                effective_plan, order_ids, registered=bool(plan.entry_slices)
+            )
 
         except Exception as exc:
+            if effective_plan.entry_slices and strategy_created:
+                await self._recover_entry_bindings(effective_plan)
             logger.exception(
                 "Execution failed for %s",
                 intent_id,
@@ -375,6 +389,55 @@ class ExecutionCoordinator:
             plan=effective_plan,
             order_ids=order_ids,
         )
+
+    async def _prepare_physical_primary(self, plan: ExecutionPlan) -> ExecutionPlan:
+        if not plan.entry_slices:
+            return plan
+        prepared = await self._executor.prepare_market_primary(plan)
+        await self._store.update_execution_plan(prepared)
+        if prepared.entry_slices:
+            await self._store.register_zone(
+                zone_group_id(prepared.symbol, prepared.side), prepared.intent_id
+            )
+        return prepared
+
+    async def _prepare_physical_remaining(
+        self, submitted, rebased, primary
+    ) -> ExecutionPlan:
+        if submitted.entry_slices:
+            rebased = rebased.model_copy(
+                update={
+                    "entry_slices": primary.entry_slices
+                    + tuple(s for s in submitted.entry_slices if s.leg_name != "E1")
+                }
+            )
+        allocated = await self._executor.prepare_remaining_entries(rebased)
+        if allocated.entry_slices and not submitted.entry_slices:
+            if not primary.entry_slices:
+                raise RuntimeError(
+                    "Physical scale-in requires submitted primary evidence"
+                )
+            allocated = ExecutionPlan.model_validate(
+                allocated.model_dump()
+                | {
+                    "entry_slices": primary.entry_slices
+                    + tuple(s for s in allocated.entry_slices if s.leg_name != "E1")
+                }
+            )
+            await self._store.update_execution_plan(allocated)
+            await self._store.register_zone(
+                zone_group_id(allocated.symbol, allocated.side), allocated.intent_id
+            )
+        return allocated
+
+    async def _recover_entry_bindings(self, plan: ExecutionPlan) -> None:
+        """Read accepted links after uncertain submission; never retry creation."""
+        try:
+            await recover_entry_bindings(plan, self._store, self._executor)
+        except Exception:
+            logger.exception(
+                "Physical entry binding recovery pending for %s", plan.intent_id
+            )
 
     async def _prepare_execution(
         self,
@@ -443,6 +506,8 @@ class ExecutionCoordinator:
         self,
         plan,
         order_ids: tuple[str, ...],
+        *,
+        registered: bool = False,
     ) -> None:
         """Freeze the executed zone and bind its entry orders durably (#123).
 
@@ -454,7 +519,8 @@ class ExecutionCoordinator:
             return
         try:
             group_id = zone_group_id(plan.symbol, plan.side)
-            await self._store.register_zone(group_id, plan.intent_id)
+            if not registered:
+                await self._store.register_zone(group_id, plan.intent_id)
             prefix = f"ccb-v2-{plan.intent_id.hex[:20]}-"
             for order, order_id in zip(plan.entry_orders, order_ids, strict=True):
                 await self._store.bind_zone_order(

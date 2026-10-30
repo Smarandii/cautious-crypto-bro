@@ -14,7 +14,6 @@ from pydantic import ValidationError
 from test_remaining_concerns import Exchange, executor_for, prepare, state_for
 
 from cautious_crypto_bro.domain import (
-    EntryPreflightError,
     ExecutionPlan,
     StrategyStatus,
 )
@@ -98,8 +97,7 @@ def test_legacy_json_and_mapped_ownership_round_trip_without_new_risk(tmp_path):
                 len(f"ccb-v2-{plan.intent_id.hex[:20]}-{o.name.lower()}") <= 36
                 for o in restored.entry_orders
             )
-            with pytest.raises(EntryPreflightError, match="compatibility checkpoint"):
-                await executor.prepare_entry_plan(restored)
+            executor._require_v2(restored)
             assert not exchange.requests and not exchange.orders
 
     asyncio.run(run())

@@ -10,6 +10,39 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.38] - 2026-10-30
+
+### Fixed
+
+- Submit quantity-limited entries as deterministic physical children of the
+  unchanged E1/E2/E3 logical legs (#291, #288). Read current market/limit ceilings,
+  quantity steps and minima; balance child quantities without reducing approved
+  logical risk. Reject unrepresentable allocations and allocations exceeding
+  native partial-stop capacity before submitting entries.
+- Persist refreshed primary requests before submission and fill-derived scale-in
+  allocations before submitting E2/E3. Aggregate confirmed primary fills while
+  retaining original submitted quantities, including partially filled or empty
+  terminal IOC children. Each entry retains its native stop-loss request.
+- Recover accepted physical identities by exact exchange evidence after partial
+  failures, lost acknowledgements and restart. Keep uncertain strategies paused
+  for human review; never replay entry creation. Freeze the initial zone allocation
+  before mapped submission and retain confirmed child bindings through recovery.
+
+### Validation and compatibility
+
+- Exercise MARKET, LIMIT and RANGE submission against real SQLite and the HTTP
+  client, including durable request quantities, unchanged logical reference
+  geometry, partial/empty primary fills, invalid limits, protection capacity,
+  lost acknowledgements, partial batch acceptance and restart without replay.
+- Read-only verification of the affected LONGXIA plan produces four physical
+  entries with unchanged logical geometry under current public exchange limits.
+  No historical signal replay or synthetic live trade is performed.
+- Schema 15, risk settings, exit policy and dependencies remain unchanged.
+  v2.2.37 can read and supervise mapped plans for rollback, but cannot submit new
+  mapped entries. A fresh quote requiring a primary downsize fails preflight
+  rather than changing a durably prepared request. Bybit acceptance and live
+  profitability remain subject to actual market and account conditions.
+
 ## [2.2.37] - 2026-10-30
 
 ### Added
