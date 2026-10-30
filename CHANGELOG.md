@@ -10,6 +10,42 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.39] - 2026-10-30
+
+### Fixed
+
+- Include confirmed accepted entries from failed or uncertain submission attempts
+  in forensic exports (#294). Read plans, bindings and strategy status from one
+  read-only database snapshot; preserve the actual attempt status, frozen policy,
+  source and cohort metadata. Never promote a failed intent or resume quarantine.
+- Aggregate every physical E1 child's actual fills, keeping scale-ins separate.
+  Retain filled E2/E3 evidence even if a primary LIMIT/RANGE entry was rejected.
+  Reconcile submitted and filled quantities independently for partial IOC orders.
+- Attribute closing executions by confirmed zone identity or Bybit's explicit
+  attached-parent relationship. Validate native partial-close symbol, direction,
+  quantity and closing role; a shared client-ID prefix does not establish ownership.
+  Include actual fees, funding and native-stop losses without counting them twice.
+- Require complete entry identities and settled order/fill/fee history before
+  counting a mapped or failed attempt as a completed economic lifecycle. Pending
+  entries, missing evidence and ambiguous closing identities remain incomplete.
+  Filled failed attempts no longer masquerade as failed-before-fill assignments.
+
+### Validation and compatibility
+
+- Add 39 real SQLite/client/coordinator/export/reconciler integration cases across
+  LONG and SHORT, MARKET/LIMIT/RANGE, partial acceptance and IOC fills, acknowledgement
+  loss, restarted storage, native stops, missing/conflicting history and frozen
+  assignment bookkeeping. Preserve ordinary successful exports and legacy bundles.
+- Read-only validation against all 105 eligible production plans preserves their
+  stored successful entry IDs; no trading mutation or source replay is performed.
+- Schema 15, dependencies, risk settings, entries/stops/exits and runtime trading
+  behavior remain unchanged. Rollback to v2.2.38 needs no state migration; regenerate
+  reports with v2.2.39 to retain the new completeness checks. Older consumers that
+  ignore the additive evidence flags cannot certify uncertain-attempt completeness.
+- Unowned legacy failures, unavailable history and ambiguous closes remain
+  unassigned or incomplete for human review. This release does not complete the
+  natural profit-magnitude experiment (#248) or the full architecture audit (#262).
+
 ## [2.2.38] - 2026-10-30
 
 ### Fixed

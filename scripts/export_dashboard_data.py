@@ -732,8 +732,12 @@ def _participation_cohort(
         and position.get("long_participation_arm") == "take"
     ]
     complete_take = [position for position in take_positions if position["complete"]]
+    filled_take_ids = {position["intent_id"] for position in take_positions}
     failed_take = sum(
-        item["status"] == "FAILED" and not item["order_ids"] for item in take
+        item["status"] == "FAILED"
+        and not item["order_ids"]
+        and item["intent_id"] not in filled_take_ids
+        for item in take
     )
     unresolved_take = max(0, len(take) - len(complete_take) - failed_take)
     valid_skips = [

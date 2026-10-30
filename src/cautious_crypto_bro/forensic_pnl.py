@@ -276,6 +276,41 @@ def reconcile(path: Path | BinaryIO) -> list[dict]:
     return positions
 
 
+def _filled_entry_legs(fills: list[dict], evidence: dict | None) -> list[str]:
+    if evidence is not None:
+        legs = {
+            item["order_id"]: item["leg_name"]
+            for item in evidence.get("entry_orders", [])
+        }
+        return sorted(
+            {
+                legs[str(fill.get("orderId") or "")]
+                for fill in fills
+                if str(fill.get("orderId") or "") in legs
+            }
+        )
+    return sorted(
+        {
+            str(fill.get("orderLinkId") or "").rsplit("-", 1)[-1].upper()
+            for fill in fills
+            if str(fill.get("orderLinkId") or "").rsplit("-", 1)[-1].upper()
+            in {"E1", "E2", "E3"}
+        }
+    )
+
+
+def _reconciled_attempt_state(item: dict) -> dict:
+    evidence = item.get("entry_evidence")
+    if evidence is None:
+        return {}
+    return {
+        "attempt_status": item.get("status"),
+        "strategy_status": evidence.get("strategy_status"),
+        "entry_identity_complete": evidence.get("entry_identity_complete") is True,
+        "entry_orders_settled": evidence.get("entry_orders_settled") is True,
+    }
+
+
 def _entry_positions(
     lineage: list[dict], executions_by_order: dict[str, list[dict]]
 ) -> list[dict]:
@@ -293,14 +328,7 @@ def _entry_positions(
             ]
             if not entry_fills:
                 continue
-            filled_legs = sorted(
-                {
-                    str(fill.get("orderLinkId") or "").rsplit("-", 1)[-1].upper()
-                    for fill in entry_fills
-                    if str(fill.get("orderLinkId") or "").rsplit("-", 1)[-1].upper()
-                    in {"E1", "E2", "E3"}
-                }
-            )
+            filled_legs = _filled_entry_legs(entry_fills, item.get("entry_evidence"))
             positions.append(
                 {
                     "intent_id": item.get("intent_id", ""),
@@ -337,6 +365,7 @@ def _entry_positions(
                     "funding": 0.0,
                     "pnl_rows": 0,
                     "ambiguous_rows": 0,
+                    **_reconciled_attempt_state(item),
                 }
             )
 
@@ -399,6 +428,11 @@ def _assign_closed_pnl(
                         position["ambiguous_rows"] += 1
                 continue
             attributed = matches[0]
+            if attributed.get("attempt_status", "EXECUTED") != "EXECUTED":
+                # An uncertain attempt needs a confirmed closing identity.
+                # A matching symbol/time window cannot establish ownership.
+                attributed["ambiguous_rows"] += 1
+                continue
         attributed["closed_qty"] += float(row.get("closedSize") or row.get("qty") or 0)
         attributed["closed_at"] = max(attributed["closed_at"], timestamp)
         attributed["closed_pnl"] += float(row.get("closedPnl") or 0)
@@ -443,6 +477,8 @@ def _finish_positions(positions: list[dict]) -> None:
             and position["closed_fraction"] <= 1.0 + 1e-9
             and position["ambiguous_rows"] == 0
             and position["pnl_rows"] > 0
+            and position.get("entry_identity_complete", True)
+            and position.get("entry_orders_settled", True)
         )
         # Bybit Closed P&L already nets opening/closing fees and funding.
         # Keep the transaction-log funding sum for reconciliation diagnostics,
