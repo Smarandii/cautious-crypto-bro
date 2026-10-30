@@ -456,7 +456,7 @@ class ExecutionCoordinator:
             group_id = zone_group_id(plan.symbol, plan.side)
             await self._store.register_zone(group_id, plan.intent_id)
             prefix = f"ccb-v2-{plan.intent_id.hex[:20]}-"
-            for order, order_id in zip(plan.orders, order_ids, strict=True):
+            for order, order_id in zip(plan.entry_orders, order_ids, strict=True):
                 await self._store.bind_zone_order(
                     ZoneOrder(
                         zone_id=plan.intent_id,

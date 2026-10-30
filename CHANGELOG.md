@@ -10,6 +10,37 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.37] - 2026-10-30
+
+### Added
+
+- Optional validated physical-entry slices under unchanged E1/E2/E3 logical
+  strategy legs (#290, prerequisite for #288). Persist leg/child identities,
+  submitted quantities and complete confirmed MARKET-primary fill evidence;
+  reject ambiguous identities, coverage, quantity totals and invalid fills.
+  Physical ownership retains submitted quantities even when IOC fills are partial.
+- Use one physical-entry projection for supervisor drift/TTL checks, native
+  attached-stop ownership/handoff, portfolio reference-price lookup and zone
+  enrollment. Logical risk allocations, entries/stops/exits and whole-position
+  ownership remain unchanged; children never receive independent risk budgets.
+
+### Validation and rollback
+
+- Real SQLite/HTTP/supervisor tests cover persistence/restart, corrupt mappings,
+  child quantity/identity drift, TTL cancellation, native-stop drift and verified
+  handoff, portfolio risk fallback, zone bindings and confirmed partial fills.
+  Empty metadata is omitted: the actual v2.2.36 reader accepts identical ordinary
+  plan JSON, with schema15 unchanged.
+- This is an ownership/reader compatibility checkpoint, not quantity-aware
+  submission. Mapped entry submission is explicitly blocked until #291 delivers
+  ceiling-aware allocation, fill aggregation and accepted/uncertain-child handling.
+  #288 remains open; oversize orders are not fixed by this release. No mapped
+  plans are generated in production at this checkpoint. Keep the previous pinned
+  image and restore-verified state backup; later slicing releases must retain this
+  reader/ownership-capable image for rollback rather than an older reader.
+- No settings, risk budget, entry/exit/protection policy or history replay change.
+  #248 natural magnitude and #262 full architecture audit remain unfinished.
+
 ## [2.2.36] - 2026-10-30
 
 ### Fixed
