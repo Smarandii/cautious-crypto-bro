@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
-from ..domain import LeverageFilter, TradeExecutionError
-from .normalize import parse_decimal
+from ..domain import EntryPreflightError, LeverageFilter, TradeExecutionError
+from .normalize import parse_decimal, position_exposure_from_item
 
 
 def instrument_leverage_filter(instrument: dict) -> LeverageFilter:
@@ -33,6 +33,41 @@ def risk_tier_id(raw: object) -> int:
     ):
         raise TradeExecutionError("Bybit risk tier is missing or unsupported")
     return int(text)
+
+
+def flat_position_risk_tier(positions: list[dict], symbol: str) -> int:
+    """Require every row to prove flat one-way state and the same risk tier."""
+    if not positions:
+        raise EntryPreflightError("Current symbol risk-tier evidence is incomplete")
+    current_ids = set()
+    # Demo can return several flat rows with different historical fields.
+    # Every row must authorize the same flat one-way risk tier; never pick
+    # one row and discard contradictory exposure or mode evidence.
+    for position in positions:
+        if not isinstance(position, dict) or position.get("symbol") != symbol:
+            raise EntryPreflightError("Current symbol risk-tier evidence is incomplete")
+        if isinstance(position.get("positionIdx"), bool) or position.get(
+            "positionIdx"
+        ) not in (0, "0"):
+            raise EntryPreflightError(
+                "One-way position mode cannot be verified for leverage preparation"
+            )
+        if position_exposure_from_item(position) is not None:
+            raise EntryPreflightError(
+                "Existing position prevents entry leverage preparation"
+            )
+        if len(positions) > 1 and position.get("side") != "":
+            raise EntryPreflightError(
+                "Multiple position rows do not confirm an empty side"
+            )
+        if position.get("positionStatus") not in ("Normal", ""):
+            raise EntryPreflightError(
+                "Current position status does not permit entry preparation"
+            )
+        current_ids.add(risk_tier_id(position.get("riskId")))
+    if len(current_ids) != 1:
+        raise EntryPreflightError("Current position risk-tier evidence conflicts")
+    return current_ids.pop()
 
 
 @dataclass(frozen=True)

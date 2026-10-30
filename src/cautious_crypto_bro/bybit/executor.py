@@ -35,8 +35,8 @@ from ..execution_history import HISTORY_WINDOW_MS, ExecutionHistoryPage
 from .client import DEMO_BASE_URL, BybitClient
 from .leverage import (
     RiskTier,
+    flat_position_risk_tier,
     instrument_leverage_filter,
-    risk_tier_id,
     risk_tiers,
     tier_leverage,
 )
@@ -1055,28 +1055,7 @@ class BybitDemoExecutor:
         positions = self._client.paginate_private_list(
             "/v5/position/list", {"category": "linear", "symbol": plan.symbol}
         )
-        if (
-            len(positions) != 1
-            or not isinstance(positions[0], dict)
-            or positions[0].get("symbol") != plan.symbol
-        ):
-            raise EntryPreflightError("Current symbol risk-tier evidence is incomplete")
-        position = positions[0]
-        if isinstance(position.get("positionIdx"), bool) or position.get(
-            "positionIdx"
-        ) not in (0, "0"):
-            raise EntryPreflightError(
-                "One-way position mode cannot be verified for leverage preparation"
-            )
-        if position_exposure_from_item(position) is not None:
-            raise EntryPreflightError(
-                "Existing position prevents entry leverage preparation"
-            )
-        if position.get("positionStatus") not in ("Normal", ""):
-            raise EntryPreflightError(
-                "Current position status does not permit entry preparation"
-            )
-        current_id = risk_tier_id(position.get("riskId"))
+        current_id = flat_position_risk_tier(positions, plan.symbol)
         orders = self._client.paginate_private_list(
             "/v5/order/realtime",
             {
