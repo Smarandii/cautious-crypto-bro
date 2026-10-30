@@ -1279,11 +1279,16 @@ class BybitDemoExecutor:
         self, plan: ExecutionPlan
     ) -> MarketPrimaryExecutionResult:
         """Submit the refreshed requests already persisted by the coordinator."""
-        self._validate_staged_market_plan(plan)
-        if not plan.entry_slices:
-            raise EntryPreflightError("Prepared primary requires durable entry mapping")
-        self._validate_market_plan(plan, plan.orders[0].reference_price)
-        self._set_leverage_sync(plan)
+        try:
+            self._validate_staged_market_plan(plan)
+            if not plan.entry_slices:
+                raise EntryPreflightError(
+                    "Prepared primary requires durable entry mapping"
+                )
+            self._validate_market_plan(plan, plan.orders[0].reference_price)
+            self._set_leverage_sync(plan)
+        except Exception as exc:
+            raise EntryPreflightError(str(exc)) from exc
         return self._submit_primary_slices_sync(plan)
 
     def _submit_primary_slices_sync(

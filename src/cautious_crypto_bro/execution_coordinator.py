@@ -397,7 +397,10 @@ class ExecutionCoordinator:
     async def _prepare_physical_primary(self, plan: ExecutionPlan) -> ExecutionPlan:
         if not plan.entry_slices:
             return plan
-        prepared = await self._executor.prepare_market_primary(plan)
+        try:
+            prepared = await self._executor.prepare_market_primary(plan)
+        except Exception as exc:
+            raise EntryPreflightError(str(exc)) from exc
         await self._store.update_execution_plan(prepared)
         if prepared.entry_slices:
             await self._store.register_zone(

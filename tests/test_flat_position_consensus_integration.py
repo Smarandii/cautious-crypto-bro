@@ -61,6 +61,7 @@ def test_consistent_flat_rows_allow_entry_without_changing_risk(tmp_path, entry_
         # MARKET legitimately rebases after its fill; the pre-submit durable plan
         # must still preserve the original quantities/stops and only lower leverage.
         submitted = exchange.pre_submission_plans[0]
+        assert all(s["index"] == 0 for s in submitted.pop("entry_slices"))
         expected = original.model_dump(mode="json")
         for key in ("leverage", "created_at"):
             submitted.pop(key)

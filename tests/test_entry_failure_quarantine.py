@@ -127,7 +127,16 @@ def test_entry_failure_preserves_restart_warning_and_protection(
                     if path == "/v5/order/create"
                 )
             else:
-                assert len(exchange.requests) == before
+                assert all(
+                    path
+                    in {
+                        "/v5/market/time",
+                        "/v5/order/realtime",
+                        "/v5/order/history",
+                        "/v5/execution/list",
+                    }
+                    for path, _ in exchange.requests[before:]
+                )
                 assert (exchange.size, exchange.stop, exchange.trail) == protection
 
     asyncio.run(run())

@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+import threading
 from contextlib import closing
 from decimal import Decimal
 
@@ -19,11 +20,80 @@ from cautious_crypto_bro.domain import (
     Side,
     StrategyStatus,
 )
+from cautious_crypto_bro.forensic_pnl import reconcile
 from cautious_crypto_bro.position_supervisor import PositionSupervisor
 from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.zone_ledger import zone_group_id
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize("side", list(Side))
+@pytest.mark.parametrize("bound_close", [True, False])
+def test_failed_ordinary_fill_reaches_forensic_pipeline(
+    tmp_path, monkeypatch, side, bound_close
+):
+    from test_partial_entry_forensics_integration import (
+        executed_attempt,
+        export_attempt,
+    )
+
+    database = tmp_path / "forensic.sqlite3"
+    exchange, plan, _, _ = asyncio.run(
+        executed_attempt(database, side, "batch_ack", bound_close, ceiling="1000000")
+    )
+    assert all(s.index == 0 for s in plan.entry_slices)
+    bundle = tmp_path / "ordinary.zip"
+    export_attempt(database, exchange, bundle, monkeypatch)
+    position = reconcile(bundle)[0]
+    assert position["attempt_status"] == "FAILED"
+    assert position["entry_identity_complete"] is True
+    assert position["complete"] is bound_close
+
+
+def test_cancellation_after_ordinary_acceptance_drains_without_replay(tmp_path):
+    class BlockingExchange(QuantityLimitedExchange):
+        def __init__(self, database):
+            super().__init__(database)
+            self.max_market_qty = self.max_limit_qty = Decimal("1000000")
+            self.started, self.release = threading.Event(), threading.Event()
+
+        def handle(self, request):
+            response = super().handle(request)
+            if request.url.path == "/v5/order/create" and not self.release.is_set():
+                self.started.set()
+                assert self.release.wait(10), "Test did not release accepted primary"
+            return response
+
+    async def run():
+        database = tmp_path / "cancellation.sqlite3"
+        exchange = BlockingExchange(database)
+        execution = asyncio.create_task(run_entry(database, exchange, EntryType.MARKET))
+        try:
+            assert await asyncio.to_thread(exchange.started.wait, 3)
+            execution.cancel()
+            await asyncio.sleep(0)
+            assert not execution.done()
+            exchange.release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+            store = IntentStore(database)
+            records = await store.get_active_position_strategies()
+            assert len(records) == 1
+            _, plan = records[0]
+            bindings = await store.zone_bound_orders(
+                zone_group_id(plan.symbol, plan.side)
+            )
+            assert len(bindings) == len(exchange.accepted_entries) == 3
+            with closing(sqlite3.connect(database)) as db:
+                assert (
+                    db.execute("SELECT status FROM intents").fetchone()[0] == "EXECUTED"
+                )
+        finally:
+            exchange.release.set()
+            await asyncio.gather(execution, return_exceptions=True)
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(
