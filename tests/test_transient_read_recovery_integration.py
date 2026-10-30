@@ -142,7 +142,7 @@ def test_temporary_read_response_retains_original_candidate_and_recovers_once(
                     )
                     db.commit()
                 with patch.object(restarted_bot._bot, "send_message", new=AsyncMock()):
-                    await restarted.recover_planning_candidates()
+                    await restarted.queued_opens.recover()
                     if original_mode is ApprovalMode.MANUAL:
                         assert exchange.orders == {}
                         with closing(sqlite3.connect(database)) as db:
@@ -156,7 +156,7 @@ def test_temporary_read_response_retains_original_candidate_and_recovers_once(
                         )
                     submitted = dict(exchange.orders)
                     assert len(submitted) == 3
-                    await restarted.recover_planning_candidates()
+                    await restarted.queued_opens.recover()
                     await restarted.on_message(IncomingPost(source=source))
                 assert exchange.orders == submitted
                 assert model.calls == 1
@@ -211,9 +211,9 @@ def test_persistent_read_failure_obeys_backoff_and_original_deadline(tmp_path, e
                                 ),
                             )
                         db.commit()
-                    await service.recover_planning_candidates()
+                    await service.queued_opens.recover()
                     after_first_recovery = exchange.failed_reads
-                    await service.recover_planning_candidates()
+                    await service.queued_opens.recover()
                 assert exchange.failed_reads == after_first_recovery
                 assert after_first_recovery == initial_reads + int(not expired)
                 assert model.calls == 1 and exchange.orders == {}
@@ -338,7 +338,7 @@ def test_temporary_mutation_response_after_acceptance_is_never_replayed(tmp_path
             try:
                 with patch.object(restarted_bot._bot, "send_message", new=AsyncMock()):
                     await restarted.recover_auto_execution()
-                    await restarted.recover_planning_candidates()
+                    await restarted.queued_opens.recover()
                     await restarted.on_message(IncomingPost(source=source))
                 assert exchange.submissions == 1 and len(exchange.orders) == 1
                 assert model.calls == 1

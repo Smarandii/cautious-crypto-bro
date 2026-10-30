@@ -10,6 +10,33 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.35] - 2026-10-30
+
+### Changed
+
+- Give persisted OPEN dispatch and bounded candidate/restart recovery one owner
+  in signals/queued_open.py (#285). Source intake and the periodic scheduler call
+  that owner directly; remove the former service methods without facades or
+  callbacks into the source coordinator. The owner reuses planning, delivery,
+  context and execution-coordinator boundaries with five storage operations.
+- Preserve original candidate IDs/deadlines, claim transfer, approval provenance,
+  ten-candidate passes, retry backoff and uncertain-mutation no-replay handling.
+  Initial and recovered OPENs retain the same coordinator and delivery ordering.
+  Source extraction/persistence, account sync and position-action dispatch remain
+  in their existing orchestration. Moved logs identify the queued-OPEN owner.
+
+### Validation and rollback
+
+- Compare all three moved method bodies and twelve retained service methods
+  structurally after owner-reference normalization; constructor wiring is the
+  deliberate change. Repeat the same real SQLite/HTTP source, candidate recovery,
+  manual/AUTO delivery, cancellation, preview and workflow tests before/after.
+- Schema 15, candidate JSON and trading settings are unchanged. Keep the previous
+  pinned image and restore-verified backup for rollback. Verify authenticated
+  startup, supervision/protection, visible post intake and Docker publication
+  before tagging. #248 natural trade magnitude and the full #262 audit remain
+  incomplete; this refactor does not establish profitability.
+
 ## [2.2.34] - 2026-10-30
 
 ### Fixed

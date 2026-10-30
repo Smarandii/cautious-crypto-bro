@@ -298,7 +298,7 @@ def test_partial_alias_batch_survives_sqlite_restart_without_auto_duplicate(
             restarted, restarted_bot, _ = workflow(restarted_store, executor, provider)
             try:
                 with patch.object(restarted_bot._bot, "send_message", new=AsyncMock()):
-                    await restarted.recover_planning_candidates()
+                    await restarted.queued_opens.recover()
             finally:
                 await restarted_bot.close()
             with closing(sqlite3.connect(database)) as db:
