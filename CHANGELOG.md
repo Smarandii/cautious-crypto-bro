@@ -10,6 +10,33 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.40] - 2026-10-31
+
+### Fixed
+
+- Persist exact ordinary E1/E2/E3 request ownership before exchange submission
+  (#296), including orders below exchange quantity ceilings. Preserve original
+  client IDs, three logical risk budgets and native stop protection.
+- Submit MARKET primary requests from the refreshed, durably saved preparation
+  rather than resizing them inside an unrecorded submission. Recheck leverage,
+  exchange ceilings and account ownership before mutation.
+- Recover confirmed accepted order identities after acknowledgement loss or a
+  failed remaining-plan write. Reload the durable plan during recovery; never
+  retry order creation or promote failed/uncertain attempts to successful ones.
+
+### Validation and compatibility
+
+- Real SQLite and exchange HTTP integration covers MARKET/LIMIT/RANGE, both
+  directions, partial IOC fills, acknowledgement loss, restart recovery and
+  failed persistence before submission or after primary acceptance.
+- Schema 15 remains unchanged. The existing optional physical-entry mapping now
+  also describes ordinary singleton requests; v2.2.39 understands this format.
+  No migration, dependency, risk-setting or exit-policy change is required.
+- Demo validation does not certify mainnet or a profitable edge. Historical
+  failures lacking durable ownership are not replayed; unavailable evidence
+  remains unresolved. Legacy ordinary lifecycle settlement remains tracked in
+  #297; profit magnitude and the full audit remain open in #248 and #262.
+
 ## [2.2.39] - 2026-10-30
 
 ### Fixed

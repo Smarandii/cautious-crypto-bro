@@ -65,6 +65,4 @@ def allocate_entry_slices(plan: ExecutionPlan, instrument: dict) -> ExecutionPla
                 )
             )
     mapped = tuple(children)
-    if not plan.entry_slices and all(s.index == 0 for s in mapped):
-        return plan
     return ExecutionPlan.model_validate(plan.model_dump() | {"entry_slices": mapped})
