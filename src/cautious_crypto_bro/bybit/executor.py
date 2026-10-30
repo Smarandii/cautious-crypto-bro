@@ -1098,9 +1098,9 @@ class BybitDemoExecutor:
                 )
 
         tiers = self._risk_tiers_sync(plan.symbol)
-        mark = self._last_price(plan.symbol)
+        mark = parse_decimal(position.get("markPrice"))
         if not mark.is_finite() or mark <= 0:
-            raise EntryPreflightError("Current price cannot establish entry notional")
+            raise EntryPreflightError("Current mark cannot establish entry notional")
         # Whole-net-position ownership requires a flat symbol with no entry
         # orders. Reserve all new legs at their reference price or the current
         # mark, whichever is higher; never resize frozen risk geometry here.

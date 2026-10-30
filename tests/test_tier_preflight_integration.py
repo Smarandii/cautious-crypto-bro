@@ -253,6 +253,30 @@ def test_entry_preparation_reads_all_risk_tier_pages(tmp_path):
     asyncio.run(run())
 
 
+def test_projected_tier_uses_mark_price_when_last_trade_is_lower(tmp_path):
+    class DivergentMarkExchange(TierExchange):
+        def handle(self, request):
+            response = super().handle(request)
+            body = response.json()
+            if request.url.path == "/v5/position/list" and request.url.params.get(
+                "symbol"
+            ):
+                body["result"]["list"][0]["markPrice"] = "1000"
+            elif request.url.path == "/v5/market/risk-limit":
+                body["result"]["list"][0]["riskLimitValue"] = "1000"
+            return httpx.Response(200, json=body)
+
+    async def run():
+        database = tmp_path / "state.sqlite3"
+        exchange = DivergentMarkExchange(database)
+        _, _, _, outcome = await run_entry(database, exchange)
+        assert outcome.status is IntentStatus.EXECUTED
+        assert exchange.persisted_at_submission == [Decimal("5")]
+        assert exchange.selected_leverages == [Decimal("5")]
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "failure",
     [
