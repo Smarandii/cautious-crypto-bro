@@ -10,6 +10,27 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.33] - 2026-10-30
+
+### Changed
+
+- Give durable manual approval and AUTO outcome delivery one owner under
+  `signals/delivery.py` (#281). Initial dispatch and restart recovery call it
+  directly; remove the service-owned delivery implementations and facades.
+  Keep claim/send/completion, recorded outcomes, account previews and retry
+  loading together. Planning recovery remains service orchestration.
+
+### Validation and rollback
+
+- Preserve seven moved methods and fifteen retained orchestration methods by AST
+  comparison, allowing only owner/method reference changes. The same focused
+  SQLite/HTTP/Telegram workflows pass before and after extraction; real-store
+  lease tests cover concurrent delivery and cancellation followed by expiry.
+- Schema 15, strategy, risk settings, source identity/deadlines and exchange
+  protection are unchanged. Rollback uses the previous schema-15 pinned image
+  and restore-verified backup; no historical replay. #262's recovery/illegal-state
+  and full audit work remains open, as does #248's natural magnitude evidence.
+
 ## [2.2.32] - 2026-10-30
 
 ### Fixed

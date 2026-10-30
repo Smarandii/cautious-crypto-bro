@@ -9,7 +9,7 @@ from cautious_crypto_bro.execution_coordinator import (
     IntentExecutionOutcome,
     PositionActionExecutionOutcome,
 )
-from cautious_crypto_bro.service import SignalService
+from cautious_crypto_bro.signals.delivery import SignalDelivery
 
 
 @pytest.mark.parametrize(
@@ -33,8 +33,7 @@ def test_auto_preview_precedes_outcome_and_failures_do_not_hide_result(kind, fai
         async def outcome(value):
             events.append("outcome")
 
-        service = object.__new__(SignalService)
-        service._executor = SimpleNamespace(
+        executor = SimpleNamespace(
             account_state=AsyncMock(
                 return_value=state,
                 side_effect=RuntimeError("Bybit unavailable")
@@ -42,7 +41,7 @@ def test_auto_preview_precedes_outcome_and_failures_do_not_hide_result(kind, fai
                 else None,
             )
         )
-        service._store = SimpleNamespace(
+        store = SimpleNamespace(
             get_account_pnl_summary=AsyncMock(
                 return_value=pnl,
                 side_effect=RuntimeError("PnL unavailable")
@@ -50,18 +49,19 @@ def test_auto_preview_precedes_outcome_and_failures_do_not_hide_result(kind, fai
                 else None,
             )
         )
-        service._approval_bot = SimpleNamespace(
+        sender = SimpleNamespace(
             send_account_snapshot=AsyncMock(side_effect=preview),
             send_auto_intent_outcome=AsyncMock(side_effect=outcome),
             send_auto_action_outcome=AsyncMock(side_effect=outcome),
         )
+        delivery = SignalDelivery(store=store, executor=executor, approval_bot=sender)
         result = kind(status=IntentStatus.EXECUTED, message="done")
-        await service._send_auto_outcome(result)
+        await delivery._send_auto_outcome(result)
         assert events == ["preview", "outcome"]
         selected = (
-            service._approval_bot.send_auto_intent_outcome
+            sender.send_auto_intent_outcome
             if kind is IntentExecutionOutcome
-            else service._approval_bot.send_auto_action_outcome
+            else sender.send_auto_action_outcome
         )
         selected.assert_awaited_once_with(result)
 

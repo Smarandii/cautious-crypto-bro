@@ -597,12 +597,12 @@ def test_manual_delivery_retries_after_restart_without_replaying_source(tmp_path
                             "UPDATE manual_deliveries SET retry_after = NULL"
                         )
                         await db.commit()
-                    await restarted.recover_manual_deliveries()
+                    await restarted.delivery.recover_manual()
                     await restarted.on_message(IncomingPost(source=signal.source))
                     assert (
                         sender.await_count == attempts + 1 == 3
                     )  # failed snapshot plus failed actionable card
-                    await restarted.recover_manual_deliveries()
+                    await restarted.delivery.recover_manual()
                     assert sender.await_count == 3
                     saved = (
                         (await store.get_intent(signal.intent_id))
