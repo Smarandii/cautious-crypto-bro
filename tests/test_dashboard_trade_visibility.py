@@ -8,6 +8,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+from forensic_fixture import settled_entry_fixture
 
 from cautious_crypto_bro.dashboard_metrics import public_trade_history
 from cautious_crypto_bro.forensic_pnl import reconcile
@@ -62,16 +63,16 @@ def test_partial_closes_publish_one_complete_trade_without_private_lineage(tmp_p
         ],
         "bybit/transaction_log.jsonl": [],
     }
-    with ZipFile(bundle, "w") as archive:
-        archive.writestr(
-            "forensic/metadata.json",
-            json.dumps(
-                {
-                    "created_at": "2026-10-29T01:00:00+00:00",
-                    "closed_pnl_as_of": "2026-10-28T23:00:00+00:00",
-                }
-            ),
+    rows.update(
+        settled_entry_fixture(
+            lineage["intents"], rows["bybit/executions.jsonl"], {private: "2"}
         )
+    )
+    rows["metadata.json"][0].update(
+        created_at="2026-10-29T01:00:00+00:00",
+        closed_pnl_as_of="2026-10-28T23:00:00+00:00",
+    )
+    with ZipFile(bundle, "w") as archive:
         for name, records in rows.items():
             archive.writestr(
                 "forensic/" + name, "".join(json.dumps(r) + "\n" for r in records)

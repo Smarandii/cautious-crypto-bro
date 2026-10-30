@@ -329,7 +329,8 @@ def test_export_bundle_uses_supported_private_page_sizes(
     assert metadata["filled_v2_cases"] == 1
     assert metadata["market_candles_included"] is not skip_candles
     positions = reconcile(bundle)
-    assert len(positions) == 1 and positions[0]["complete"]
+    assert len(positions) == 1 and not positions[0]["complete"]
+    assert positions[0]["entry_identity_complete"] is False
     assert positions[0]["net_pnl"] == 17
     assert positions[0]["funding"] == -1
     if explicit_access and skip_candles:
@@ -363,7 +364,7 @@ def test_export_bundle_uses_supported_private_page_sizes(
             client.close()
         public = json.loads(public_output.read_text(encoding="utf-8"))
         assert public["risk"]["risk_per_trade_pct"] == 3
-        assert public["trade_history"]["total_completed"] == 1
-        assert public["trade_history"]["rows"][0]["net_pnl_usdt"] == 17
+        assert public["trade_history"]["total_completed"] == 0
+        assert public["trade_history"]["rows"] == []
         assert "PRIVATE" not in public_output.read_text(encoding="utf-8")
         assert database_path.read_bytes() == before

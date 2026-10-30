@@ -11,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from forensic_fixture import settled_entry_fixture
 
 from cautious_crypto_bro.domain import StrategyV2Policy
 
@@ -628,6 +629,9 @@ def test_completed_position_starts_uses_reconciled_closed_size() -> None:
         }
     ]
 
+    snapshots = settled_entry_fixture(
+        lineage["intents"], executions, {"entry-closed": "2", "entry-open": "2"}
+    )
     with zipfile.ZipFile(bundle, "w") as archive:
         for name, rows in (
             ("analysis/trade_lineage.jsonl", [lineage]),
@@ -638,6 +642,10 @@ def test_completed_position_starts_uses_reconciled_closed_size() -> None:
             archive.writestr(
                 f"forensic/{name}",
                 "".join(json.dumps(row) + "\n" for row in rows),
+            )
+        for name, rows in snapshots.items():
+            archive.writestr(
+                f"forensic/{name}", "".join(json.dumps(row) + "\n" for row in rows)
             )
 
     bundle.seek(0)
