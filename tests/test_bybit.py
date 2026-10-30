@@ -197,6 +197,16 @@ def pepe_market_plan() -> ExecutionPlan:
     )
 
 
+@pytest.fixture
+def prepared_entry_boundary(monkeypatch):
+    # These focused transport tests start with an admitted frozen plan. The
+    # actual preparation, persistence and fresh HTTP checks run together in
+    # test_tier_preflight_integration.py; do not hide them behind an autouse mock.
+    monkeypatch.setattr(
+        BybitDemoExecutor, "_prepare_entry_plan_sync", lambda _executor, plan: plan
+    )
+
+
 def test_clock_sync_compensates_for_local_drift() -> None:
     def handler(
         request: httpx.Request,
@@ -250,6 +260,7 @@ def test_clock_sync_compensates_for_local_drift() -> None:
 @pytest.mark.parametrize("entry_type", [EntryType.LIMIT, EntryType.RANGE])
 @pytest.mark.parametrize("resting_distance", ["0", "0.1", "50"])
 @pytest.mark.parametrize("leverage", ["10", "25"])
+@pytest.mark.usefixtures("prepared_entry_boundary")
 def test_priced_entries_recheck_market_without_chasing(
     side: Side, entry_type: EntryType, resting_distance: str, leverage: str
 ) -> None:
@@ -604,6 +615,7 @@ def test_v2_market_direct_batch_execution_is_rejected() -> None:
 
 
 @pytest.mark.parametrize("leverage_code", [0, 110043, "110043"])
+@pytest.mark.usefixtures("prepared_entry_boundary")
 def test_v2_market_primary_fill_precedes_scale_ins(leverage_code) -> None:
     plan = v2_market_plan().model_copy(update={"leverage": Decimal("7.5")})
 
@@ -827,6 +839,7 @@ def test_v2_market_primary_fill_precedes_scale_ins(leverage_code) -> None:
         "short-favorable",
     ],
 )
+@pytest.mark.usefixtures("prepared_entry_boundary")
 def test_v2_market_refresh_resizes_before_submission(
     symbol: str,
     side: Side,
@@ -1071,6 +1084,7 @@ def test_priced_entry_invalid_ticker_rejects_before_submission(
     "entry_type", [EntryType.MARKET, EntryType.LIMIT, EntryType.RANGE]
 )
 @pytest.mark.parametrize("failure", [110013, 110038, "timeout"])
+@pytest.mark.usefixtures("prepared_entry_boundary")
 def test_leverage_failure_blocks_entry_submission(entry_type, failure) -> None:
     plan = (
         v2_market_plan()

@@ -167,13 +167,31 @@ class Exchange:
             }
         elif path == "/v5/account/wallet-balance":
             result = {"list": [{"totalWalletBalance": "6800"}]}
+        elif path == "/v5/market/risk-limit":
+            result = {
+                "list": [
+                    {
+                        "id": 1,
+                        "symbol": body["symbol"],
+                        "riskLimitValue": "1000000000",
+                        "maxLeverage": "100",
+                    }
+                ],
+                "nextPageCursor": "",
+            }
         elif path == "/v5/position/list":
             if self.confirmation_timeout and self.action_accepted:
                 raise httpx.ReadTimeout(
                     "Injected after accepted order", request=request
                 )
+            rows = [self.position()] if self.size else []
+            if body.get("symbol") and not self.size:
+                rows = [
+                    self.position()
+                    | {"symbol": body["symbol"], "positionIdx": 0, "riskId": 1}
+                ]
             result = {
-                "list": [self.position()] if self.size else [],
+                "list": rows,
                 "nextPageCursor": "",
             }
         elif path in ("/v5/order/realtime", "/v5/order/history"):

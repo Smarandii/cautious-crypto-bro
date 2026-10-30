@@ -48,6 +48,17 @@ class LeverageFilter:
                 "Instrument leverage filter must have valid finite bounds and step"
             )
 
+    def select(self, requested: Decimal) -> Decimal:
+        if not requested.is_finite() or requested < self.min_leverage:
+            raise ValueError(
+                "Requested leverage is below the instrument minimum or invalid"
+            )
+        capped = min(requested, self.max_leverage)
+        steps = ((capped - self.min_leverage) / self.step).to_integral_value(
+            rounding="ROUND_DOWN"
+        )
+        return self.min_leverage + steps * self.step
+
 
 @dataclass(frozen=True, slots=True)
 class InstrumentContext:

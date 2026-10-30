@@ -204,6 +204,9 @@ class FakeAccountGateway:
     ) -> tuple[ClosedPnlRecord, ...]:
         return ()
 
+    async def prepare_entry_plan(self, plan: ExecutionPlan) -> ExecutionPlan:
+        return plan
+
     async def execute(self, plan: ExecutionPlan) -> tuple[str, ...]:
         raise NotImplementedError
 

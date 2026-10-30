@@ -298,6 +298,10 @@ def test_old_entry_executes_and_persists_under_mutation_lock(approval_mode) -> N
                 )
 
         class Executor:
+            async def prepare_entry_plan(self, plan):
+                assert lock.locked()
+                return plan
+
             async def account_state(self):
                 from types import SimpleNamespace
 
@@ -397,6 +401,9 @@ def test_executed_plan_enrolls_its_zone_allocation_durably() -> None:
             bound.append(order)
 
     class LedgerExecutor:
+        async def prepare_entry_plan(self, plan):
+            return plan
+
         async def account_state(self):
             from types import SimpleNamespace
 
@@ -507,6 +514,9 @@ def test_zone_enrollment_failure_never_fails_a_filled_execution() -> None:
             failures.append("record_entry_failure")
 
     class WorkingExecutor:
+        async def prepare_entry_plan(self, plan):
+            return plan
+
         async def account_state(self):
             from types import SimpleNamespace
 

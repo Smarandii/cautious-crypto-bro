@@ -15,8 +15,19 @@ unspecified. Live instrument min/max/step constraints select a supported value
 at or below that request. Requests below the minimum are rejected; missing or
 invalid live filters prevent planning. The original intent retains its request,
 and the plan freezes the selected leverage. Offline contexts without a filter
-retain their previous behavior. Account-tier/notional and fresh submission-time
-constraint validation remain tracked in #274.
+retain their previous behavior.
+Before strategy creation, entry preparation re-reads instrument limits, the flat
+one-way symbol's current risk-tier ID, every public risk-limit page and open orders.
+It selects leverage at or below the saved value, constrained by both current and
+projected-notional tiers, and persists any change under the coordinator lock.
+Projected notional reserves every new leg at the higher of its reference price
+and current mark; quantities, stops and exits are unchanged. Unknown tiers,
+portfolio margin, non-flat exposure, unowned entry orders or malformed evidence
+reject preparation. The account's riskLimitValue is not used as a capacity claim.
+Submission revalidates these constraints; a changed selection rejects instead of
+silently replacing the persisted plan. Risk tiers and margin modes are not changed.
+Available collateral is not inferred from wallet balance: server margin and
+permission rejections remain bounded failures without blind entry replay.
 Leverage does not multiply the risk-sized order quantities. Before MARKET E1 or
 the LIMIT/RANGE batch, Bybit must accept that leverage for both sides of the
 one-way symbol. An already-matching setting succeeds; unsupported leverage or

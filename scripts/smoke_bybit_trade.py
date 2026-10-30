@@ -137,9 +137,12 @@ async def main() -> None:
             policy,
             context,
         )
+        if args.execute:
+            plan = await executor.prepare_entry_plan(plan)
 
         print(f"Symbol:       {plan.symbol}")
         print(f"Side:         {plan.side}")
+        print(f"Leverage:     {plan.leverage}x")
         print(f"Entry type:   {entry_type}")
         print(f"Market:       {context.market_price}")
         print(f"Capital:      {policy.trading_capital_usdt} USDT")
