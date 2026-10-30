@@ -581,7 +581,7 @@ class ExitInstaller:
         expected_side = Side.SHORT if state.side is Side.LONG else Side.LONG
         expected_parents = {
             self._fill_detector.entry_link_id(state, order.name)
-            for order in plan.orders
+            for order in plan.entry_orders
         }
         return tuple(
             order.order_id

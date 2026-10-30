@@ -937,6 +937,10 @@ class BybitDemoExecutor:
             raise TradeExecutionError(
                 f"Strategy V{plan.strategy_version} is read-only; only V2 executes"
             )
+        if plan.entry_slices:
+            raise EntryPreflightError(
+                "Physical entry submission is unavailable in this compatibility checkpoint"
+            )
 
     @classmethod
     def _validate_staged_market_plan(

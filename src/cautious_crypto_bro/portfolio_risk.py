@@ -73,7 +73,7 @@ def open_stop_risk_usdt(
 
         entry_name = order.order_link_id.rsplit("-", 1)[-1].upper()
         planned_order = next(
-            (item for item in plan.orders if item.name.upper() == entry_name),
+            (item for item in plan.entry_orders if item.name.upper() == entry_name),
             None,
         )
         entry_price = order.price or (

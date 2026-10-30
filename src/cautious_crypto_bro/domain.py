@@ -1224,6 +1224,31 @@ class PlannedOrder(BaseModel):
         return self
 
 
+class EntrySlice(BaseModel):
+    """One physical request under a logical leg, not another risk budget."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    leg_name: Literal["E1", "E2", "E3"]
+    index: int = Field(ge=0, le=9999, strict=True)
+    quantity: Decimal = Field(gt=0, allow_inf_nan=False)
+    filled_quantity: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_fill(self) -> EntrySlice:
+        if self.filled_quantity is not None and (
+            self.leg_name != "E1" or self.filled_quantity > self.quantity
+        ):
+            raise ValueError(
+                "Only primary entry slices may carry bounded fill evidence"
+            )
+        return self
+
+    @property
+    def name(self) -> str:
+        return self.leg_name if self.index == 0 else f"{self.leg_name}c{self.index}"
+
+
 class ExecutionPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1243,6 +1268,9 @@ class ExecutionPlan(BaseModel):
     ] = Field(
         min_length=1,
         max_length=20,
+    )
+    entry_slices: tuple[EntrySlice, ...] = Field(
+        default=(), max_length=500, exclude_if=lambda slices: not slices
     )
     stop_loss: Decimal = Field(gt=0)
     stop_loss_source: StopLossSource = StopLossSource.TRADER
@@ -1278,7 +1306,58 @@ class ExecutionPlan(BaseModel):
         elif self.take_profit_targets:
             self._validate_target_percentages_total_100()
 
+        self._validate_entry_slices()
         return self
+
+    def _validate_entry_slices(self) -> None:
+        if not self.entry_slices:
+            return
+        if self.strategy_version != 2:
+            raise ValueError("Physical entry slices require Strategy V2")
+        ordered = []
+        for order in self.orders:
+            children = tuple(s for s in self.entry_slices if s.leg_name == order.name)
+            indexes = tuple(s.index for s in children)
+            if not children or (
+                indexes != tuple(range(1, len(children) + 1)) and indexes != (0,)
+            ):
+                raise ValueError("Physical entry slice identities must be contiguous")
+            self._validate_slice_quantities(order, children)
+            ordered.extend(children)
+        if tuple(ordered) != self.entry_slices:
+            raise ValueError("Physical entry slices must follow logical leg order")
+
+    @staticmethod
+    def _validate_slice_quantities(
+        order: PlannedOrder, children: tuple[EntrySlice, ...]
+    ) -> None:
+        filled = tuple(s.filled_quantity is not None for s in children)
+        if any(filled) and (
+            not all(filled) or order.order_type is not ExecutionOrderType.MARKET
+        ):
+            raise ValueError("Primary slice fill evidence must be complete and MARKET")
+        total = sum(
+            (
+                s.quantity if s.filled_quantity is None else s.filled_quantity
+                for s in children
+            ),
+            Decimal("0"),
+        )
+        if total != order.quantity:
+            raise ValueError("Physical entry slices must preserve logical quantity")
+
+    @property
+    def entry_orders(self) -> tuple[PlannedOrder, ...]:
+        """Physical ownership projection; legacy plans keep their original links."""
+        if not self.entry_slices:
+            return self.orders
+        logical = {order.name: order for order in self.orders}
+        return tuple(
+            logical[s.leg_name].model_copy(
+                update={"name": s.name, "quantity": s.quantity, "risk_pct": None}
+            )
+            for s in self.entry_slices
+        )
 
     def _validate_v2_ladder(self) -> None:
         if len(self.orders) != 3:

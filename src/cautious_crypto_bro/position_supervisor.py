@@ -1046,7 +1046,7 @@ class PositionSupervisor:
         # TP/SL orders. Stop price and side alone cannot prove ownership.
         expected_parents = {
             self._fill_detector.entry_link_id(state, order.name)
-            for order in plan.orders
+            for order in plan.entry_orders
         }
         expected_side = Side.SHORT if state.side is Side.LONG else Side.LONG
         for order in account.open_orders:
@@ -1089,7 +1089,7 @@ class PositionSupervisor:
                 state,
                 planned.name,
             ): planned
-            for planned in plan.orders
+            for planned in plan.entry_orders
         }
 
         prefix = f"ccb-v2-{state.strategy_id.hex[:20]}-e"
@@ -1260,7 +1260,7 @@ class PositionSupervisor:
     ) -> set[str]:
         return {
             f"ccb-v2-{state.strategy_id.hex[:20]}-{planned.name.lower()}"
-            for planned in plan.orders
+            for planned in plan.entry_orders
         }
 
     async def _handle_expired_entries(
