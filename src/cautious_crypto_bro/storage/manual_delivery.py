@@ -5,10 +5,11 @@ from uuid import UUID, uuid4
 
 from ..domain import ApprovalMode, IntentStatus
 from ._connection import _Store, sqlite_connection
+from .position_action import EXPIRED_ACTION_ERROR
 
 
 class ManualDeliveryRepositoryImpl(_Store):
-    """Manual-card queries and shared delivery leases/acknowledgements."""
+    """Manual approvals, expired notices and shared delivery acknowledgements."""
 
     async def pending_manual_deliveries(self) -> tuple[tuple[UUID, str], ...]:
         rows = await self._fetch(
@@ -17,9 +18,11 @@ class ManualDeliveryRepositoryImpl(_Store):
                LEFT JOIN position_actions a ON d.kind = 'ACTION' AND a.action_id = d.record_id
                WHERE d.delivered_at IS NULL
                  AND (d.retry_after IS NULL OR d.retry_after <= CURRENT_TIMESTAMP)
-                 AND COALESCE(i.status, a.status) = 'PENDING'
+                 AND (COALESCE(i.status, a.status) = 'PENDING'
+                      OR (d.kind='ACTION' AND a.status='SKIPPED' AND a.error=?))
                  AND COALESCE(i.approval_mode, a.approval_mode) = 'MANUAL'
                ORDER BY COALESCE(i.created_at, a.created_at) LIMIT 100""",
+            (EXPIRED_ACTION_ERROR,),
             many=True,
         )
         return tuple((UUID(row[0]), row[1]) for row in rows)

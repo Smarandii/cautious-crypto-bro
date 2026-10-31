@@ -164,6 +164,11 @@ extracted again. First enrollment without a saved cursor checks the last 24 hour
 Recovered posts outside `TELEGRAM_STARTUP_LOOKBACK_HOURS` carry a saved review
 reason and require MANUAL approval for entry and lifecycle instructions. Approval
 cards label them **RECOVERED POST — HUMAN REVIEW REQUIRED** with publication time.
+Lifecycle instructions already past their configured approval deadline are
+recorded as skipped and sent as **EXPIRED LIFECYCLE INSTRUCTION — RECORDED ONLY**,
+without Execute controls or an account preview. Their evidence is retained;
+failed notices retry after restart. An initially valid approval that expires
+before a click is still rejected by the execution-boundary guard.
 Fresh-post policy, entry TTL and exits stay unchanged. Schema16 is additive, but
 rollback to older readers requires restoring the verified pre-migration backup.
 

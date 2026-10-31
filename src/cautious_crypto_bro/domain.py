@@ -837,6 +837,9 @@ class PositionActionIntent(BaseModel):
 
         return self
 
+    def age_seconds(self, now: datetime) -> float:
+        return (now - min(self.created_at, self.source.published_at)).total_seconds()
+
 
 @dataclass(frozen=True, slots=True)
 class SignalExtraction:

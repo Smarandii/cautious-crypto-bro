@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 from ..domain import (
@@ -7,14 +8,51 @@ from ..domain import (
     IntentStatus,
     PositionActionIntent,
     PositionActionType,
+    StoreError,
     StrategyStatus,
     TradingIntent,
 )
 from ._connection import _Store, sqlite_connection
 from ._shared import SharedRepositoryMixin
 
+EXPIRED_ACTION_ERROR = (
+    "Lifecycle instruction expired before approval; no exchange action sent"
+)
+
 
 class PositionActionRepositoryImpl(SharedRepositoryMixin, _Store):
+    async def prepare_manual_action_delivery(
+        self, action_id: UUID, *, max_age_seconds: int
+    ) -> PositionActionIntent | None:
+        """Return an eligible approval or durable expired notice, never a handled action."""
+        if max_age_seconds <= 0:
+            raise ValueError("Lifecycle age limit must be positive")
+        async with sqlite_connection(self._database_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT payload_json,status,approval_mode,error FROM position_actions WHERE action_id=?",
+                (str(action_id),),
+            )
+            row = await cursor.fetchone()
+            if row is None or row[2] != ApprovalMode.MANUAL.value:
+                return None
+            action = PositionActionIntent.model_validate_json(row[0])
+            if row[1] == IntentStatus.SKIPPED.value and row[3] == EXPIRED_ACTION_ERROR:
+                return action.model_copy(update={"status": IntentStatus.SKIPPED})
+            if row[1] != IntentStatus.PENDING.value:
+                return None
+            if action.age_seconds(datetime.now(UTC)) <= max_age_seconds:
+                return action
+            cursor = await db.execute(
+                "UPDATE position_actions SET status='SKIPPED',error=?,updated_at=? "
+                "WHERE action_id=? AND status='PENDING' AND approval_mode='MANUAL'",
+                (EXPIRED_ACTION_ERROR, datetime.now(UTC).isoformat(), str(action_id)),
+            )
+            if cursor.rowcount != 1:
+                raise StoreError("Lifecycle expiry transition was not recorded")
+            await db.commit()
+        return action.model_copy(update={"status": IntentStatus.SKIPPED})
+
     async def get_position_action(
         self,
         action_id: UUID,

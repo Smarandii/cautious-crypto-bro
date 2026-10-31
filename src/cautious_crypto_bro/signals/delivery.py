@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 class DeliveryStore(ManualDeliveryRepository, AutoOutcomeRepository, Protocol):
+    async def prepare_manual_action_delivery(
+        self, action_id: UUID, *, max_age_seconds: int
+    ) -> PositionActionIntent | None: ...
+
     async def get_intent(self, intent_id: UUID) -> TradingIntent | None: ...
 
     async def get_execution_plan(self, intent_id: UUID) -> ExecutionPlan | None: ...
@@ -44,10 +48,14 @@ class SignalDelivery:
         store: DeliveryStore,
         executor: DeliveryExchange,
         approval_bot: ApprovalSender,
+        lifecycle_max_age_seconds: int = 900,
     ) -> None:
+        if lifecycle_max_age_seconds <= 0:
+            raise ValueError("Lifecycle age limit must be positive")
         self._store = store
         self._executor = executor
         self._approval_bot = approval_bot
+        self._lifecycle_max_age_seconds = lifecycle_max_age_seconds
 
     async def manual(
         self,
@@ -55,19 +63,30 @@ class SignalDelivery:
         plan: ExecutionPlan | None = None,
         **kwargs,
     ) -> bool:
+        """Return whether an actionable approval card was sent, excluding notices."""
         record_id = (
             signal.intent_id if isinstance(signal, TradingIntent) else signal.action_id
         )
         token = await self._store.claim_manual_delivery(record_id)
         if token is None:
             return False
+        card_sent = True
         try:
             if isinstance(signal, TradingIntent):
                 if plan is None:
                     raise ValueError("Manual OPEN delivery requires its persisted plan")
                 await self._approval_bot.send_intent(signal, plan, **kwargs)
             else:
-                await self._approval_bot.send_position_action(signal, **kwargs)
+                action = await self._store.prepare_manual_action_delivery(
+                    signal.action_id, max_age_seconds=self._lifecycle_max_age_seconds
+                )
+                if action is None:
+                    card_sent = False
+                elif action.status is IntentStatus.SKIPPED:
+                    await self._approval_bot.send_expired_position_action(action)
+                    card_sent = False
+                else:
+                    await self._approval_bot.send_position_action(action, **kwargs)
         except Exception:
             await self._store.finish_manual_delivery(record_id, token, delivered=False)
             logger.exception(
@@ -75,7 +94,7 @@ class SignalDelivery:
             )
             return False
         await self._store.finish_manual_delivery(record_id, token, delivered=True)
-        return True
+        return card_sent
 
     async def recover_manual(self) -> None:
         requeued, stale = await self._store.reconcile_manual_deliveries()
@@ -98,7 +117,10 @@ class SignalDelivery:
                     await self.manual(signal, plan)
             else:
                 action = await self._store.get_position_action(record_id)
-                if action is not None and action.status is IntentStatus.PENDING:
+                if action is not None and action.status in {
+                    IntentStatus.PENDING,
+                    IntentStatus.SKIPPED,
+                }:
                     await self.manual(action)
 
     async def recover_auto_outcomes(self) -> None:
