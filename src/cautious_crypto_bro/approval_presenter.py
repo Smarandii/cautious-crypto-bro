@@ -20,6 +20,7 @@ from .domain import (
     PositionActionType,
     PositionExposure,
     Side,
+    SourceMessage,
     SymbolExposure,
     TakeProfitSource,
     TradingIntent,
@@ -140,7 +141,8 @@ def render_position_action(
 
     if action.action is PositionActionType.CANCEL_ENTRIES:
         return (
-            f"<b>CANCEL ENTRIES {html.escape(action.symbol)}</b>\n\n"
+            recovery_review_line(action.source)
+            + f"<b>CANCEL ENTRIES {html.escape(action.symbol)}</b>\n\n"
             "Cancel pending CCB entries from this source only.\n"
             "Positions, stops, exits and other sources are preserved.\n"
             "Ownership is rechecked on Execute.\n\n"
@@ -203,7 +205,8 @@ def render_position_action(
     )
 
     return (
-        "⚠️ <b>ACCOUNT-WIDE POSITION ACTION</b>\n\n"
+        recovery_review_line(action.source)
+        + "⚠️ <b>ACCOUNT-WIDE POSITION ACTION</b>\n\n"
         f"<b>{html.escape(action.action.value)} "
         f"{html.escape(action.symbol)}</b>"
         f" — {html.escape(instruction)}\n\n"
@@ -598,6 +601,16 @@ def _pending_order_lines(state: AccountStateSummary) -> list[str]:
     ]
 
 
+def recovery_review_line(source: SourceMessage) -> str:
+    if not source.recovery_review_reason:
+        return ""
+    return (
+        "⚠️ <b>RECOVERED POST — HUMAN REVIEW REQUIRED</b>\n"
+        f"{html.escape(source.recovery_review_reason)}\n"
+        f"Published: {html.escape(source.published_at.isoformat())}\n\n"
+    )
+
+
 def render(
     intent: TradingIntent,
     plan: ExecutionPlan,
@@ -636,7 +649,7 @@ def render(
     capital_text = fmt_decimal(capital) if capital is not None else "unavailable"
 
     return (
-        f"<b>{html.escape(intent.side.value)} "
+        recovery_review_line(intent.source) + f"<b>{html.escape(intent.side.value)} "
         f"{html.escape(intent.symbol)}</b>\n\n"
         f"{exposure_block}"
         f"Entry: <b>{html.escape(signal_entry)}</b>\n"

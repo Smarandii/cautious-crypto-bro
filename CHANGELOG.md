@@ -10,6 +10,38 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.43] - 2026-10-31
+
+### Fixed
+
+- Resume Telegram catch-up from a durable chronological per-channel cursor
+  instead of discarding progress on restart (#306). Advance it only after
+  source processing completes; newer live events do not certify earlier posts.
+  Failed/in-flight posts and failed cursor commits remain retryable while
+  unaffected channels continue. Completed sources skip repeat media/model work.
+- On first enrollment without a saved cursor, inspect a bounded 24-hour
+  bootstrap window (or the longer configured startup lookback). Posts outside
+  the configured automatic startup window require MANUAL approval for OPEN,
+  CLOSE, REDUCE and CANCEL_ENTRIES. Preserve this reason in source/decision and
+  intent/action evidence, and show a human-review warning in approval cards.
+- Keep fresh-post routing, risk budgets, entry TTL and exits unchanged. Recovery
+  does not authorize historical orders or turn live receipt into coverage proof.
+
+### Validation and compatibility
+
+- Real SQLite/model/Telegram/exchange-boundary integration covers both entry
+  directions, old-versus-fresh routing, lifecycle instructions, model failure,
+  in-flight/live ordering, failed cursor writes, delayed visibility beyond the
+  bootstrap window, independent sources, boundary albums and process restarts.
+- Additive schema16 creates source_history_cursors; schema15 migration preserves
+  existing trade/source/ledger rows. New source payloads carry an optional review
+  reason. Older schema15 readers require restoring a verified pre-migration
+  backup for rollback; do not lower user_version on the migrated live database.
+- Bootstrap cannot certify history older than its initial window. Deleted,
+  inaccessible or edited posts, extraction correctness, exchange execution and
+  profit magnitude remain separate verification limits. Pending execution
+  history #300/MR #303, #248 magnitude and #262 full audit remain open.
+
 ## [2.2.42] - 2026-10-31
 
 ### Fixed

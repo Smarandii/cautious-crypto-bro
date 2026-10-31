@@ -156,6 +156,17 @@ minutes. The approval chat receives an immediate human-review alert and reminder
 every 15 minutes while the outage continues. Failed alert delivery is retried.
 Channel history failures show `DEGRADED`; unaffected channels keep processing.
 
+Chronological catch-up progress is saved per channel and survives restarts.
+A newer live message cannot skip an earlier unprocessed post. Failed/in-flight
+processing keeps the cursor in place; completed posts are not downloaded or
+extracted again. First enrollment without a saved cursor checks the last 24 hours
+(or the longer configured startup lookback); this does not certify older history.
+Recovered posts outside `TELEGRAM_STARTUP_LOOKBACK_HOURS` carry a saved review
+reason and require MANUAL approval for entry and lifecycle instructions. Approval
+cards label them **RECOVERED POST � HUMAN REVIEW REQUIRED** with publication time.
+Fresh-post policy, entry TTL and exits stay unchanged. Schema16 is additive, but
+rollback to older readers requires restoring the verified pre-migration backup.
+
 The configured operator can use `/source` in the approval chat or privately for
 reader status. Use `/source_login` **in the bot's private chat** to receive a
 protected QR image. Scan it from Telegram **Settings → Devices → Link Desktop

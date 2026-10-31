@@ -10,7 +10,11 @@ from test_zone_ledger_integration import account, fill, zones
 
 from cautious_crypto_bro.bybit.normalize import account_order_from_item
 from cautious_crypto_bro.domain import Side, StoreError
-from cautious_crypto_bro.storage import LATEST_SCHEMA_SQL, IntentStore
+from cautious_crypto_bro.storage import (
+    LATEST_SCHEMA_SQL,
+    LATEST_SCHEMA_VERSION,
+    IntentStore,
+)
 from cautious_crypto_bro.storage.schema import ZONE_HISTORY_SCHEMA_SQL
 from cautious_crypto_bro.zone_ledger import ZoneOrder
 
@@ -190,7 +194,9 @@ def test_populated_schema13_upgrade_preserves_payloads_and_execution_links(tmp_p
         with sqlite3.connect(database) as db:
             for table, rows in before.items():
                 assert db.execute("SELECT * FROM " + table).fetchall() == rows
-            assert db.execute("PRAGMA user_version").fetchone() == (15,)
+            assert db.execute("PRAGMA user_version").fetchone() == (
+                LATEST_SCHEMA_VERSION,
+            )
             assert db.execute("PRAGMA foreign_key_check").fetchall() == []
         await reopened.bind_zone_order(entry)
         child = ZoneOrder(
@@ -246,4 +252,4 @@ def test_failed_migration_rolls_back_schema_and_all_rows_then_can_retry(tmp_path
         db.execute("DELETE FROM zone_orders")
     asyncio.run(IntentStore(database).initialize())
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone() == (15,)
+        assert db.execute("PRAGMA user_version").fetchone() == (LATEST_SCHEMA_VERSION,)

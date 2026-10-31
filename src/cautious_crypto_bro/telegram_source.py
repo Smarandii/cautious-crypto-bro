@@ -8,6 +8,7 @@ from collections.abc import (
     Callable,
     Sequence,
 )
+from dataclasses import replace
 from datetime import (
     UTC,
     datetime,
@@ -370,12 +371,20 @@ class TelegramSource:
         retry_message_ids: Callable[[int], Awaitable[tuple[int, ...]]] | None = None,
         defer_unavailable_messages: Callable[[int, tuple[int, ...]], Awaitable[None]]
         | None = None,
+        load_history_cursor: Callable[[int], Awaitable[int | None]] | None = None,
+        save_history_cursor: Callable[[int, int], Awaitable[None]] | None = None,
+        source_completed: Callable[[int, int], Awaitable[bool]] | None = None,
     ) -> None:
         if startup_lookback_hours < 0:
             raise ValueError("startup_lookback_hours must not be negative")
 
         if catchup_interval_seconds <= 0:
             raise ValueError("catchup_interval_seconds must be positive")
+        callbacks = (load_history_cursor, save_history_cursor, source_completed)
+        if any(callback is not None for callback in callbacks) and any(
+            callback is None for callback in callbacks
+        ):
+            raise ValueError("Durable source recovery requires all cursor callbacks")
 
         self._client = TelegramClient(
             session_name,
@@ -391,11 +400,15 @@ class TelegramSource:
         self._catchup_interval_seconds = catchup_interval_seconds
         self._retry_message_ids = retry_message_ids
         self._defer_unavailable_messages = defer_unavailable_messages
+        self._load_history_cursor = load_history_cursor
+        self._save_history_cursor = save_history_cursor
+        self._source_completed = source_completed
         self._entities: list[Any] = []
         # Only chronological history reconciliation may advance this cursor.
         # A newer live delivery says nothing about earlier missed messages.
         self._watermarks: dict[int, int] = {}
         self._history_cutoff: datetime | None = None
+        self._bootstrap_cutoff: datetime | None = None
         self._handlers_registered = False
         self._read_errors: dict[int, str] = {}
 
@@ -420,6 +433,13 @@ class TelegramSource:
             self._history_cutoff = datetime.now(UTC).replace(microsecond=0) - timedelta(
                 hours=self._startup_lookback_hours
             )
+            self._bootstrap_cutoff = self._history_cutoff
+            if self._load_history_cursor is not None:
+                # First enrollment has no proven earlier cursor. Inspect a bounded
+                # day, requiring human approval outside the automatic window.
+                self._bootstrap_cutoff = min(
+                    self._history_cutoff, datetime.now(UTC) - timedelta(hours=24)
+                )
         await self._client.start(phone=_require_authorization)  # pyright: ignore[reportGeneralTypeIssues]
 
         entities: list[Any] = []
@@ -479,25 +499,32 @@ class TelegramSource:
         self,
         entities: list[Any],
     ) -> None:
-        assert self._history_cutoff is not None
+        assert self._bootstrap_cutoff is not None
         for entity in entities:
             chat_id = _telegram_chat_id(entity)
             if chat_id in self._watermarks:
                 continue
 
             try:
+                if self._load_history_cursor is not None:
+                    saved = await self._load_history_cursor(chat_id)
+                    if saved is not None:
+                        self._watermarks[chat_id] = saved
+                        continue
                 watermark = 0
                 last_group = None
                 # Find the last message outside the fixed startup window.
                 # Include an entire album if it straddles the time boundary.
                 async for message in self._client.iter_messages(entity):
                     grouped_id = getattr(message, "grouped_id", None)
-                    if _as_utc(message.date) < self._history_cutoff and (
+                    if _as_utc(message.date) < self._bootstrap_cutoff and (
                         grouped_id is None or grouped_id != last_group
                     ):
                         watermark = message.id
                         break
                     last_group = grouped_id
+                if self._save_history_cursor is not None:
+                    await self._save_history_cursor(chat_id, watermark)
                 self._watermarks[chat_id] = watermark
             except UnauthorizedError:
                 raise
@@ -586,7 +613,10 @@ class TelegramSource:
             try:
                 if retried is None:
                     await self._handle_messages(group, chat=entity)
-                self._watermarks[chat_id] = max(message.id for message in group)
+                watermark = max(message.id for message in group)
+                if self._save_history_cursor is not None:
+                    await self._save_history_cursor(chat_id, watermark)
+                self._watermarks[chat_id] = watermark
             except Exception as exc:
                 self._read_errors[chat_id] = type(exc).__name__
                 logger.exception(
@@ -696,12 +726,35 @@ class TelegramSource:
                 chat if chat is not None else messages[0].chat_id,
                 messages,
             )
+            channel_id = messages[0].chat_id
+            if (
+                self._source_completed is not None
+                and channel_id is not None
+                and await self._source_completed(
+                    channel_id, min(message.id for message in messages)
+                )
+            ):
+                return
             post = await telegram_messages_to_post(
                 messages,
                 chat=chat,
             )
 
             if post is not None:
+                if (
+                    self._load_history_cursor is not None
+                    and self._history_cutoff is not None
+                    and _as_utc(post.source.published_at) < self._history_cutoff
+                ):
+                    post = replace(
+                        post,
+                        source=post.source.model_copy(
+                            update={
+                                "recovery_review_reason": "Recovered outside the automatic startup window; "
+                                "verify this historical instruction before approving."
+                            }
+                        ),
+                    )
                 logger.info(
                     "Delivering Telegram post %s/%s (%d image(s))",
                     post.source.channel_id,
@@ -712,6 +765,13 @@ class TelegramSource:
                 await self._refresh_read_warning(
                     post.source.channel_id, clear_recovered=False
                 )
+                if (
+                    self._source_completed is not None
+                    and not await self._source_completed(
+                        post.source.channel_id, post.source.message_id
+                    )
+                ):
+                    raise RuntimeError("Source post processing remains incomplete")
 
     async def run_until_disconnected(
         self,
