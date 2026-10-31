@@ -10,6 +10,33 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.42] - 2026-10-31
+
+### Fixed
+
+- Keep public trade publication working when completed trades include one-letter
+  base assets such as HUSDT or QUSDT (#304). Both the trade builder and final
+  public contract accept one to forty uppercase ASCII alphanumeric characters
+  before USDT. Previously one valid row could block the entire feed.
+- Preserve strict public field whitelists and malformed-symbol rejection;
+  source lineage and credentials remain excluded.
+
+### Security
+
+- Update the existing pyasn1 dependency to 0.6.5 to address upstream quadratic
+  decoder work on crafted ASN.1 input (#302, Dependabot #301).
+
+### Validation and compatibility
+
+- Add real forensic reconciliation/SQLite/feed integration for both one-letter
+  assets, direct final-contract regression cases and malformed-symbol checks at
+  both boundaries. Existing publication/privacy checks remain in place.
+- No migration, dependency addition, exchange mutation or trading-policy change.
+  Schema15 stays compatible. Rollback is readable but can block public
+  publication again when one-letter assets are present.
+- Execution-history work #300/MR #303 remains pending its separate checkpoint;
+  #248 natural profit magnitude and #262 full audit remain open.
+
 ## [2.2.41] - 2026-10-31
 
 ### Fixed
