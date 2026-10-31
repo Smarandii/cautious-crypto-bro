@@ -225,6 +225,9 @@ async def _build_runtime(
         catchup_interval_seconds=(settings.telegram_catchup_interval_seconds),
         retry_message_ids=retry_message_ids,
         defer_unavailable_messages=defer_unavailable_messages,
+        load_history_cursor=store.get_source_history_cursor,
+        save_history_cursor=store.save_source_history_cursor,
+        source_completed=store.source_completed,
     )
     cleanup.push_async_callback(source.disconnect)
     source_recovery = SourceRecovery(

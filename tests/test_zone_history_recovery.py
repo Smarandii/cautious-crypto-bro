@@ -24,7 +24,7 @@ from cautious_crypto_bro.execution_history import (
     HISTORY_QUERY_INTERVAL_MS,
     HISTORY_WINDOW_MS,
 )
-from cautious_crypto_bro.storage import IntentStore
+from cautious_crypto_bro.storage import LATEST_SCHEMA_VERSION, IntentStore
 
 pytestmark = pytest.mark.integration
 
@@ -49,7 +49,9 @@ def test_schema14_upgrade_preserves_frozen_evidence_and_is_idempotent(tmp_path):
         await store.initialize()
         await IntentStore(database).initialize()
         with closing(sqlite3.connect(database)) as db:
-            assert db.execute("PRAGMA user_version").fetchone() == (15,)
+            assert db.execute("PRAGMA user_version").fetchone() == (
+                LATEST_SCHEMA_VERSION,
+            )
             assert db.execute("PRAGMA quick_check").fetchone() == ("ok",)
             assert db.execute("PRAGMA foreign_key_check").fetchall() == []
             assert {

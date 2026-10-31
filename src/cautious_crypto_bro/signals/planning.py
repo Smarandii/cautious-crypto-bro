@@ -167,6 +167,8 @@ class SignalPlanning:
         account_state: AccountStateSummary | None,
         duplicate_in_batch: bool,
     ) -> ApprovalMode:
+        if intent.source.recovery_review_reason:
+            return ApprovalMode.MANUAL
         if self._auto_approval_mode is AutoApprovalMode.DISABLED:
             return ApprovalMode.MANUAL
 
@@ -240,6 +242,8 @@ class SignalPlanning:
         *,
         account_state: AccountStateSummary | None,
     ) -> ApprovalMode:
+        if action.source.recovery_review_reason:
+            return ApprovalMode.MANUAL
         if account_state is None:
             return self._manual(
                 "Position action %s %s remains "

@@ -513,6 +513,9 @@ class SourceMessage(BaseModel):
     published_at: datetime
     received_at: datetime
     text: str
+    recovery_review_reason: str | None = Field(
+        default=None, min_length=1, max_length=300
+    )
 
     @property
     def telegram_url(self) -> str | None:
