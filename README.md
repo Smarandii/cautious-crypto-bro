@@ -163,7 +163,7 @@ extracted again. First enrollment without a saved cursor checks the last 24 hour
 (or the longer configured startup lookback); this does not certify older history.
 Recovered posts outside `TELEGRAM_STARTUP_LOOKBACK_HOURS` carry a saved review
 reason and require MANUAL approval for entry and lifecycle instructions. Approval
-cards label them **RECOVERED POST — HUMAN REVIEW REQUIRED** with publication time.
+cards label them **RECOVERED POST â€” HUMAN REVIEW REQUIRED** with publication time.
 Fresh-post policy, entry TTL and exits stay unchanged. Schema16 is additive, but
 rollback to older readers requires restoring the verified pre-migration backup.
 
