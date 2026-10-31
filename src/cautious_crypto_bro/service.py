@@ -101,7 +101,10 @@ class SignalService:
         self._extractor = extractor
         self._executor = executor
         self.delivery = SignalDelivery(
-            store=store, executor=executor, approval_bot=approval_bot
+            store=store,
+            executor=executor,
+            approval_bot=approval_bot,
+            lifecycle_max_age_seconds=intent_max_age_seconds,
         )
         self._coordinator = coordinator
         self._context_provider = context_provider

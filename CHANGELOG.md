@@ -10,6 +10,35 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.44] - 2026-10-31
+
+### Fixed
+
+- Already expired manual lifecycle instructions are recorded as SKIPPED before
+  delivery and shown as informational notices, without Execute controls or
+  repeated account previews (#308). This includes historical CLOSE/REDUCE/
+  CANCEL_ENTRIES posts recovered after an outage; no exchange call is made.
+- Reuse the original publication/creation-aware lifecycle age calculation and
+  configured deadline. Unexpired manual approvals still work, with the existing
+  execution-boundary expiry check retained if a card expires after delivery.
+  OPEN age policy, risk budgets, entry TTL and exits are unchanged.
+- Retain source/model evidence and the frozen action payload. Expired notices
+  use existing durable delivery leases and retry after a failed send/restart;
+  competing senders do not duplicate them. Execution claims are not overwritten.
+
+### Validation and compatibility
+
+- Real SQLite/service/bot/exchange-boundary regressions cover all three lifecycle
+  actions, configurable deadlines, failed-send restart, competing workers,
+  expiry after valid delivery, and an already claimed execution.
+- Schema16 stays unchanged; no migration or new dependency. Older schema16 code
+  reads the records but does not retry undelivered expired notices, so reconcile
+  that queue on rollback. Do not reset completed delivery receipts or replay
+  historical instructions. Already sent cards are not retroactively edited.
+- Source recovery #306 remains delivered, with known interpretation/history
+  limits. Pending #300/MR #303, natural profit magnitude #248 and full invasive
+  audit #262 remain open.
+
 ## [2.2.43] - 2026-10-31
 
 ### Fixed

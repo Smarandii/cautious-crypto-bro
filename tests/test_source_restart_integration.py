@@ -235,7 +235,7 @@ def test_fresh_entry_keeps_automatic_policy(tmp_path, monkeypatch, side):
 
 
 @pytest.mark.parametrize("action", ["CLOSE", "REDUCE", "CANCEL_ENTRIES"])
-def test_old_lifecycle_instruction_requires_manual_review(
+def test_old_lifecycle_instruction_is_recorded_without_approval(
     tmp_path, monkeypatch, action
 ):
     captions = {
@@ -296,20 +296,23 @@ def test_old_lifecycle_instruction_requires_manual_review(
                     )
                     await service.on_message(entry)
                     before = {k: dict(v) for k, v in exchange.orders.items()}
+                    sent_before_recovery = sender.await_count
                     await reader(monkeypatch, client, store, service.on_message).start()
                     assert exchange.orders == before
                 with closing(sqlite3.connect(store._database_path)) as db:
-                    mode, payload = db.execute(
-                        "SELECT approval_mode,payload_json FROM position_actions"
+                    mode, payload, status, error = db.execute(
+                        "SELECT approval_mode,payload_json,status,error FROM position_actions"
                     ).fetchone()
                     assert (
                         mode == "MANUAL"
                         and json.loads(payload)["source"]["recovery_review_reason"]
                     )
-                assert any(
-                    "RECOVERED POST" in call.kwargs["text"]
-                    for call in sender.call_args_list
-                )
+                    assert status == "SKIPPED" and "expired" in error.lower()
+                recovered = sender.call_args_list[sent_before_recovery:]
+                assert len(recovered) == 1
+                assert "EXPIRED LIFECYCLE" in recovered[0].kwargs["text"]
+                assert not recovered[0].kwargs.get("reply_markup")
+                assert "BYBIT DEMO — ACCOUNT" not in recovered[0].kwargs["text"]
                 assert await store.get_source_history_cursor(CHANNEL) == 3
             finally:
                 await bot.close()
