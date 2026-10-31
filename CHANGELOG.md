@@ -12,6 +12,11 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [2.2.42] - 2026-10-31
 
+### Security
+
+- Update the existing pyasn1 dependency to 0.6.5 to address upstream quadratic
+  decoder work on crafted ASN.1 input (#302, Dependabot #301).
+
 ### Fixed
 
 - Bound zone execution-history reads to relevant frozen allocation creation
