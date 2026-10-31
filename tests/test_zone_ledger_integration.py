@@ -31,7 +31,7 @@ from cautious_crypto_bro.zone_ledger import ZoneExecution, ZoneOrder
 pytestmark = pytest.mark.integration
 
 
-async def zones(database, side=Side.LONG):
+async def zones(database, side=Side.LONG, *, created_at=None):
     store = IntentStore(database)
     await store.initialize()
     first = make_intent(side=side).model_copy(
@@ -57,6 +57,8 @@ async def zones(database, side=Side.LONG):
     plans = [
         ExecutionPlanner().plan(intent, policy, context) for intent in (first, second)
     ]
+    if created_at is not None:
+        plans = [plan.model_copy(update={"created_at": created_at}) for plan in plans]
     claim = await store.claim_source(first.source, lease_seconds=300)
     assert await store.create_signal_batch_and_complete_source(
         tuple(zip((first, second), plans, strict=True)), (), claim

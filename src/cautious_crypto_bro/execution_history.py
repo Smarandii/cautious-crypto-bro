@@ -27,3 +27,4 @@ class HistoryQuery:
     seen_cursors: tuple[str, ...]
     attempted_at_ms: int
     limited_before_ms: int
+    allocation_since_ms: int | None = None

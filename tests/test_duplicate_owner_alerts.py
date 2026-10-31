@@ -78,9 +78,11 @@ def test_duplicate_owners_pause_and_alert_after_restart(
                 }
                 assert after_failure == before
                 assert not await store.get_pending_strategy_alerts()
-                # Two bounded read-only history lanes precede the
-                # aborted strategy pass on this fresh supervisor instance.
-                assert len(exchange.requests) == request_count + 2
+                # Fresh allocations need only their recent read-only lane;
+                # the aborted strategy pass must perform no other requests.
+                assert [path for path, _ in exchange.requests[request_count:]] == [
+                    "/v5/execution/list"
+                ]
                 with closing(sqlite3.connect(database)) as db:
                     db.execute("DROP TRIGGER fail_second_pause")
                     db.commit()
@@ -132,8 +134,10 @@ def test_duplicate_owners_pause_and_alert_after_restart(
                         for call in sender.call_args_list
                     )
                 assert not await IntentStore(database).get_pending_strategy_alerts()
-                # The original two lanes are durably throttled across restart.
-                assert len(exchange.requests) == request_count + 2
+                # The relevant lane is durably throttled across restart.
+                assert [path for path, _ in exchange.requests[request_count:]] == [
+                    "/v5/execution/list"
+                ]
             finally:
                 await bot.close()
 

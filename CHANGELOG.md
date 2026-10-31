@@ -10,6 +10,40 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.42] - 2026-10-31
+
+### Fixed
+
+- Bound zone execution-history reads to relevant frozen allocation creation
+  times, retaining one day of clock/lookback headroom and exchange retention
+  limits (#300). Recent-only allocations avoid unnecessary archive lanes;
+  missing, naive, invalid or future legacy timestamps keep conservative catch-up.
+- Replay a completed archive tail from its relevant lower boundary even when
+  the wall clock advances. Previously the moving 48-hour boundary could keep
+  reads near that edge indefinitely, stranding delayed older terminal fills.
+  Unfinished pages retain their cursor/window ownership across restart.
+- Recompute bounds for newly enrolled older allocations without inferring fills
+  or dropping terminal groups. Coverage checkpoints describe only consumed
+  pages; creation times never become evidence that history is complete.
+
+### Validation and compatibility
+
+- Add 15 real SQLite/native HTTP integration cases for both directions, recent
+  and older allocations, late older enrollment, unknown clocks, cached query
+  state, moving-boundary pagination, restart and explicit retention limits.
+- On disposable copies of one production snapshot, a complete eligible-lane
+  sweep reserves 8 query slots rather than12: six recent plus two archive lanes,
+  compared with six of each. The existing request-rate/page ceilings are
+  unchanged; this reallocates capacity to relevant reads rather than claiming
+  a lower live request rate. Frozen ledger tables remain identical, with zero
+  exchange API calls and no writes to the live database during comparison.
+- Schema15 and existing persisted query rows remain readable; the allocation
+  boundary is transient and recomputed after restart. No migration, dependency,
+  risk, entry/exit policy or exchange mutation is introduced. Older versions
+  retain state readability but can repeat irrelevant reads or miss delayed
+  archive fills at the moving boundary. Multi-zone activation remains disabled;
+  #123, #245, #248 and the full #262 audit retain their outstanding scope.
+
 ## [2.2.41] - 2026-10-31
 
 ### Fixed
