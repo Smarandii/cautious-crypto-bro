@@ -3,7 +3,7 @@
 import asyncio
 import sqlite3
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
 
 import pytest
@@ -150,13 +150,13 @@ def test_late_and_equal_time_fills_survive_restart(tmp_path, new_binding):
 def test_archival_replay_keeps_terminal_strategies_eligible(tmp_path):
     async def run():
         database = tmp_path / "terminal-archive.sqlite3"
-        store, group, plans = await zones(database)
+        store, group, plans = await zones(
+            database, created_at=datetime.now(UTC) - timedelta(days=4)
+        )
         await _bind_entries(store, group, plans)
         old_time = int(datetime.now(UTC).timestamp() * 1000) - 3 * 24 * 60 * 60 * 1000
         order_id = f"id-{plans[0].intent_id.hex[:6]}-e1"
-        gateway = RecordingGateway(
-            [_row("late-terminal", order_id, "Buy", "0.1", "0", "100", old_time)]
-        )
+        gateway = RecordingGateway([])
         with closing(sqlite3.connect(database)) as db:
             db.execute(
                 "INSERT INTO position_strategies(strategy_id,symbol,side,status,created_at,updated_at) VALUES (?,'BTCUSDT','LONG','CLOSED',?,?)",
@@ -169,12 +169,10 @@ def test_archival_replay_keeps_terminal_strategies_eligible(tmp_path):
             db.commit()
         await _supervisor(store, gateway).reconcile_once()
         assert await _recorded_rows(store, group) == []
-        with closing(sqlite3.connect(database)) as db:
-            db.execute(
-                "UPDATE zone_history_queries SET start_ms=?,end_ms=?,cursor='',seen_cursors_json='[]',last_attempt_ms=0 WHERE lane='archive'",
-                (old_time - 1, old_time + 1),
-            )
-            db.commit()
+        gateway.execution_rows["BTCUSDT"] = [
+            _row("late-terminal", order_id, "Buy", "0.1", "0", "100", old_time)
+        ]
+        _make_replay_due(store)
         await _supervisor(IntentStore(database), gateway).reconcile_once()
         rows = await _recorded_rows(store, group)
         assert [r.execution_id for r in rows] == ["late-terminal"]

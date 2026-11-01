@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from datetime import datetime
+
+import aiosqlite
 
 from ..domain import StoreError
 from ..execution_history import (
@@ -26,15 +29,67 @@ def _retention_floor(now_ms: int) -> int:
     return max(1, ((now_ms - HISTORY_RETENTION_MS) // DAY_MS + 2) * DAY_MS)
 
 
-def _window(lane: str, previous_end: int, now_ms: int) -> tuple[int, int]:
+def _window(
+    lane: str,
+    previous_end: int,
+    now_ms: int,
+    allocation_since_ms: int | None = None,
+    *,
+    wrap: bool = False,
+) -> tuple[int, int]:
     recent = max(1, now_ms - RECENT_HISTORY_MS)
     if lane == "recent":
-        return recent, now_ms
-    floor = _retention_floor(now_ms)
+        return max(recent, allocation_since_ms or 1), now_ms
+    floor = max(_retention_floor(now_ms), allocation_since_ms or 1)
     start = previous_end + 1
-    if start < floor or start >= recent:
+    if wrap or start < floor or start >= recent:
         start = floor
     return start, min(start + HISTORY_WINDOW_MS, recent - 1)
+
+
+async def _allocation_bounds(
+    db: aiosqlite.Connection, symbols: Sequence[str], now_ms: int
+) -> dict[str, int | None]:
+    """Unknown legacy clocks retain full catch-up; no inferred fill timestamps."""
+    placeholders = ",".join("?" for _ in symbols)
+    cursor = await db.execute(
+        "SELECT g.symbol,z.plan_json FROM zone_allocations z "
+        "JOIN zone_groups g USING(group_id) "
+        f"WHERE g.symbol IN ({placeholders})",
+        tuple(symbols),
+    )
+    oldest: dict[str, int] = {}
+    unknown = set()
+    for symbol, payload in await cursor.fetchall():
+        try:
+            created = datetime.fromisoformat(
+                json.loads(payload)["created_at"].replace("Z", "+00:00")
+            )
+            if created.tzinfo is None:
+                raise ValueError("Allocation creation time requires a timezone")
+            timestamp = int(created.timestamp() * 1000)
+            if timestamp <= 0 or timestamp > now_ms:
+                raise ValueError(
+                    "Allocation creation time is outside usable clock evidence"
+                )
+            oldest[symbol] = min(timestamp, oldest.get(symbol, timestamp))
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            OverflowError,
+            AttributeError,
+            OSError,
+        ):
+            unknown.add(symbol)
+    # A day of headroom preserves broker/application clock differences and
+    # boundary fills; creation evidence narrows reads, never proves completion.
+    return {
+        symbol: max(1, oldest[symbol] - DAY_MS)
+        if symbol in oldest and symbol not in unknown
+        else None
+        for symbol in symbols
+    }
 
 
 class ZoneHistoryRepositoryImpl(_Store):
@@ -46,9 +101,18 @@ class ZoneHistoryRepositoryImpl(_Store):
         floor = _retention_floor(now_ms)
         async with sqlite_connection(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
+            symbols = tuple(sorted(set(symbols)))
+            bounds = await _allocation_bounds(db, symbols, now_ms)
+            eligible = []
             for symbol in sorted(set(symbols)):
                 for lane in ("recent", "archive"):
-                    start, end = _window(lane, 0, now_ms)
+                    query_floor = max(floor, bounds[symbol] or 1)
+                    if lane == "archive" and query_floor >= max(
+                        1, now_ms - RECENT_HISTORY_MS
+                    ):
+                        continue
+                    eligible.append((symbol, lane))
+                    start, end = _window(lane, 0, now_ms, bounds[symbol])
                     await db.execute(
                         "INSERT OR IGNORE INTO zone_history_queries"
                         "(symbol,lane,start_ms,end_ms,limited_before_ms) VALUES (?,?,?,?,?)",
@@ -57,21 +121,26 @@ class ZoneHistoryRepositoryImpl(_Store):
                     # Retention is an explicit limitation, never fabricated coverage.
                     await db.execute(
                         "UPDATE zone_history_queries SET start_ms=?,end_ms=?,cursor='',"
-                        "seen_cursors_json='[]',last_error='History window crossed the retained lookback boundary' "
+                        "seen_cursors_json='[]',last_error='History window precedes allocation/retention boundary' "
                         "WHERE symbol=? AND lane=? AND start_ms<?",
-                        (start, end, symbol, lane, floor),
+                        (start, end, symbol, lane, query_floor),
                     )
                     await db.execute(
                         "UPDATE zone_history_queries SET limited_before_ms=? "
                         "WHERE symbol=? AND lane=?",
                         (floor, symbol, lane),
                     )
-            placeholders = ",".join("?" for _ in symbols)
+            eligible_sql = " OR ".join("(symbol=? AND lane=?)" for _ in eligible)
+            eligible_values = tuple(value for pair in eligible for value in pair)
             cursor = await db.execute(
                 "SELECT symbol,lane,start_ms,end_ms,cursor,seen_cursors_json,limited_before_ms "
-                f"FROM zone_history_queries WHERE symbol IN ({placeholders}) "
+                f"FROM zone_history_queries WHERE ({eligible_sql}) "
                 "AND last_attempt_ms<=? ORDER BY last_attempt_ms,lane DESC,symbol LIMIT ?",
-                (*symbols, now_ms - HISTORY_QUERY_INTERVAL_MS, HISTORY_QUERY_BUDGET),
+                (
+                    *eligible_values,
+                    now_ms - HISTORY_QUERY_INTERVAL_MS,
+                    HISTORY_QUERY_BUDGET,
+                ),
             )
             queries = tuple(
                 HistoryQuery(
@@ -83,6 +152,7 @@ class ZoneHistoryRepositoryImpl(_Store):
                     tuple(json.loads(row[5])),
                     now_ms,
                     row[6],
+                    bounds[row[0]],
                 )
                 for row in await cursor.fetchall()
             )
@@ -115,7 +185,14 @@ class ZoneHistoryRepositoryImpl(_Store):
         seen = (*query.seen_cursors, next_cursor) if next_cursor else ()
         completed = error is None and not next_cursor
         if completed:
-            start, end = _window(query.lane, query.end_ms, now_ms)
+            start, end = _window(
+                query.lane,
+                query.end_ms,
+                now_ms,
+                query.allocation_since_ms,
+                wrap=query.lane == "archive"
+                and query.end_ms - query.start_ms < HISTORY_WINDOW_MS,
+            )
         if error is not None:
             # Retry the same window from its first page: expired cursors must
             # not strand recovery. Already retained execution IDs are idempotent.
