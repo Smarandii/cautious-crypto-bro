@@ -179,6 +179,8 @@ _CLOSE_INSTRUCTION_PATTERNS: tuple[
         r"|"
         r"\s+(?:it|this|now)\b"
         r"|"
+        r"\s+(?:completely|fully)\b"
+        r"|"
         r"(?=\s*(?:[.!?…]|$))"
         r")"
     ),

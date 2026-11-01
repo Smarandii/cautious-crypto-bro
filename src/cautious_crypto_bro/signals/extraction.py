@@ -32,7 +32,8 @@ Do not give trading advice and do not invent missing information.
 
 Inspect ONE Telegram post, including all attached images, and extract:
 1. zero or more independent new OPEN trade proposals;
-2. zero or more executable actions on EXISTING positions.
+2. zero or more current-caption action proposals for existing positions;
+   execution, not extraction, resolves the actual live account position.
 
 Output rules:
 - use the exact supplied JSON schema field names
@@ -43,7 +44,7 @@ Output rules:
   and range_high
 - do not attach a historical/average price to MARKET
 - actionable=true only when at least one NEW/ADD_OR_REENTRY OPEN candidate
-  or executable position action exists
+  or caption-authorized position action proposal exists
 - if the post contains only UPDATE_EXISTING observations, actionable=false
 - maximum five intents and five position actions
 - omit ambiguous candidates without discarding unrelated valid candidates
@@ -62,6 +63,10 @@ Position relationship rules:
   showing progress, or updating SL/TP/status for a position already copied
   from this source
 - UPDATE_EXISTING must NOT become a new executable OPEN
+- UPDATE_EXISTING requires a matching trusted copied/in-flight source position.
+  A genuine current exchange panel with no caption or lifecycle/status override
+  is NEW when source history has no matching symbol/side; an absent caption does
+  not make that panel UPDATE_EXISTING or require source history to authorize it.
 - an account-wide Bybit position alone does NOT prove source attribution;
   source_open_history is authoritative for whether this trader was copied
 - if account_state_available=false, treat relation classification
@@ -121,7 +126,7 @@ OPEN trade rules:
 - never estimate prices from chart geometry
 - never invent a stop, entry, target, or range boundary
 
-Existing-position action rules:
+Existing-position action proposal rules (not execution eligibility):
 - CANCEL_ENTRIES cancels pending entry orders, never positions or protection.
   Emit it for explicit current-caption cancellation of a named symbol's limit/
   entry orders (including "INJ улетела. Отменяем лимитку"). Include the symbol
@@ -130,6 +135,12 @@ Existing-position action rules:
   INJ only. Scope is the current source channel's earlier entries for that symbol.
 - position actions are account-wide operations on the current position for
   the extracted symbol; they are NOT new opposite-side trades
+- source_open_history and copied-position relationship rules classify OPENs;
+  they are NOT prerequisites for an account-wide REDUCE/CLOSE proposal.
+  Execution re-reads the live position and enforces its own safety checks.
+- do not suppress an otherwise attributable current-caption REDUCE/CLOSE merely
+  because account_positions has no matching position. Extract the instruction;
+  execution resolves whether a matching live position still exists.
 - REDUCE means partially close an existing position
 - an explicit partial-close instruction is executable even when the author
   does not specify an amount
@@ -163,6 +174,21 @@ Existing-position action rules:
 - if no exact current-caption instruction can be quoted, omit the action
 - images may identify which symbol/side the text instruction refers to, but
   image text alone must NEVER authorize REDUCE/CLOSE
+- separate action authorization from symbol attribution: the CURRENT caption
+  must instruct the action, while one unambiguous current position panel may
+  supply the symbol and side. Neither the caption nor evidence_text needs to
+  repeat a symbol that is clearly identified by that panel.
+- for example, caption "Закрываем" or "Close completely." with a single
+  BTCUSDT LONG position panel authorizes CLOSE BTCUSDT with that exact caption
+  as evidence_text; "Close half." authorizes REDUCE BTCUSDT, close_pct=50.
+  These actions come from the caption, not the panel's Close button.
+- if several visible positions could be the target and the current caption
+  does not select one unambiguously, omit the ambiguous action rather than
+  guessing a symbol or closing every visible position.
+- a current "Закрываем" caption plus one clearly identified position panel
+  remains a CLOSE proposal even when account_positions=[] and
+  source_open_history=[]. An empty account snapshot is not missing caption
+  authorization and must not turn that proposal into actionable=false.
 - NEVER create REDUCE/CLOSE from exchange UI controls such as a Close button
 - NEVER create REDUCE/CLOSE from embedded old chat screenshots, testimonials,
   examples of previous trades, performance recaps, or promotional material

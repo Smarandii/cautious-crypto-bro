@@ -10,6 +10,35 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.49] - 2026-11-01
+
+### Fixed
+
+- Clarify current-caption CLOSE/REDUCE authorization separately from attached
+  image symbol attribution (#318). One unambiguous position panel may supply
+  the ticker/side even when the caption omits them. Source-copy history and
+  account-snapshot eligibility do not veto an otherwise attributable proposal;
+  execution still re-reads the live position and enforces freshness/safety.
+- Accept explicit English "close completely/fully" in deterministic evidence.
+  Reject multiple symbols inferred from the same ambiguous caption clause,
+  preventing a generic instruction from closing every pictured position.
+  Caption-free UI controls and embedded historical instructions stay excluded;
+  no collective close-all behavior is introduced.
+
+### Validation and compatibility
+
+- Real-provider evaluation reproduced three synthetic caption misses before the
+  fix. All eight core and five additional synthetic model/normalization cases
+  pass after it. An additional ambiguous-panel case exposed unsafe model output;
+  a failing-then-passing durable source-decision regression verifies the guard
+  creates no position-action records. Small synthetic checks do not establish
+  production recall or profitability; no private source media was uploaded.
+- Extend the existing approval/restart/close smoke flow with image-attributed
+  Russian and English captions. Schema16, dependencies, settings, risk and
+  entry/exit policy unchanged; rollback needs no migration. No live synthetic
+  orders or historical replay. #319/#316 interpretation, #248 magnitude,
+  #123/#312 zone protection and the complete #262 audit remain unfinished.
+
 ## [2.2.48] - 2026-11-01
 
 ### Fixed
