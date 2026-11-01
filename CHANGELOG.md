@@ -10,6 +10,28 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.47] - 2026-11-01
+
+### Changed
+
+- Give startup AUTO backlog and periodic candidate/delivery recovery an explicit
+  SignalRecovery owner (#313), separate from source ingestion. Preserve public
+  service entry points as compatibility delegates and use a narrow recovery
+  storage protocol; no new worker, queue or scheduling task.
+- Preserve notice reservation before exchange execution, AUTO-mode restrictions,
+  recovery order, failure isolation, cancellation propagation, log namespace and
+  30-second cadence. Candidate deadlines and delivery leases stay with their
+  existing owners. The three moved methods retain identical ASTs.
+
+### Validation and compatibility
+
+- Existing startup/outcome/candidate/workflow integration gives the same result
+  before and after extraction. No implementation-mirroring unit tests added.
+- Schema16, persisted payloads, dependencies, risk/entry/exit policy and runtime
+  configuration are unchanged; rollback needs no migration. No historical
+  signal replay or synthetic live orders. #123/#312 independent-zone protection,
+  #248 natural magnitude and the complete #262 audit remain open.
+
 ## [2.2.46] - 2026-11-01
 
 ### Validation
