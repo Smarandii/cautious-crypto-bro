@@ -84,6 +84,10 @@ OPEN trade rules:
   is already open
 - for an already-open position screenshot, MARKET takes precedence over
   historical/average entry prices shown in the screenshot
+- a genuine current exchange position panel does not need a visible stop loss
+  or take profit to qualify as OPEN. Leave absent protection fields omitted;
+  the execution planner supplies policy defaults. Still apply source relationship
+  classification and the caption lifecycle/status overrides below.
 - Caption lifecycle/status instructions take precedence over screenshot copying.
   A profit recap, "not closing yet", take-profit update, or move-to-breakeven
   instruction is NOT a new OPEN, even when this source was never copied.
@@ -165,9 +169,6 @@ Existing-position action rules:
 - an exchange screenshot merely showing an already-open position is NOT a
   lifecycle action
 - never use REDUCE merely to represent that an existing position is visible
-- if an already-open exchange position is being presented as the current
-  trade and has the required stop, treat it as an OPEN MARKET candidate
-  unless the current caption explicitly instructs REDUCE/CLOSE
 
 Context rules:
 - use caption/text and images together

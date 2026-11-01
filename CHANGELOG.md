@@ -10,6 +10,27 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.48] - 2026-11-01
+
+### Fixed
+
+- Remove a contradictory extraction requirement for a visible stop on genuine
+  current exchange position panels (#317). Missing source stops/targets remain
+  absent; the execution planner supplies policy protection. Source ownership,
+  caption lifecycle/status overrides and promotional exclusions still apply.
+
+### Validation and compatibility
+
+- Add LONG/SHORT HTTP-provider-to-normalization-to-planner integration coverage
+  for MARKET candidates without source protection. Four synthetic real-model
+  cases pass before and after; this small sample does not reproduce the stored
+  production miss or establish improved recall. Private source media was not
+  uploaded for evaluation; no historical orders were replayed.
+- No schema16, dependency, configuration, risk, entry/exit or runtime-state
+  changes; rollback needs no migration. #318/#319 extraction findings, #316
+  remaining interpretation audit, #248 natural profit magnitude, #123/#312
+  independent-zone protection and the full #262 audit remain unfinished.
+
 ## [2.2.47] - 2026-11-01
 
 ### Changed
