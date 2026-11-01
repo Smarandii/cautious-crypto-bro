@@ -10,6 +10,21 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.46] - 2026-11-01
+
+### Validation
+
+- Verify the complete execution HTTP-to-SQLite-to-allocation/protection snapshot
+  path for LONG and SHORT (#310): paginated out-of-order fills, duplicate replay,
+  restart between pages, bound parent-specific partial exits and foreign rows.
+- Assert independent full frozen budgets and exact remaining zone quantities;
+  normalized native stops verify coverage, while missing/drifted stops remain
+  unverified. Evidence reads cannot submit exchange mutations or enable trading.
+- Test-only behavior change; schema16, dependencies, risk settings, entry/exit
+  policy and production code stay unchanged. Rollback needs no migration.
+  Independent-zone admission/group protection #123, natural profit magnitude
+  #248 and the complete architecture audit #262 remain unfinished.
+
 ## [2.2.45] - 2026-11-01
 
 ### Fixed
