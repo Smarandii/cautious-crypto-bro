@@ -10,7 +10,6 @@ from datetime import (
     timedelta,
 )
 from decimal import Decimal
-from uuid import UUID
 
 from .domain import (
     AccountSnapshotDelivery,
@@ -37,6 +36,7 @@ from .ports import (
 from .signals.delivery import SignalDelivery
 from .signals.planning import SignalPlanning
 from .signals.queued_open import QueuedOpenExecution
+from .signals.recovery import SignalRecovery
 
 logger = logging.getLogger(__name__)
 ACCOUNT_PNL_SYNC_INTERVAL_SECONDS = 15 * 60
@@ -119,21 +119,16 @@ class SignalService:
             auto_approval_mode=auto_approval_mode,
         )
 
+        self.recovery = SignalRecovery(
+            store=store,
+            coordinator=coordinator,
+            queued_opens=self.queued_opens,
+            delivery=self.delivery,
+            auto_approval_mode=auto_approval_mode,
+        )
+
     async def run_delivery_recovery(self) -> None:
-        while True:
-            try:
-                await self.queued_opens.recover()
-            except Exception:
-                logger.exception("Candidate planning recovery failed")
-            try:
-                await self.delivery.recover_manual()
-            except Exception:
-                logger.exception("Manual approval recovery failed")
-            try:
-                await self.delivery.recover_auto_outcomes()
-            except Exception:
-                logger.exception("AUTO outcome recovery failed")
-            await asyncio.sleep(30)
+        await self.recovery.run_delivery_recovery()
 
     async def run_periodic_account_pnl_sync(self) -> None:
         while True:
@@ -176,79 +171,8 @@ class SignalService:
 
         return await self._store.get_account_pnl_summary()
 
-    async def _reserve_recovery_notices(
-        self, pending_intents: tuple[UUID, ...], pending_actions: tuple[UUID, ...]
-    ) -> None:
-        for intent_id in pending_intents:
-            await self._store.ensure_auto_outcome_delivery(intent_id, "OPEN")
-        for action_id in pending_actions:
-            await self._store.ensure_auto_outcome_delivery(action_id, "ACTION")
-
-    async def recover_auto_execution(
-        self,
-    ) -> None:
-        pending_intents = await self._store.get_pending_auto_intent_ids()
-
-        pending_actions = await self._store.get_pending_auto_action_ids()
-
-        # Reserve notices before any legacy pending work can reach the exchange.
-        await self._reserve_recovery_notices(pending_intents, pending_actions)
-
-        if self._auto_approval_mode is AutoApprovalMode.DISABLED:
-            for intent_id in pending_intents:
-                await self._store.mark_failed(
-                    intent_id,
-                    ("AUTO recovery cancelled: auto approval is disabled"),
-                )
-
-            for action_id in pending_actions:
-                await self._store.mark_position_action_failed(
-                    action_id,
-                    ("AUTO recovery cancelled: auto approval is disabled"),
-                )
-
-            return
-
-        for intent_id in pending_intents:
-            outcome = await self._coordinator.execute_intent(
-                intent_id,
-                approval_mode=(ApprovalMode.AUTO),
-            )
-
-            try:
-                await self.delivery.auto_outcome(intent_id, "OPEN", outcome)
-            except Exception:
-                logger.exception(
-                    "Failed to send recovered AUTO intent outcome %s",
-                    intent_id,
-                )
-
-        if self._auto_approval_mode is not AutoApprovalMode.ALL:
-            for action_id in pending_actions:
-                await self._store.mark_position_action_failed(
-                    action_id,
-                    (
-                        "AUTO recovery cancelled: "
-                        "current mode does not "
-                        "allow position actions"
-                    ),
-                )
-
-            return
-
-        for action_id in pending_actions:
-            outcome = await self._coordinator.execute_position_action(
-                action_id,
-                approval_mode=(ApprovalMode.AUTO),
-            )
-
-            try:
-                await self.delivery.auto_outcome(action_id, "ACTION", outcome)
-            except Exception:
-                logger.exception(
-                    "Failed to send recovered AUTO action outcome %s",
-                    action_id,
-                )
+    async def recover_auto_execution(self) -> None:
+        await self.recovery.recover_auto_execution()
 
     async def on_message(
         self,
