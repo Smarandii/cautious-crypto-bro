@@ -58,6 +58,82 @@ def source() -> SourceMessage:
     )
 
 
+@pytest.mark.parametrize("side", ["LONG", "SHORT"])
+def test_extracted_market_without_source_stop_gets_policy_protection(side):
+    import asyncio
+    import json
+    from decimal import Decimal
+
+    import httpx
+
+    from cautious_crypto_bro.domain import ExecutionPolicy, InstrumentContext
+    from cautious_crypto_bro.execution import ExecutionPlanner
+
+    async def run():
+        payload = {
+            "actionable": True,
+            "reason": "Current position panel with no source protection",
+            "intents": [
+                {
+                    "symbol": "BTCUSDT",
+                    "side": side,
+                    "entry": "MARKET",
+                    "relation": "NEW",
+                    "summary": "Current live position",
+                    "confidence": 0.99,
+                }
+            ],
+            "position_actions": [],
+        }
+
+        def handler(request):
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": json.dumps(payload)},
+                        }
+                    ]
+                },
+            )
+
+        extractor = _openrouter_extractor(
+            api_key="test", model="test/model", base_url="https://openrouter.test"
+        )
+        await extractor._provider._client.aclose()
+        extractor._provider._client = httpx.AsyncClient(
+            base_url="https://openrouter.test", transport=httpx.MockTransport(handler)
+        )
+        try:
+            signals = await extractor.extract(IncomingPost(source=source()))
+        finally:
+            await extractor.close()
+        assert len(signals.open_intents) == 1
+        assert not signals.position_actions
+        intent = signals.open_intents[0]
+        assert intent.stop_loss is None
+        assert intent.entry.price is None
+        plan = ExecutionPlanner().plan(
+            intent,
+            ExecutionPolicy(trading_capital_usdt=Decimal("1000")),
+            InstrumentContext(
+                market_price=Decimal("100"),
+                tick_size=Decimal("0.01"),
+                qty_step=Decimal("0.001"),
+                min_qty=Decimal("0.001"),
+                min_notional=Decimal("5"),
+            ),
+        )
+        assert plan.stop_loss_source.value == "POLICY"
+        assert (plan.stop_loss < Decimal("100")) == (side == "LONG")
+        assert plan.take_profit_targets
+        assert plan.planned_max_loss_usdt > 0
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("model", ["openai/gpt-5.6-luna", "test/model"])
 def test_model_payload_preserves_strict_schema_without_unsupported_temperature(model):
     import asyncio
