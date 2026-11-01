@@ -771,7 +771,8 @@ def test_multiple_actionable_intents_are_returned() -> None:
     asyncio.run(run())
 
 
-def test_position_actions_are_returned_separately() -> None:
+@pytest.mark.parametrize("ambiguous_image_actions", [False, True])
+def test_position_actions_are_returned_separately(ambiguous_image_actions) -> None:
     import asyncio
     import json
 
@@ -809,6 +810,18 @@ def test_position_actions_are_returned_separately() -> None:
             ],
         }
 
+        if ambiguous_image_actions:
+            payload["position_actions"].extend(
+                {
+                    "symbol": symbol,
+                    "action": "CLOSE",
+                    "evidence_text": "Закрываем",
+                    "summary": "Ambiguous pictured position",
+                    "confidence": 1,
+                }
+                for symbol in ("BTCUSDT", "ETHUSDT")
+            )
+
         def handler(
             request: httpx.Request,
         ) -> httpx.Response:
@@ -844,7 +857,10 @@ def test_position_actions_are_returned_separately() -> None:
 
         try:
             lifecycle_source = source().model_copy(
-                update={"text": ("Close half of NEAR. Close TAO completely.")}
+                update={
+                    "text": ("Закрываем.\n" if ambiguous_image_actions else "")
+                    + "Close half of NEAR. Close TAO completely."
+                }
             )
 
             signals = await extractor.extract(IncomingPost(source=lifecycle_source))

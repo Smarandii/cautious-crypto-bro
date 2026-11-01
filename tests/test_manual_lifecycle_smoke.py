@@ -119,12 +119,22 @@ async def start(database, executor, provider, transport):
     return store, bot, supervisor, source, transport
 
 
-def test_manual_signal_to_protection_and_close_survives_restart(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "close_caption,close_image",
+    [
+        ("Close BTCUSDT now", None),
+        ("Закрываем", b"synthetic position panel"),
+        ("Close completely.", b"synthetic position panel"),
+    ],
+)
+def test_manual_signal_to_protection_and_close_survives_restart(
+    tmp_path, monkeypatch, close_caption, close_image
+):
     async def run():
         database = tmp_path / "state.db"
         client = FakeTelegramClient([])
         monkeypatch.setattr(telegram_source, "TelegramClient", lambda *a, **kw: client)
-        provider = ModelTransport()
+        provider = ModelTransport(close_caption=close_caption)
         provider.fail_image_once = False
         exchange = ExchangeTransport()
         transport = TelegramTransport()
@@ -183,7 +193,8 @@ def test_manual_signal_to_protection_and_close_survives_restart(tmp_path, monkey
                     FakeMessage(
                         message_id=2,
                         published_at=datetime.now(UTC),
-                        text="Close BTCUSDT now",
+                        text=close_caption,
+                        image=close_image,
                     )
                 )
                 await source.poll_once()
@@ -204,7 +215,7 @@ def test_manual_signal_to_protection_and_close_survives_restart(tmp_path, monkey
                 assert mutation_count(exchange) == before_duplicate
                 assert not exchange.open_entries() and not exchange.exits()
                 assert len(await store.get_recent_source_intents(CHANNEL)) == 1
-                assert provider.image_requests == 1
+                assert provider.image_requests == 1 + bool(close_image)
                 reopened = IntentStore(database)
                 assert (
                     await reopened.get_intent(intent.intent_id)

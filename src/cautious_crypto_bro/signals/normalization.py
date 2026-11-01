@@ -190,7 +190,7 @@ def _position_actions_from_extraction(
     source: SourceMessage,
     extraction: IntentExtraction,
 ) -> tuple[PositionActionIntent, ...]:
-    actions: list[PositionActionIntent] = []
+    actions: list[tuple[PositionActionIntent, str]] = []
 
     for raw in extraction.position_actions:
         action_name = raw.action.strip().upper()
@@ -268,9 +268,30 @@ def _position_actions_from_extraction(
             )
             continue
 
-        actions.append(action)
+        actions.append((action, action_evidence))
 
-    return tuple(actions)
+    return _unambiguous_position_actions(actions)
+
+
+def _unambiguous_position_actions(
+    candidates: list[tuple[PositionActionIntent, str]],
+) -> tuple[PositionActionIntent, ...]:
+    """One caption clause cannot implicitly select several image symbols."""
+    symbols_by_scope: dict[str, set[str]] = {}
+    for action, evidence in candidates:
+        scope = _normalize_evidence_text(evidence)
+        symbols_by_scope.setdefault(scope, set()).add(action.symbol)
+
+    ambiguous_scopes = {
+        scope for scope, symbols in symbols_by_scope.items() if len(symbols) > 1
+    }
+    if ambiguous_scopes:
+        logger.warning("Dropping ambiguous multi-symbol caption actions")
+    return tuple(
+        action
+        for action, evidence in candidates
+        if _normalize_evidence_text(evidence) not in ambiguous_scopes
+    )
 
 
 def _reduce_close_pct(

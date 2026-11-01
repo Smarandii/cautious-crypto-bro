@@ -70,6 +70,7 @@ def test_planning_rejection_kind_is_aggregate_and_non_identifying(error, expecte
     [
         ("commentary", "PROCESSED_NO_OP"),
         ("filtered", "NORMALIZATION_FILTERED"),
+        ("ambiguous_image_actions", "NORMALIZATION_FILTERED"),
         ("planning", "PLANNING_REJECTED"),
         ("transport", "UNRESOLVED"),
         ("executed", "EXECUTED"),
@@ -84,7 +85,7 @@ def test_original_decisions_survive_restart_without_model_or_cache(
         async def complete(self, request):
             self.calls += 1
             response = {"actionable": False, "reason": "Commentary"}
-            if case == "filtered":
+            if case in {"filtered", "ambiguous_image_actions"}:
                 response.update(
                     actionable=True,
                     position_actions=[
@@ -97,6 +98,17 @@ def test_original_decisions_survive_restart_without_model_or_cache(
                         }
                     ],
                 )
+                if case == "ambiguous_image_actions":
+                    response["position_actions"] = [
+                        {
+                            "symbol": symbol,
+                            "action": "CLOSE",
+                            "evidence_text": "Закрываем",
+                            "summary": "Close pictured position",
+                            "confidence": 1,
+                        }
+                        for symbol in ("BTCUSDT", "ETHUSDT")
+                    ]
             elif case in {"planning", "transport", "executed"}:
                 response.update(
                     actionable=True,
@@ -121,7 +133,8 @@ def test_original_decisions_survive_restart_without_model_or_cache(
         database = tmp_path / "state.db"
         store = IntentStore(database)
         await store.initialize()
-        source = make_intent().source.model_copy(update={"text": "Enter now"})
+        caption = "Закрываем" if case == "ambiguous_image_actions" else "Enter now"
+        source = make_intent().source.model_copy(update={"text": caption})
         provider = Model()
         exchange = ExchangeTransport()
         with executor_for(exchange) as executor:
@@ -185,10 +198,16 @@ def test_original_decisions_survive_restart_without_model_or_cache(
             )
             assert decision["evaluation_fingerprint"]
             assert decision["evaluation_model"] == "test"
-            assert decision["source"]["text"] == "Enter now"
+            assert decision["source"]["text"] == caption
             if case == "filtered":
                 assert len(decision["extraction"]["position_actions"]) == 1
                 assert decision["normalized"]["position_actions"] == []
+            if case == "ambiguous_image_actions":
+                assert len(decision["extraction"]["position_actions"]) == 2
+                assert decision["normalized"]["position_actions"] == []
+                assert await db.execute_fetchall(
+                    "SELECT COUNT(*) FROM position_actions"
+                ) == [(0,)]
             if case == "planning":
                 assert decision["planning"]["errors"]
             if case == "executed":

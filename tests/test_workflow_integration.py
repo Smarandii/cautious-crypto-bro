@@ -36,12 +36,15 @@ pytestmark = pytest.mark.integration
 
 
 class ModelTransport:
-    def __init__(self):
+    def __init__(self, *, close_caption="Close BTCUSDT now"):
         self.fail_image_once = True
         self.image_requests = 0
+        self.close_caption = close_caption
 
     async def complete(self, request):
-        if "Close BTCUSDT now" in request.user_text:
+        if self.close_caption in request.user_text:
+            if request.images:
+                self.image_requests += 1
             return LLMResponse(
                 json.dumps(
                     {
@@ -52,7 +55,7 @@ class ModelTransport:
                                 "symbol": "BTCUSDT",
                                 "action": "CLOSE",
                                 "expected_side": "LONG",
-                                "evidence_text": "Close BTCUSDT now",
+                                "evidence_text": self.close_caption,
                                 "summary": "Close now",
                                 "confidence": 1,
                             }
