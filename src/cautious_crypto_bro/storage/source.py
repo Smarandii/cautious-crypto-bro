@@ -18,6 +18,34 @@ from ._connection import _Store, sqlite_connection
 
 
 class SourceRepositoryImpl(_Store):
+    async def get_source_history_cursor(self, channel_id: int) -> int | None:
+        row = await self._fetch(
+            "SELECT message_id FROM source_history_cursors WHERE channel_id=?",
+            (channel_id,),
+        )
+        return int(row[0]) if row is not None else None
+
+    async def save_source_history_cursor(
+        self, channel_id: int, message_id: int
+    ) -> None:
+        if message_id < 0:
+            raise ValueError("Source history cursor must not be negative")
+        async with sqlite_connection(self._database_path) as db:
+            await db.execute(
+                "INSERT INTO source_history_cursors(channel_id,message_id) VALUES (?,?) "
+                "ON CONFLICT(channel_id) DO UPDATE SET "
+                "message_id=MAX(message_id,excluded.message_id),updated_at=CURRENT_TIMESTAMP",
+                (channel_id, message_id),
+            )
+            await db.commit()
+
+    async def source_completed(self, channel_id: int, message_id: int) -> bool:
+        row = await self._fetch(
+            "SELECT status FROM source_messages WHERE channel_id=? AND message_id=?",
+            (channel_id, message_id),
+        )
+        return row is not None and row[0] == "COMPLETED"
+
     async def record_source_decision(
         self,
         source: SourceMessage,

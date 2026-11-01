@@ -8,7 +8,7 @@ from test_zone_ledger_integration import account, fill, zones
 
 from cautious_crypto_bro.bybit.normalize import account_order_from_item
 from cautious_crypto_bro.domain import Side
-from cautious_crypto_bro.storage import IntentStore
+from cautious_crypto_bro.storage import LATEST_SCHEMA_VERSION, IntentStore
 from cautious_crypto_bro.zone_ledger import ZoneOrder
 
 pytestmark = pytest.mark.integration
@@ -116,7 +116,9 @@ def test_distinct_stops_and_parent_quantities_survive_restart_without_writes(
         ] is None
         with sqlite3.connect(database) as db:
             assert list(db.iterdump()) == before
-            assert db.execute("PRAGMA user_version").fetchone() == (15,)
+            assert db.execute("PRAGMA user_version").fetchone() == (
+                LATEST_SCHEMA_VERSION,
+            )
 
     asyncio.run(run())
 

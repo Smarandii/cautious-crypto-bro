@@ -24,7 +24,10 @@ from cautious_crypto_bro.dashboard_feed import (  # noqa: E402
 
 
 @pytest.mark.integration
-def test_partial_closes_publish_one_complete_trade_without_private_lineage(tmp_path):
+@pytest.mark.parametrize("symbol", ["BTCUSDT", "HUSDT", "QUSDT"])
+def test_partial_closes_publish_one_complete_trade_without_private_lineage(
+    tmp_path, symbol
+):
     bundle = tmp_path / "trades.zip"
     private = "PRIVATE_SOURCE_CANARY"
     lineage = {
@@ -32,7 +35,7 @@ def test_partial_closes_publish_one_complete_trade_without_private_lineage(tmp_p
             {
                 "intent_id": private,
                 "entry_order_ids": [private],
-                "intent": {"symbol": "BTCUSDT", "side": "LONG", "stop_loss": "90"},
+                "intent": {"symbol": symbol, "side": "LONG", "stop_loss": "90"},
                 "metadata": {"risk_per_trade_pct": 1, "source_channel_id": private},
             }
         ]
@@ -51,7 +54,7 @@ def test_partial_closes_publish_one_complete_trade_without_private_lineage(tmp_p
         ],
         "bybit/closed_pnl.jsonl": [
             {
-                "symbol": "BTCUSDT",
+                "symbol": symbol,
                 "side": "Sell",
                 "updatedTime": str(time),
                 "closedSize": "1",
@@ -83,7 +86,7 @@ def test_partial_closes_publish_one_complete_trade_without_private_lineage(tmp_p
     assert result["total_completed"] == 1
     assert result["rows"] == [
         {
-            "symbol": "BTCUSDT",
+            "symbol": symbol,
             "side": "LONG",
             "quantity": 2.0,
             "net_pnl_usdt": 8.0,
@@ -187,3 +190,53 @@ def test_bounded_rows_are_newest_first_and_omissions_are_explicit():
     assert [row["net_pnl_usdt"] for row in result["rows"]] == [3000, 2000]
     assert result["total_completed"] == 3
     assert result["omitted_count"] == 1
+
+
+@pytest.mark.parametrize("symbol", ["HUSDT", "QUSDT"])
+def test_final_public_contract_accepts_one_letter_assets(symbol):
+    history = public_trade_history(
+        [{"complete": True, "symbol": "BTCUSDT", "side": "LONG"}], available=True
+    )
+    history["as_of"] = None
+    history["rows"][0]["symbol"] = symbol
+    feed = public_feed_from_snapshot(
+        {
+            "generated_at": "2026-10-31T00:00:00+00:00",
+            "risk": {},
+            "trade_history": history,
+        }
+    )
+    assert validate_public_feed(feed)["trade_history"]["rows"][0]["symbol"] == symbol
+
+
+@pytest.mark.parametrize(
+    "symbol",
+    [
+        "USDT",
+        "hUSDT",
+        "H USDT",
+        "H/USDT",
+        "<H>USDT",
+        "HUSDT\n",
+        "H" * 41 + "USDT",
+        "HUSDC",
+    ],
+)
+def test_both_public_boundaries_reject_malformed_symbols(symbol):
+    with pytest.raises(ValueError, match="symbol"):
+        public_trade_history(
+            [{"complete": True, "symbol": symbol, "side": "LONG"}], available=True
+        )
+    history = public_trade_history(
+        [{"complete": True, "symbol": "BTCUSDT", "side": "LONG"}], available=True
+    )
+    history["as_of"] = None
+    history["rows"][0]["symbol"] = symbol
+    with pytest.raises(ValueError, match="symbol"):
+        public_feed_from_snapshot(
+            {
+                "generated_at": "2026-10-31T00:00:00+00:00",
+                "risk": {},
+                "trade_history": history,
+            }
+        )

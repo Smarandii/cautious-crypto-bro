@@ -40,6 +40,7 @@ from .approval_presenter import (
     render_action_outcome,
     render_operator_attention,
     render_position_action,
+    source_line,
 )
 from .bybit import UNMATCHED_IP_REASON
 from .cancellation import finish_before_cancellation
@@ -560,6 +561,17 @@ class ApprovalBot:
                 exposure_error=exposure_error,
             ),
             reply_markup=keyboard,
+        )
+
+    async def send_expired_position_action(self, action: PositionActionIntent) -> None:
+        await self._send_html(
+            "<b>EXPIRED LIFECYCLE INSTRUCTION — RECORDED ONLY</b>\n\n"
+            f"{html.escape(action.action.value)} {html.escape(action.symbol)}\n"
+            f"Published: {html.escape(action.source.published_at.isoformat())}\n"
+            "The lifecycle approval deadline passed before delivery. "
+            "No exchange action was sent.\n\n"
+            f"Trader: <b>{html.escape(action.source.channel_title)}</b>\n"
+            f"{source_line(action.source.telegram_url)}"
         )
 
     async def send_position_action(

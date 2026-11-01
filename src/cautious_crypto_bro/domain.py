@@ -513,6 +513,9 @@ class SourceMessage(BaseModel):
     published_at: datetime
     received_at: datetime
     text: str
+    recovery_review_reason: str | None = Field(
+        default=None, min_length=1, max_length=300
+    )
 
     @property
     def telegram_url(self) -> str | None:
@@ -833,6 +836,9 @@ class PositionActionIntent(BaseModel):
             raise ValueError("Only REDUCE may contain close_pct")
 
         return self
+
+    def age_seconds(self, now: datetime) -> float:
+        return (now - min(self.created_at, self.source.published_at)).total_seconds()
 
 
 @dataclass(frozen=True, slots=True)

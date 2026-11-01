@@ -702,8 +702,7 @@ class ExecutionCoordinator:
         user_id: int | None,
     ) -> tuple[PositionActionIntent, PositionActionExecutionOutcome | None]:
         # Re-extraction after an outage must not freshen an old close instruction.
-        action_time = min(action.created_at, action.source.published_at)
-        age = (datetime.now(UTC) - action_time).total_seconds()
+        age = action.age_seconds(datetime.now(UTC))
 
         if age > self._max_age_seconds:
             claimed = await self._store.claim_position_action_for_execution(

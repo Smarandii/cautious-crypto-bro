@@ -10,12 +10,7 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
-## [2.2.42] - 2026-10-31
-
-### Security
-
-- Update the existing pyasn1 dependency to 0.6.5 to address upstream quadratic
-  decoder work on crafted ASN.1 input (#302, Dependabot #301).
+## [2.2.45] - 2026-11-01
 
 ### Fixed
 
@@ -36,18 +31,107 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 - Add 15 real SQLite/native HTTP integration cases for both directions, recent
   and older allocations, late older enrollment, unknown clocks, cached query
   state, moving-boundary pagination, restart and explicit retention limits.
-- On disposable copies of one production snapshot, a complete eligible-lane
+- On disposable copies of an earlier production snapshot, a complete eligible-lane
   sweep reserves 8 query slots rather than12: six recent plus two archive lanes,
   compared with six of each. The existing request-rate/page ceilings are
   unchanged; this reallocates capacity to relevant reads rather than claiming
   a lower live request rate. Frozen ledger tables remain identical, with zero
   exchange API calls and no writes to the live database during comparison.
-- Schema15 and existing persisted query rows remain readable; the allocation
+- Schema16 and existing persisted query rows remain readable; the allocation
   boundary is transient and recomputed after restart. No migration, dependency,
   risk, entry/exit policy or exchange mutation is introduced. Older versions
   retain state readability but can repeat irrelevant reads or miss delayed
   archive fills at the moving boundary. Multi-zone activation remains disabled;
   #123, #245, #248 and the full #262 audit retain their outstanding scope.
+
+
+## [2.2.44] - 2026-10-31
+
+### Fixed
+
+- Already expired manual lifecycle instructions are recorded as SKIPPED before
+  delivery and shown as informational notices, without Execute controls or
+  repeated account previews (#308). This includes historical CLOSE/REDUCE/
+  CANCEL_ENTRIES posts recovered after an outage; no exchange call is made.
+- Reuse the original publication/creation-aware lifecycle age calculation and
+  configured deadline. Unexpired manual approvals still work, with the existing
+  execution-boundary expiry check retained if a card expires after delivery.
+  OPEN age policy, risk budgets, entry TTL and exits are unchanged.
+- Retain source/model evidence and the frozen action payload. Expired notices
+  use existing durable delivery leases and retry after a failed send/restart;
+  competing senders do not duplicate them. Execution claims are not overwritten.
+
+### Validation and compatibility
+
+- Real SQLite/service/bot/exchange-boundary regressions cover all three lifecycle
+  actions, configurable deadlines, failed-send restart, competing workers,
+  expiry after valid delivery, and an already claimed execution.
+- Schema16 stays unchanged; no migration or new dependency. Older schema16 code
+  reads the records but does not retry undelivered expired notices, so reconcile
+  that queue on rollback. Do not reset completed delivery receipts or replay
+  historical instructions. Already sent cards are not retroactively edited.
+- Source recovery #306 remains delivered, with known interpretation/history
+  limits. Pending #300/MR #303, natural profit magnitude #248 and full invasive
+  audit #262 remain open.
+
+## [2.2.43] - 2026-10-31
+
+### Fixed
+
+- Resume Telegram catch-up from a durable chronological per-channel cursor
+  instead of discarding progress on restart (#306). Advance it only after
+  source processing completes; newer live events do not certify earlier posts.
+  Failed/in-flight posts and failed cursor commits remain retryable while
+  unaffected channels continue. Completed sources skip repeat media/model work.
+- On first enrollment without a saved cursor, inspect a bounded 24-hour
+  bootstrap window (or the longer configured startup lookback). Posts outside
+  the configured automatic startup window require MANUAL approval for OPEN,
+  CLOSE, REDUCE and CANCEL_ENTRIES. Preserve this reason in source/decision and
+  intent/action evidence, and show a human-review warning in approval cards.
+- Keep fresh-post routing, risk budgets, entry TTL and exits unchanged. Recovery
+  does not authorize historical orders or turn live receipt into coverage proof.
+
+### Validation and compatibility
+
+- Real SQLite/model/Telegram/exchange-boundary integration covers both entry
+  directions, old-versus-fresh routing, lifecycle instructions, model failure,
+  in-flight/live ordering, failed cursor writes, delayed visibility beyond the
+  bootstrap window, independent sources, boundary albums and process restarts.
+- Additive schema16 creates source_history_cursors; schema15 migration preserves
+  existing trade/source/ledger rows. New source payloads carry an optional review
+  reason. Older schema15 readers require restoring a verified pre-migration
+  backup for rollback; do not lower user_version on the migrated live database.
+- Bootstrap cannot certify history older than its initial window. Deleted,
+  inaccessible or edited posts, extraction correctness, exchange execution and
+  profit magnitude remain separate verification limits. Pending execution
+  history #300/MR #303, #248 magnitude and #262 full audit remain open.
+
+## [2.2.42] - 2026-10-31
+
+### Fixed
+
+- Keep public trade publication working when completed trades include one-letter
+  base assets such as HUSDT or QUSDT (#304). Both the trade builder and final
+  public contract accept one to forty uppercase ASCII alphanumeric characters
+  before USDT. Previously one valid row could block the entire feed.
+- Preserve strict public field whitelists and malformed-symbol rejection;
+  source lineage and credentials remain excluded.
+
+### Security
+
+- Update the existing pyasn1 dependency to 0.6.5 to address upstream quadratic
+  decoder work on crafted ASN.1 input (#302, Dependabot #301).
+
+### Validation and compatibility
+
+- Add real forensic reconciliation/SQLite/feed integration for both one-letter
+  assets, direct final-contract regression cases and malformed-symbol checks at
+  both boundaries. Existing publication/privacy checks remain in place.
+- No migration, dependency addition, exchange mutation or trading-policy change.
+  Schema15 stays compatible. Rollback is readable but can block public
+  publication again when one-letter assets are present.
+- Execution-history work #300/MR #303 remains pending its separate checkpoint;
+  #248 natural profit magnitude and #262 full audit remain open.
 
 ## [2.2.41] - 2026-10-31
 

@@ -12,7 +12,11 @@ from test_workflow_integration import ExchangeTransport, workflow
 from cautious_crypto_bro.domain import AutoApprovalMode, IncomingPost
 from cautious_crypto_bro.llm_provider import LLMResponse
 from cautious_crypto_bro.source_coverage import coverage_summary
-from cautious_crypto_bro.storage import LATEST_SCHEMA_SQL, IntentStore
+from cautious_crypto_bro.storage import (
+    LATEST_SCHEMA_SQL,
+    LATEST_SCHEMA_VERSION,
+    IntentStore,
+)
 from cautious_crypto_bro.storage.schema import (
     PLANNING_CANDIDATE_SCHEMA_SQL,
     ZONE_HISTORY_SCHEMA_SQL,
@@ -38,7 +42,7 @@ def test_schema12_upgrade_preserves_sources_without_replaying_history(tmp_path):
     asyncio.run(IntentStore(database).initialize())
     asyncio.run(IntentStore(database).initialize())
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone() == (15,)
+        assert db.execute("PRAGMA user_version").fetchone() == (LATEST_SCHEMA_VERSION,)
         assert db.execute("PRAGMA quick_check").fetchone() == ("ok",)
         assert db.execute("SELECT * FROM source_messages").fetchall() == original
         assert db.execute("SELECT COUNT(*) FROM planning_candidates").fetchone() == (0,)

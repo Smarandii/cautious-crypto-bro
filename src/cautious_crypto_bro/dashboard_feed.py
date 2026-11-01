@@ -130,7 +130,7 @@ def _validate_history(value: object) -> None:
 def _validate_trade(value: object) -> None:
     row = _fields(value, TRADE_FIELDS)
     if not isinstance(row["symbol"], str) or not re.fullmatch(
-        r"[A-Z0-9]{2,40}USDT", row["symbol"]
+        r"[A-Z0-9]{1,40}USDT", row["symbol"]
     ):
         raise ValueError("Invalid public trade symbol")
     if row["side"] not in ("LONG", "SHORT"):

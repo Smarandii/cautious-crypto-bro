@@ -103,14 +103,16 @@ class ExchangeTransport(Exchange):
         return super().handle(request)
 
 
-def workflow(store, executor, provider, *, mode=AutoApprovalMode.OPEN_ONLY):
+def workflow(
+    store, executor, provider, *, mode=AutoApprovalMode.OPEN_ONLY, max_age=900
+):
     planner = ExecutionPlanner()
     lock = asyncio.Lock()
     coordinator = ExecutionCoordinator(
         store=store,
         executor=executor,
         planner=planner,
-        max_age_seconds=900,
+        max_age_seconds=max_age,
         execution_lock=lock,
     )
     bot = ApprovalBot(
@@ -129,6 +131,7 @@ def workflow(store, executor, provider, *, mode=AutoApprovalMode.OPEN_ONLY):
         coordinator=coordinator,
         context_provider=SignalContextProvider(store=store, executor=executor),
         auto_approval_mode=mode,
+        intent_max_age_seconds=max_age,
     )
     supervisor = PositionSupervisor(store=store, executor=executor, mutation_lock=lock)
     return service, bot, supervisor

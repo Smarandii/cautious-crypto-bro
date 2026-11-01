@@ -32,6 +32,9 @@ def _fake_application(monkeypatch, tmp_path, failed_reconciliation=None):
         return 0
 
     store = SimpleNamespace(
+        get_source_history_cursor=AsyncMock(return_value=None),
+        save_source_history_cursor=AsyncMock(),
+        source_completed=AsyncMock(return_value=True),
         pending_recovery_notices=AsyncMock(return_value=((), ())),
         acknowledge_recovery_notices=AsyncMock(),
         initialize=step("store.initialize"),

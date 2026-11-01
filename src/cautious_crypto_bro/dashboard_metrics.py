@@ -20,7 +20,7 @@ def public_trade_history(
     for position in complete:
         symbol, side = position.get("symbol"), position.get("side")
         if not isinstance(symbol, str) or not re.fullmatch(
-            r"[A-Z0-9]{2,40}USDT", symbol
+            r"[A-Z0-9]{1,40}USDT", symbol
         ):
             raise ValueError("Invalid public trade symbol")
         if side not in ("LONG", "SHORT"):

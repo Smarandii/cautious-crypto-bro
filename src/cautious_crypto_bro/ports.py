@@ -135,6 +135,10 @@ class AccountGateway(Protocol):
 
 
 class ApprovalSender(Protocol):
+    async def send_expired_position_action(
+        self, action: PositionActionIntent
+    ) -> None: ...
+
     async def send_account_snapshot(
         self,
         state: AccountStateSummary | None,
@@ -397,6 +401,10 @@ class IntentRepository(Protocol):
 
 
 class PositionActionRepository(Protocol):
+    async def prepare_manual_action_delivery(
+        self, action_id: UUID, *, max_age_seconds: int
+    ) -> PositionActionIntent | None: ...
+
     async def get_position_action(
         self,
         action_id: UUID,
