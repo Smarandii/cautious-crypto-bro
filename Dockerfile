@@ -2,7 +2,7 @@
 # Dependabot tracks both upstream images and their immutable digests.
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58 AS uv
 
-FROM python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70 AS os
+FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 AS os
 # The official image can lag Debian security updates (CVE-2026-84782).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --only-upgrade libssl3 openssl \
