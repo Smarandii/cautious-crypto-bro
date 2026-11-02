@@ -290,6 +290,10 @@ See [STRATEGY.md](STRATEGY.md) for execution rules, [TESTING.md](TESTING.md) for
 checks and operations, [CHANGELOG.md](CHANGELOG.md) for release history, and
 [TODO.md](TODO.md) for remaining work.
 
+The [original-source interpretation audit](docs/source-interpretation-audit-2026-10-31.md)
+separates verified input provenance, recorded decisions, manual interpretation
+judgments and unresolved participation questions for a fixed 42-post cohort.
+
 ## Contributing
 
 GPL-3.0-only. See [CONTRIBUTING.md](CONTRIBUTING.md) for the quality gate and
