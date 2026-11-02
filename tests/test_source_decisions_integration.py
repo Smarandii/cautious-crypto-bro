@@ -5,13 +5,14 @@ from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
+from uuid import UUID
 
 import aiosqlite
 import pytest
 from test_remaining_concerns import executor_for, make_intent
 from test_workflow_integration import ExchangeTransport, workflow
 
-from cautious_crypto_bro.domain import IncomingPost
+from cautious_crypto_bro.domain import ImageAttachment, IncomingPost
 from cautious_crypto_bro.llm_provider import LLMResponse
 from cautious_crypto_bro.signals.extraction import IntentExtractor
 from cautious_crypto_bro.source_coverage import (
@@ -222,6 +223,7 @@ def test_planning_rejection_kind_is_aggregate_and_non_identifying(error, expecte
         ("planning", "PLANNING_REJECTED"),
         ("transport", "UNRESOLVED"),
         ("executed", "EXECUTED"),
+        ("caption_promo_entry", "EXECUTED"),
     ],
 )
 def test_original_decisions_survive_restart_without_model_or_cache(
@@ -257,7 +259,7 @@ def test_original_decisions_survive_restart_without_model_or_cache(
                         }
                         for symbol in ("BTCUSDT", "ETHUSDT")
                     ]
-            elif case in {"planning", "transport", "executed"}:
+            elif case in {"planning", "transport", "executed", "caption_promo_entry"}:
                 response.update(
                     actionable=True,
                     intents=[
@@ -272,6 +274,9 @@ def test_original_decisions_survive_restart_without_model_or_cache(
                         }
                     ],
                 )
+                if case == "caption_promo_entry":
+                    assert len(request.images) == 1
+                    response["intents"][0].pop("stop_loss")
             return LLMResponse(json.dumps(response))
 
         async def close(self):
@@ -282,6 +287,8 @@ def test_original_decisions_survive_restart_without_model_or_cache(
         store = IntentStore(database)
         await store.initialize()
         caption = "Закрываем" if case == "ambiguous_image_actions" else "Enter now"
+        if case == "caption_promo_entry":
+            caption = "I have just opened BTCUSDT LONG at market."
         source = make_intent().source.model_copy(update={"text": caption})
         provider = Model()
         exchange = ExchangeTransport()
@@ -298,7 +305,19 @@ def test_original_decisions_survive_restart_without_model_or_cache(
                         if case == "transport"
                         else nullcontext()
                     ):
-                        await service.on_message(IncomingPost(source=source))
+                        images = (
+                            (
+                                ImageAttachment(
+                                    media_type="image/png",
+                                    data=b"synthetic external-image boundary",
+                                ),
+                            )
+                            if case == "caption_promo_entry"
+                            else ()
+                        )
+                        await service.on_message(
+                            IncomingPost(source=source, images=images)
+                        )
                 assert provider.calls == 1
                 if case in {"planning", "transport"}:
                     assert exchange.orders == {}
@@ -358,8 +377,20 @@ def test_original_decisions_survive_restart_without_model_or_cache(
                 ) == [(0,)]
             if case == "planning":
                 assert decision["planning"]["errors"]
-            if case == "executed":
+            if case in {"executed", "caption_promo_entry"}:
                 assert decision["planning"]["planned_intent_ids"]
+            if case == "caption_promo_entry":
+                normalized = decision["normalized"]["open_intents"][0]
+                assert all(
+                    normalized[field] is None
+                    for field in ("stop_loss", "take_profit", "leverage")
+                )
+                plan = await store.get_execution_plan(UUID(normalized["intent_id"]))
+                assert plan is not None
+                assert plan.stop_loss_source.value == "POLICY"
+                assert plan.take_profit_source.value == "POLICY"
+                assert plan.leverage != Decimal("50")
+                assert exchange.size > 0 and exchange.stop > 0
         summary = await coverage_summary(
             database, since=datetime.now(UTC) - timedelta(days=1)
         )

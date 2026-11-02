@@ -10,6 +10,39 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.53] - 2026-11-02
+
+### Fixed
+
+- Clarify that promotional-image exclusion does not veto an independent,
+  explicit current-caption entry (#319). Candidate fields must come from the
+  caption; historical marketing prices, direction, leverage and ROI remain
+  unusable as live entry facts. Missing protection fields still use planner
+  defaults, with admission and execution protections unchanged.
+- Clarify that matching copied source history does not turn a plain current
+  entry declaration into ADD_OR_REENTRY. Explicit add/again/re-entry wording
+  remains required; matching already-copied observations stay UPDATE_EXISTING.
+  Actual live-panel copying remains distinct from promotional-card evidence.
+
+### Validation and compatibility
+
+- Real-provider development checks use wholly invented captions/posters and
+  trusted context: seven core cases, nine additional direction/entry/field/
+  ownership cases, four prior live-panel cases and eight prior lifecycle cases.
+  The baseline English caption varied without code changes; the copied-trade
+  control failed. Candidate checks are bounded semantic evidence, not a held-out
+  recall estimate or a guarantee of future model compliance/profitability.
+- Extend existing source/service/SQLite coverage to verify that an image-bearing
+  caption candidate with no protection/leverage facts reaches persisted policy
+  defaults and synthetic execution. No prompt-text mirror unit tests. Prompt
+  content already participates in evaluation fingerprints; no cache purge or
+  historical source replay is needed or performed.
+- Schema16, frozen records, dependencies, risk and entry/exit policy are unchanged.
+  Retain restore-verified backup and the prior image for rollback; rollback can
+  restore the earlier interpretation behavior. No migration, private-source
+  upload or live synthetic order. #316's remaining original-post audit, #248's
+  natural profit magnitude, #123/#312 zones and the full #262 audit remain open.
+
 ## [2.2.52] - 2026-11-02
 
 ### Fixed

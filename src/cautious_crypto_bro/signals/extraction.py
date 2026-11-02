@@ -59,6 +59,10 @@ Position relationship rules:
   same symbol and side
 - ADD_OR_REENTRY means the trader explicitly adds, re-enters, or opens again
   despite an existing copied/in-flight position
+- Existing copied/in-flight history does not turn a plain "I just opened"
+  declaration into ADD_OR_REENTRY. Without explicit add/again/re-entry wording,
+  classify the matching already-copied trade as UPDATE_EXISTING. With no matching
+  copied/in-flight history, an explicit current entry declaration may be NEW.
 - UPDATE_EXISTING means the current screenshot/text is only reporting,
   showing progress, or updating SL/TP/status for a position already copied
   from this source
@@ -105,10 +109,15 @@ OPEN trade rules:
   symbols with historical open/current prices, QR codes, referral/partner
   codes and broker marketing branding as non-actionable marketing. Do not emit
   an OPEN from them even when they visually resemble a position panel.
-- A screenshot may authorize a NEW OPEN only when it is an actual exchange
+- This image exclusion does not veto independent current-caption entry evidence.
+  If the caption explicitly says enter now/at market or that the author just
+  opened a named symbol and side, preserve that candidate using caption facts
+  only. Leave absent stop/target/leverage omitted; never borrow prices, direction
+  or leverage from the promotional card. Still apply the trusted source
+  relationship rules; marketing cannot justify a new entry or an inferred add.
+- A screenshot alone may authorize a NEW OPEN only when it is an actual exchange
   position/order panel for a current position (with current entry/mark/liq/size
-  or position controls), or when the current caption explicitly instructs an
-  entry. Do not treat testimonials, promo posters or historical recap tables as
+  or position controls). Do not treat testimonials, promo posters or historical recap tables as
   live exchange panels.
 - If the caption is empty and the images are only promotional recaps, return
   actionable=false; do not infer leverage or entry from marketing badges.
