@@ -67,6 +67,35 @@ pytestmark = pytest.mark.integration
             "CLOSE",
             [("ETHUSDT", None)],
         ),
+        ("Cancel BTCUSDT entries tomorrow", "CANCEL_ENTRIES", []),
+        ("Cancel BTCUSDT entries if price falls below 90", "CANCEL_ENTRIES", []),
+        ("If price falls below 90, cancel BTCUSDT entries", "CANCEL_ENTRIES", []),
+        ("Отменяем лимитные ордера BTCUSDT завтра", "CANCEL_ENTRIES", []),
+        (
+            "Отменяем лимитные ордера BTCUSDT, если цена упадет",
+            "CANCEL_ENTRIES",
+            [],
+        ),
+        ("BTCUSDT\nCancel entries tomorrow", "CANCEL_ENTRIES", []),
+        ("BTCUSDT tomorrow\nCancel entries", "CANCEL_ENTRIES", []),
+        ("Cancel BTCUSDT entries now", "CANCEL_ENTRIES", [("BTCUSDT", None)]),
+        (
+            "Отменяем лимитные ордера BTCUSDT сейчас",
+            "CANCEL_ENTRIES",
+            [("BTCUSDT", None)],
+        ),
+        ("Do not cancel BTCUSDT entries now", "CANCEL_ENTRIES", []),
+        (
+            "Cancel BTCUSDT entries tomorrow. Cancel ETHUSDT entries now",
+            "CANCEL_ENTRIES",
+            [("ETHUSDT", None)],
+        ),
+        (
+            "Отменяем лимитные ордера BTCUSDT завтра\n"
+            "Отменяем лимитные ордера ETHUSDT сейчас",
+            "CANCEL_ENTRIES",
+            [("ETHUSDT", None)],
+        ),
     ],
 )
 def test_caption_time_qualification_precedes_action_persistence(
@@ -137,7 +166,9 @@ def test_caption_time_qualification_precedes_action_persistence(
                 for payload, _ in rows
             ] == expected
             assert [status for _, status in rows] == [
-                "PENDING" if symbol == "BTCUSDT" else "SKIPPED"
+                "PENDING"
+                if symbol == "BTCUSDT" or action == "CANCEL_ENTRIES"
+                else "SKIPPED"
                 for symbol, _ in expected
             ]
             assert len(decision["extraction"]["position_actions"]) >= len(expected)
