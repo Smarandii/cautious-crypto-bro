@@ -212,10 +212,12 @@ def test_lifecycle_alias_is_bound_to_its_source_history(
         with executor_for(ContractExchange()) as executor:
             service, bot, _ = workflow(store, executor, ContractModel())
             try:
-                resolved = service._planning.plan_position_actions(
-                    SignalExtraction(position_actions=(action,)),
-                    account_state=None,
-                    position_context=context,
+                resolved = (
+                    await service._planning.plan_position_actions(
+                        SignalExtraction(position_actions=(action,)),
+                        account_state=None,
+                        position_context=context,
+                    )
                 )[0]
                 assert resolved.symbol == expected
                 assert resolved.action_id == action.action_id

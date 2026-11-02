@@ -821,7 +821,7 @@ class SignalPlanning:
             )
             return None
 
-    def plan_position_actions(
+    async def plan_position_actions(
         self,
         signals: SignalExtraction,
         *,
@@ -844,7 +844,7 @@ class SignalPlanning:
             )
             for action in signals.position_actions
         )
-        return tuple(
+        planned = tuple(
             action.model_copy(
                 update={
                     "approval_mode": (
@@ -857,3 +857,41 @@ class SignalPlanning:
             )
             for action in actions
         )
+        reviewed = []
+        for action in planned:
+            held_symbol = account_state is not None and any(
+                p.symbol == action.symbol for p in account_state.positions
+            )
+            expired = (
+                action.age_seconds(datetime.now(UTC)) > self._intent_max_age_seconds
+            )
+            if (
+                action.action is PositionActionType.CANCEL_ENTRIES
+                or expired
+                or held_symbol
+            ):
+                reviewed.append(action)
+                continue
+            try:
+                await self._executor.market_context(action.symbol)
+            except Exception as exc:
+                # Never guess a replacement ticker or block a held-position exit
+                # on metadata. Unknown unmatched symbols need human evidence review.
+                logger.warning(
+                    "Unmatched lifecycle contract %s needs review (%s)",
+                    action.symbol,
+                    type(exc).__name__,
+                )
+                action = action.model_copy(
+                    update={
+                        "approval_mode": ApprovalMode.MANUAL,
+                        "status": IntentStatus.SKIPPED,
+                        "contract_review_reason": (
+                            "Exchange contract verification unavailable "
+                            f"({type(exc).__name__}). Verify the original source ticker "
+                            "and account directly; no replacement symbol was chosen."
+                        ),
+                    }
+                )
+            reviewed.append(action)
+        return tuple(reviewed)

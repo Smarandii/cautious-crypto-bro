@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from ..domain import ApprovalMode, IntentStatus
 from ._connection import _Store, sqlite_connection
-from .position_action import EXPIRED_ACTION_ERROR
+from .position_action import CONTRACT_REVIEW_PREFIX, EXPIRED_ACTION_ERROR
 
 
 class ManualDeliveryRepositoryImpl(_Store):
@@ -19,10 +19,11 @@ class ManualDeliveryRepositoryImpl(_Store):
                WHERE d.delivered_at IS NULL
                  AND (d.retry_after IS NULL OR d.retry_after <= CURRENT_TIMESTAMP)
                  AND (COALESCE(i.status, a.status) = 'PENDING'
-                      OR (d.kind='ACTION' AND a.status='SKIPPED' AND a.error=?))
+                      OR (d.kind='ACTION' AND a.status='SKIPPED'
+                          AND (a.error=? OR a.error LIKE ?)))
                  AND COALESCE(i.approval_mode, a.approval_mode) = 'MANUAL'
                ORDER BY COALESCE(i.created_at, a.created_at) LIMIT 100""",
-            (EXPIRED_ACTION_ERROR,),
+            (EXPIRED_ACTION_ERROR, CONTRACT_REVIEW_PREFIX + "%"),
             many=True,
         )
         return tuple((UUID(row[0]), row[1]) for row in rows)

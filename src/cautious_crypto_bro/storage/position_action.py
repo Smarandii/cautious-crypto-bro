@@ -18,6 +18,7 @@ from ._shared import SharedRepositoryMixin
 EXPIRED_ACTION_ERROR = (
     "Lifecycle instruction expired before approval; no exchange action sent"
 )
+CONTRACT_REVIEW_PREFIX = "Unverified lifecycle contract: "
 
 
 class PositionActionRepositoryImpl(SharedRepositoryMixin, _Store):
@@ -37,8 +38,19 @@ class PositionActionRepositoryImpl(SharedRepositoryMixin, _Store):
             if row is None or row[2] != ApprovalMode.MANUAL.value:
                 return None
             action = PositionActionIntent.model_validate_json(row[0])
-            if row[1] == IntentStatus.SKIPPED.value and row[3] == EXPIRED_ACTION_ERROR:
-                return action.model_copy(update={"status": IntentStatus.SKIPPED})
+            if row[1] == IntentStatus.SKIPPED.value:
+                if row[3] == EXPIRED_ACTION_ERROR or (row[3] or "").startswith(
+                    CONTRACT_REVIEW_PREFIX
+                ):
+                    return action.model_copy(
+                        update={
+                            "status": IntentStatus.SKIPPED,
+                            "contract_review_reason": self._contract_review_reason(
+                                row[3]
+                            ),
+                        }
+                    )
+                return None
             if row[1] != IntentStatus.PENDING.value:
                 return None
             if action.age_seconds(datetime.now(UTC)) <= max_age_seconds:
@@ -59,7 +71,7 @@ class PositionActionRepositoryImpl(SharedRepositoryMixin, _Store):
     ) -> PositionActionIntent | None:
         row = await self._fetch(
             """
-            SELECT payload_json, status, approval_mode
+            SELECT payload_json, status, approval_mode, error
             FROM position_actions
             WHERE action_id = ?
             """,
@@ -76,8 +88,15 @@ class PositionActionRepositoryImpl(SharedRepositoryMixin, _Store):
             update={
                 "status": IntentStatus(row["status"]),
                 "approval_mode": ApprovalMode(row["approval_mode"]),
+                "contract_review_reason": self._contract_review_reason(row["error"]),
             }
         )
+
+    @staticmethod
+    def _contract_review_reason(error: str | None) -> str | None:
+        if error and error.startswith(CONTRACT_REVIEW_PREFIX):
+            return error.removeprefix(CONTRACT_REVIEW_PREFIX)
+        return None
 
     async def claim_position_action_for_execution(
         self,

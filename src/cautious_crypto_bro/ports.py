@@ -135,6 +135,10 @@ class AccountGateway(Protocol):
 
 
 class ApprovalSender(Protocol):
+    async def send_unverified_position_action(
+        self, action: PositionActionIntent
+    ) -> None: ...
+
     async def send_expired_position_action(
         self, action: PositionActionIntent
     ) -> None: ...

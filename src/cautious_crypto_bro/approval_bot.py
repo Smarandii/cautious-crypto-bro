@@ -563,6 +563,19 @@ class ApprovalBot:
             reply_markup=keyboard,
         )
 
+    async def send_unverified_position_action(
+        self, action: PositionActionIntent
+    ) -> None:
+        await self._send_html(
+            "<b>LIFECYCLE CONTRACT NEEDS REVIEW — HUMAN REVIEW REQUIRED</b>\n\n"
+            f"{html.escape(action.action.value)} {html.escape(action.symbol)}\n"
+            f"{html.escape(action.contract_review_reason or '')}\n"
+            "This instruction was recorded without execution. "
+            "No exchange action was sent.\n\n"
+            f"Trader: <b>{html.escape(action.source.channel_title)}</b>\n"
+            f"{source_line(action.source.telegram_url)}"
+        )
+
     async def send_expired_position_action(self, action: PositionActionIntent) -> None:
         await self._send_html(
             "<b>EXPIRED LIFECYCLE INSTRUCTION — RECORDED ONLY</b>\n\n"
