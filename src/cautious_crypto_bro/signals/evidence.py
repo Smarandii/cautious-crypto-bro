@@ -470,6 +470,9 @@ def _cancel_entries_evidence(
             previous = clauses[index - 1]
             tickers = re.findall(r"\b[0-9]*[A-Z][A-Z0-9]{1,14}\b", previous)
             scope = _normalize_evidence_text(previous) + ". " + normalized
+        if _NON_CURRENT_ACTION_PATTERN.search(scope):
+            # Timing in a ticker header also qualifies its cancellation command.
+            continue
         variants = _symbol_close_variants(symbol)
         if tickers and all(t.lower() in variants for t in tickers):
             return scope

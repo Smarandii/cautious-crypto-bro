@@ -10,6 +10,34 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.52] - 2026-11-02
+
+### Fixed
+
+- Apply the existing complete-scope timing guard to CANCEL_ENTRIES evidence
+  (#335), including a preceding ticker header used to bind the command.
+  Supported future/conditional/historical cancellation wording cannot become
+  an immediate action if the model omits its qualifier.
+- Preserve immediate same-source cancellation, symbol/ownership binding,
+  negation and independent valid sibling clauses. Reuse the CLOSE/REDUCE
+  timing vocabulary without adding conditional scheduling or changing the
+  execution layer's entry ownership and native protection checks.
+
+### Validation and compatibility
+
+- Extend the source/service/SQLite timing regression to English/Russian
+  cancellations, qualifier placement, narrowed model excerpts, ticker headers,
+  negation and valid sibling clauses. Retain source recovery, entry-cancellation
+  ownership and manual lifecycle smoke coverage; inputs and external
+  transports are synthetic, with no live synthetic orders or history replay.
+- Schema16, frozen records, dependencies, risk and entry/exit policy are
+  unchanged; no migration or private-source upload. Retain restore-verified
+  backup and the previous image for rollback. Old records are not reinterpreted;
+  rollback can again accept qualified cancellation instructions. The existing
+  finite timing vocabulary is not a complete natural-language temporal parser.
+- #319/#316 interpretation coverage, #248 natural profit magnitude, #123/#312
+  independent zones and the full #262 architecture/UI audit remain unfinished.
+
 ## [2.2.51] - 2026-11-02
 
 ### Fixed
