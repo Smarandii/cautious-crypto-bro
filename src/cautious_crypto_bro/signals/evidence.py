@@ -64,6 +64,16 @@ _SHORTHAND_REDUCE_PATTERN = re.compile(
 )
 
 
+_NON_CURRENT_ACTION_PATTERN = re.compile(
+    r"\b(?:"
+    r"if|unless|when|once|until|after|before|later|tomorrow|yesterday|"
+    r"previously|earlier|will|would|"
+    r"если|когда|при|после|перед|потом|позже|завтра|вчера|ранее|раньше|через|"
+    r"будем|буду"
+    r")\b"
+)
+
+
 _REDUCE_INSTRUCTION_PATTERNS: tuple[
     re.Pattern[str],
     ...,
@@ -295,14 +305,9 @@ def _deterministic_action_evidence(
     if not normalized:
         return None
 
-    if (
-        _SUGGESTED_REDUCE_PATTERN.search(normalized)
-        or _SHORTHAND_REDUCE_PATTERN.search(normalized)
-    ) and re.search(
-        r"\b(?:если|когда|при|после|потом|позже|завтра|вчера)\b", normalized
-    ):
-        # A suggestion tied to a future condition or a recap is not an action
-        # now, and must not fall through to the generic CLOSE matcher either.
+    if _NON_CURRENT_ACTION_PATTERN.search(normalized):
+        # Check the complete source clause before any action-prefix match.
+        # A model excerpt cannot remove a condition or make a recap current.
         return None
 
     if any(pattern.search(normalized) for pattern in _LIFECYCLE_NEGATION_PATTERNS):

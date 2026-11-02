@@ -10,6 +10,36 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.51] - 2026-11-02
+
+### Fixed
+
+- Check conditional, deferred and historical qualifiers in the complete current
+  caption clause before accepting CLOSE/REDUCE action prefixes (#322). A model
+  excerpt that omits "if", "tomorrow" or their supported Russian equivalents
+  cannot authorize an immediate action. This extends the existing timing check
+  beyond Russian shorthand/suggested reductions to all close/reduce phrases.
+- Preserve independent immediate instructions in other clauses, source-based
+  partial-close amounts, negation and the separate execution freshness and
+  live-position eligibility checks. This does not schedule conditional actions
+  or infer that a price trigger has already occurred.
+
+### Validation and compatibility
+
+- Synthetic source/service/SQLite regressions reproduce the original failure
+  before the fix and cover qualifier placement, deliberately narrowed model
+  evidence, English/Russian commands, partial sizes, negation, sibling clauses
+  and persistence across restart. Existing recovery and lifecycle smoke tests
+  retain expired notices without Execute controls.
+- Schema16 and frozen records remain readable; no migration, dependency, risk,
+  entry/exit change, historical replay, private-source upload or live synthetic
+  order. Restore-verified backup and the previous image remain the rollback
+  path. Old records are not retroactively reinterpreted; rollback can again
+  accept these qualified clauses. This finite deterministic language guard is
+  not a complete natural-language temporal parser or evidence of model recall.
+- #319/#316 interpretation coverage, #248 natural profit magnitude, #123/#312
+  independent zones and the full #262 architecture/UI audit remain unfinished.
+
 ## [2.2.50] - 2026-11-02
 
 ### Changed

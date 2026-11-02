@@ -3,6 +3,7 @@ import json
 import sqlite3
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import aiosqlite
@@ -29,6 +30,122 @@ from cautious_crypto_bro.storage.schema import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize(
+    "caption, action, expected",
+    [
+        ("Close BTCUSDT if price reaches 120", "CLOSE", []),
+        ("If price reaches 120, close BTCUSDT", "CLOSE", []),
+        ("Close BTCUSDT when price reaches 120", "CLOSE", []),
+        ("Close BTCUSDT unless price recovers", "CLOSE", []),
+        ("Close BTCUSDT after TP1", "CLOSE", []),
+        ("Close BTCUSDT tomorrow", "CLOSE", []),
+        ("Close BTCUSDT later", "CLOSE", []),
+        ("Yesterday: close BTCUSDT was the instruction", "CLOSE", []),
+        ("We will close BTCUSDT", "CLOSE", []),
+        ("Закрываем BTCUSDT, если цена достигнет 120", "CLOSE", []),
+        ("Закрываем BTCUSDT завтра", "CLOSE", []),
+        ("Вчера рекомендовал: закрыть BTCUSDT", "CLOSE", []),
+        ("Reduce BTCUSDT 30% if price reaches 120", "REDUCE", []),
+        ("Reduce BTCUSDT 30% tomorrow", "REDUCE", []),
+        ("Закрываем BTCUSDT 30% после первого тейка", "REDUCE", []),
+        ("Закрываем BTCUSDT часть, когда цена достигнет 120", "REDUCE", []),
+        ("Close BTCUSDT now", "CLOSE", [("BTCUSDT", None)]),
+        ("Закрываем BTCUSDT сейчас", "CLOSE", [("BTCUSDT", None)]),
+        ("Reduce BTCUSDT 30% now", "REDUCE", [("BTCUSDT", 30.0)]),
+        ("Закрываем BTCUSDT половину сейчас", "REDUCE", [("BTCUSDT", 50.0)]),
+        ("Do not close BTCUSDT now", "CLOSE", []),
+        ("Не закрываем BTCUSDT сейчас", "CLOSE", []),
+        (
+            "Close BTCUSDT tomorrow. Close ETHUSDT now",
+            "CLOSE",
+            [("ETHUSDT", None)],
+        ),
+        (
+            "Закрываем BTCUSDT завтра\nЗакрываем ETHUSDT сейчас",
+            "CLOSE",
+            [("ETHUSDT", None)],
+        ),
+    ],
+)
+def test_caption_time_qualification_precedes_action_persistence(
+    tmp_path, caption, action, expected
+):
+    class Model:
+        async def complete(self, request):
+            # Deliberately omit the qualifier from the model's evidence excerpt.
+            # Authorization must use its complete source clause instead.
+            items = [
+                {
+                    "symbol": symbol,
+                    "action": action,
+                    "evidence_text": symbol,
+                    "summary": "Synthetic instruction",
+                    "confidence": 1,
+                    **({"close_pct": 30} if action == "REDUCE" else {}),
+                }
+                for symbol in ("BTCUSDT", "ETHUSDT")
+                if symbol in caption
+            ]
+            return LLMResponse(
+                json.dumps(
+                    {
+                        "actionable": True,
+                        "reason": "Deliberately narrow synthetic model evidence",
+                        "position_actions": items,
+                    }
+                )
+            )
+
+        async def close(self):
+            pass
+
+    async def run():
+        database = tmp_path / "state.db"
+        store = IntentStore(database)
+        await store.initialize()
+        source = make_intent().source.model_copy(update={"text": caption})
+        exchange = ExchangeTransport()
+        exchange.size = Decimal("1")
+        exchange.avg = Decimal("100")
+        with executor_for(exchange) as executor:
+            service, bot, _ = workflow(store, executor, Model())
+            sender = AsyncMock()
+            try:
+                with patch.object(bot._bot, "send_message", new=sender):
+                    await service.on_message(IncomingPost(source=source))
+                    # A completed post must not be re-extracted or re-delivered.
+                    delivered = sender.await_count
+                    await service.on_message(IncomingPost(source=source))
+                    assert sender.await_count == delivered
+                assert exchange.orders == {}
+            finally:
+                await bot.close()
+        await IntentStore(database).initialize()
+        async with aiosqlite.connect(database) as db:
+            decision = await production_decision(
+                db, source.channel_id, source.message_id
+            )
+            normalized = decision["normalized"]["position_actions"]
+            assert [(a["symbol"], a["close_pct"]) for a in normalized] == expected
+            rows = await db.execute_fetchall(
+                "SELECT payload_json,status FROM position_actions"
+            )
+            assert [
+                (json.loads(payload)["symbol"], json.loads(payload)["close_pct"])
+                for payload, _ in rows
+            ] == expected
+            assert [status for _, status in rows] == [
+                "PENDING" if symbol == "BTCUSDT" else "SKIPPED"
+                for symbol, _ in expected
+            ]
+            assert len(decision["extraction"]["position_actions"]) >= len(expected)
+            assert await db.execute_fetchall("SELECT status FROM source_messages") == [
+                ("COMPLETED",)
+            ]
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(
