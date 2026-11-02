@@ -83,7 +83,10 @@ class SignalDelivery:
                 if action is None:
                     card_sent = False
                 elif action.status is IntentStatus.SKIPPED:
-                    await self._approval_bot.send_expired_position_action(action)
+                    if action.contract_review_reason is not None:
+                        await self._approval_bot.send_unverified_position_action(action)
+                    else:
+                        await self._approval_bot.send_expired_position_action(action)
                     card_sent = False
                 else:
                     await self._approval_bot.send_position_action(action, **kwargs)

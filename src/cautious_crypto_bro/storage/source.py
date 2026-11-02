@@ -10,11 +10,13 @@ import aiosqlite
 from ..domain import (
     ApprovalMode,
     ExecutionPlan,
+    IntentStatus,
     PositionActionIntent,
     SourceMessage,
     TradingIntent,
 )
 from ._connection import _Store, sqlite_connection
+from .position_action import CONTRACT_REVIEW_PREFIX
 
 
 class SourceRepositoryImpl(_Store):
@@ -547,6 +549,14 @@ class SourceRepositoryImpl(_Store):
         action: PositionActionIntent,
     ) -> None:
         now = action.created_at.isoformat()
+        error = None
+        if action.contract_review_reason is not None:
+            if (
+                action.status is not IntentStatus.SKIPPED
+                or action.approval_mode is not ApprovalMode.MANUAL
+            ):
+                raise ValueError("Contract review must be non-executable")
+            error = CONTRACT_REVIEW_PREFIX + action.contract_review_reason
 
         await db.execute(
             """
@@ -557,10 +567,11 @@ class SourceRepositoryImpl(_Store):
                 payload_json,
                 status,
                 approval_mode,
+                error,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(action.action_id),
@@ -569,6 +580,7 @@ class SourceRepositoryImpl(_Store):
                 action.model_dump_json(),
                 action.status.value,
                 action.approval_mode.value,
+                error,
                 now,
                 now,
             ),

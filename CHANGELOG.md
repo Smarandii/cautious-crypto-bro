@@ -10,6 +10,39 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.54] - 2026-11-02
+
+### Fixed
+
+- Verify fresh unmatched CLOSE/REDUCE contract proposals before silently
+  treating them as valid unheld-position skips (#338). Failed contract reads
+  now retain the original proposal and deliver an informational human-review
+  notice with its source link and a redacted verification reason. These notices
+  have no Execute controls, account preview, replacement ticker or exchange action.
+- Preserve quiet verified-unheld/opposite-side skips, reviewed ownership aliases,
+  held-position exit paths and existing expiry checks. Held contracts do not
+  acquire a new metadata dependency, including delisted-but-held positions.
+- Persist review status/reason and its delivery reservation atomically with
+  source completion. Reuse delivery leases for failed sends, restart recovery
+  and competing senders; do not reinterpret or replay historical instructions.
+
+### Validation and compatibility
+
+- Source/model/service/SQLite/bot integration checks use synthetic posts and
+  controlled exchange transports. Cover missing contracts, temporary lookup
+  failure, unavailable account reads, CLOSE/REDUCE, valid unheld/opposite-side
+  positions, held/delisted contracts, expiry, duplicate source delivery, restart,
+  competing senders and refusal to execute a skipped review record.
+- Schema16 and frozen action JSON stay unchanged. Review metadata uses existing
+  status/error columns; no migration, dependency or risk/entry/exit policy change.
+  Older schema16 versions read these records but do not retry their undelivered
+  review notices. Reconcile that queue before rollback; do not reset delivered
+  receipts or replay instructions. Retain a verified backup and previous image.
+- This surfaces unverifiable proposals; it does not correct all model ticker
+  errors, prove full post interpretation or establish profitability. Valid but
+  misread unheld tickers can still be skipped. Full #248/#262/#316 and independent
+  zone work #123/#312 remain open.
+
 ## [2.2.53] - 2026-11-02
 
 ### Fixed

@@ -325,7 +325,7 @@ class SignalService:
             planning.rejections,
             planning.retry_candidates,
         )
-        position_actions = self._planning.plan_position_actions(
+        position_actions = await self._planning.plan_position_actions(
             signals,
             account_state=(context_snapshot.account_state),
             position_context=context_snapshot.position_context,
@@ -341,6 +341,11 @@ class SignalService:
                 "position_action_ids": [
                     str(action.action_id) for action in position_actions
                 ],
+                "position_action_reviews": {
+                    str(action.action_id): action.contract_review_reason
+                    for action in position_actions
+                    if action.contract_review_reason is not None
+                },
                 "errors": planning_errors + planning_rejections,
                 "retryable_errors": planning_errors,
                 "rejections": planning_rejections,

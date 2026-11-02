@@ -822,6 +822,8 @@ class PositionActionIntent(BaseModel):
         default=IntentStatus.PENDING,
         exclude=True,
     )
+    # Like status, this is hydrated from store columns, not frozen source JSON.
+    contract_review_reason: str | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def validate_position_action(
