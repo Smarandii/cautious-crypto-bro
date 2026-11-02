@@ -10,6 +10,36 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.50] - 2026-11-02
+
+### Changed
+
+- Refresh the pinned official Python 3.12 Bookworm image digest, retaining the
+  explicit Debian OpenSSL upgrade and uv image pin (#328 / MR #323).
+- Update locked pydantic-settings 2.16.1 to 2.16.2 (#329 / MR #324).
+- Update development-only pytest 9.1.1 to 9.2.0 and Ruff 0.17.2 to 0.17.3
+  (#330 / MR #325). Refresh the pinned setup-uv action 10.3.2 to 10.3.3 in CI
+  and release jobs, preserving permissions and release protections
+  (#331 / MR #326). Each dependency MR is a separate squash commit.
+
+### Validation and compatibility
+
+- Combined dependency delivery checkpoint #332 uses the existing full isolated
+  Linux integration/smoke suite and installed runtime/build/CA checks; no new
+  version-string-only unit tests. Five synthetic old/new settings cases cover
+  aliases, precedence, explicit values and rejected invalid inputs. A proposed
+  live-environment clone probe was not run; production secrets were not copied
+  into test containers. Real deployment still verifies unchanged environment,
+  authentication, reader startup, supervision and native protection.
+- Application sources, schema16, persisted state and approved strategy/risk/
+  entry/exit settings are unchanged. Restore-verified backup and former image
+  remain the rollback path; no migration, historical replay, synthetic live
+  orders or private-source upload.
+- Known unfinished work: #322 conditional/future lifecycle evidence, #319/#316
+  interpretation coverage, #248 natural profit magnitude, #123/#312 independent
+  zone protection and the full #262 architecture/UI audit. Dependency refresh
+  does not establish improved recall or profitability.
+
 ## [2.2.49] - 2026-11-01
 
 ### Fixed
