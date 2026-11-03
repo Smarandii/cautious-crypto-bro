@@ -10,6 +10,32 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.56] - 2026-11-03
+
+### Fixed
+
+- Resume the opt-in Docker publisher in the same foreground local deployment
+  operation as the app, including compatible rollback after caught backup/start
+  or readiness failures (#343). Both services use the verified delivery image;
+  publisher resumption no longer requires a later agent invocation.
+- Document native Compose startup/recovery, the SQLite/WAL maintenance boundary
+  and forced process/host termination recovery in the local cutover runbook.
+
+### Validation and compatibility
+
+- Reproduce the split-step outage with disposable, network-isolated Compose
+  services without app state or credentials. Verify both-service start and caught
+  backup/readiness failure recovery; remove the disposable project afterward.
+- Retain publisher hardening, singleton/publication checks, private work storage
+  and explicit opt-in. Verify the real deployment revision, authentication,
+  reader, supervision, native stops and a fresh publisher receipt before release.
+- No application/test/dependency/schema16 or trading-policy change. Retain the
+  previous images and restore-verified state backup. Automatic old-image recovery
+  applies only to explicitly schema-compatible updates; migrations need their own
+  procedure. Uncatchable process/host termination still needs operator recovery.
+- Profit magnitude/participation #248, broad audit #262, terminal evidence #342
+  and independent zone work #123/#312 remain unfinished.
+
 ## [2.2.55] - 2026-11-03
 
 ### Documentation

@@ -29,6 +29,13 @@ not a copy of Bybit's positions/orders or proof of authenticated readiness.
 
 ## Existing local Docker Compose deployment
 
+If the opt-in publisher is running, stop it before stopping the app so read-only
+SQLite readers do not outlive the WAL maintenance boundary. For deployment,
+enclose the stop, backup, cutover and compatible recovery in the same foreground
+operation and resume both services as described in [local-cutover.md](local-cutover.md).
+The backup-only commands below intentionally leave the app stopped on failure;
+they are not a complete deployment/rollback operation.
+
 Use a clean checkout and the same Compose project as the deployed app. These
 PowerShell commands assume the default `/state` volume and filenames; adapt the
 two source paths if configured differently. The helper image is separate from
