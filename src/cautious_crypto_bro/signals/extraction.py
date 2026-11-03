@@ -86,6 +86,29 @@ OPEN trade rules:
   from current text/caption or the matching position in an exchange screenshot
 - omit leverage when missing, ambiguous, conflicting, or given as a range;
   never infer it from ROI, PnL, margin, position size, or another position
+- A statement that an entry/limit order "just filled" does not establish direction.
+  Resolve LONG/SHORT independently from an explicit current-caption direction
+  or a genuine current exchange-position panel for that same symbol. Never
+  default to LONG, infer direction from chart trend/support/resistance, or use
+  promotional/history-card content to fill this gap. The words "limit" and
+  "filled" do not mean a buy/long entry.
+- For example, "My BTCUSDT limit entry just filled" or "Лимитка по BTCUSDT
+  исполнилась" with no independent direction is incomplete: omit that OPEN and
+  explain the missing direction. Do not manufacture a NEW MARKET proposal.
+  Preserve unrelated valid candidates. A genuine current position panel may
+  still supply its own clearly visible side; an excluded promotional card may not.
+- When a current "just filled" declaration DOES independently establish direction,
+  it states that the author entered now. Use MARKET semantics for that already-open
+  position, not a new unfilled LIMIT request with a missing price; do not borrow
+  the historical fill price. Apply the normal NEW/UPDATE_EXISTING/ADD_OR_REENTRY
+  relationship rules. For example, "My BTCUSDT SHORT limit entry just filled"
+  with no matching copied position is a current SHORT entry declaration.
+- An exact symbol match between a filled-entry caption and one genuine current
+  position panel establishes which position the caption refers to; the caption
+  need not repeat that panel's side or an order ID. For example, the directionless
+  BTCUSDT filled-entry caption plus a current BTCUSDT LONG position panel supports
+  a MARKET LONG candidate when not already copied. This exception never applies
+  to a promotional/history card or a chart without a current position panel.
 - symbol and direction alone, market commentary, or possible future areas without
   a clear entry instruction are not executable OPEN candidates
 - MARKET when the author clearly says enter now/at market, clearly states
