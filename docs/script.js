@@ -97,7 +97,7 @@ function renderTradeHistory(data, refreshFailed = false) {
     parent.append(element);
     return element;
   };
-  add("h2", "Actual trade outcomes");
+  add("h2", "Current settings & reconciled strategy trades");
   const history = data?.trade_history;
   const asOf = Date.parse(history?.as_of);
   const age = Date.now() - asOf;
@@ -227,21 +227,10 @@ function renderTradeHistory(data, refreshFailed = false) {
       }
     }
   }
-  tradeTable(
-    rows.slice(0, 10),
-    section,
-    "Latest complete Demo trades · UTC close times",
-  );
-  if (rows.length > 10) {
-    const older = add("details", "");
-    older.open = olderExpanded;
-    add("summary", `Older complete trades (${rows.length - 10})`, older);
-    tradeTable(
-      rows.slice(10),
-      older,
-      "Older complete Demo trades · UTC close times",
-    );
-  }
+  const complete = add("details", "");
+  complete.open = olderExpanded;
+  add("summary", `Reconciled strategy trades (${rows.length})`, complete);
+  tradeTable(rows, complete, "Complete strategy trades · UTC close times");
 }
 
 let lastTradeFeed;

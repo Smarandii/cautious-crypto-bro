@@ -23,6 +23,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from cautious_crypto_bro.dashboard_balance import (  # noqa: E402
+    MAX_BALANCE_BYTES,
+    encode_balance_feed,
+    validate_balance_feed,
+)
 from cautious_crypto_bro.dashboard_feed import validate_public_feed  # noqa: E402
 from cautious_crypto_bro.state_ownership import state_ownership  # noqa: E402
 from cautious_crypto_bro.terminal_entry_evidence import (  # noqa: E402
@@ -31,6 +36,7 @@ from cautious_crypto_bro.terminal_entry_evidence import (  # noqa: E402
 
 REPOSITORY = "Smarandii/cautious-crypto-bro"
 PUBLIC_URL = "https://smarandii.github.io/cautious-crypto-bro/trades.json"
+BALANCE_URL = "https://smarandii.github.io/cautious-crypto-bro/balance.json"
 INTERVAL_SECONDS = 15 * 60
 EXPORT_TIMEOUT_SECONDS = 270
 
@@ -90,6 +96,22 @@ def export_feed(settings: PublisherSettings, bundle: Path, output: Path) -> None
     with closing(sqlite3.connect(uri, uri=True)) as database:
         feed = build_trade_feed(database, bundle, risk)
     output.write_text(json.dumps(feed, allow_nan=False) + "\n", encoding="utf-8")
+    from cautious_crypto_bro.bybit.client import DEMO_BASE_URL, BybitClient
+    from cautious_crypto_bro.demo_balance_cache import collect_balance_feed
+
+    client = BybitClient(DEMO_BASE_URL, access.bybit_api_key, access.bybit_api_secret)
+    try:
+        balance = collect_balance_feed(
+            client,
+            settings.publisher_work_dir / "demo-balance.json",
+            api_key=access.bybit_api_key,
+            database_path=settings.database_path,
+        )
+    finally:
+        client.close()
+    output.with_suffix(".balance.json").write_text(
+        json.dumps(balance, allow_nan=False) + "\n", encoding="utf-8"
+    )
 
 
 def _run_export(settings: PublisherSettings, bundle: Path, output: Path) -> None:
@@ -126,13 +148,19 @@ def _run_export(settings: PublisherSettings, bundle: Path, output: Path) -> None
         raise RuntimeError("Publisher export failed; private diagnostics withheld")
 
 
-def _github_dispatch(feed: dict, settings: PublisherSettings) -> None:
+def _github_dispatch(
+    feed: dict, settings: PublisherSettings, balance: dict | None = None
+) -> None:
     feed = validate_public_feed(feed)
     token = _secret(settings, "github_token")
     payload = {
         "ref": "master",
         "inputs": {"trade_feed": json.dumps(feed, separators=(",", ":"))},
     }
+    if balance is not None:
+        payload["inputs"]["balance_feed"] = encode_balance_feed(balance)
+    if len(json.dumps(payload).encode()) > 64_000:
+        raise ValueError("Complete public feeds exceed the dispatch budget")
     request = Request(
         f"https://api.github.com/repos/{REPOSITORY}/actions/workflows/pages.yml/dispatches",
         data=json.dumps(payload).encode(),
@@ -149,7 +177,7 @@ def _github_dispatch(feed: dict, settings: PublisherSettings) -> None:
             raise RuntimeError("Pages dispatch was not accepted")
 
 
-def _verify_publication(feed: dict) -> dict:
+def _verify_publication(feed: dict, balance: dict | None = None) -> dict:
     deadline = time.monotonic() + 180
     while time.monotonic() < deadline:
         try:
@@ -160,10 +188,31 @@ def _verify_publication(feed: dict) -> dict:
             with urlopen(request, timeout=15) as response:
                 published = validate_public_feed(json.load(response))
             if published == feed:
+                if balance is not None:
+                    request = Request(
+                        BALANCE_URL + "?refresh=" + uuid4().hex,
+                        headers={"Cache-Control": "no-cache"},
+                    )
+                    with urlopen(request, timeout=15) as response:
+                        raw = response.read(MAX_BALANCE_BYTES + 1)
+                    if len(raw) > MAX_BALANCE_BYTES:
+                        raise ValueError("Published balance exceeds its size budget")
+                    published_balance = validate_balance_feed(json.loads(raw))
+                    if published_balance != balance:
+                        time.sleep(15)
+                        continue
                 return {
                     "published": True,
                     "as_of": feed["trade_history"]["as_of"],
                     "completed_trades": feed["trade_history"]["total_completed"],
+                    **(
+                        {
+                            "balance_as_of": (balance["history"] or {}).get("as_of"),
+                            "balance_refresh_failed": balance["refresh_failed"],
+                        }
+                        if balance is not None
+                        else {}
+                    ),
                 }
         except (OSError, ValueError):
             pass
@@ -179,8 +228,11 @@ def refresh_once(settings: PublisherSettings) -> dict:
         output = Path(directory) / "public.json"
         _run_export(settings, bundle, output)
         feed = validate_public_feed(json.loads(output.read_text(encoding="utf-8")))
-        _github_dispatch(feed, settings)
-        return _verify_publication(feed)
+        balance = validate_balance_feed(
+            json.loads(output.with_suffix(".balance.json").read_text(encoding="utf-8"))
+        )
+        _github_dispatch(feed, settings, balance)
+        return _verify_publication(feed, balance)
 
 
 def _write_receipt(settings: PublisherSettings, receipt: dict) -> None:
@@ -198,7 +250,11 @@ def healthy(settings: PublisherSettings) -> bool:
         age = (
             datetime.now(UTC) - datetime.fromisoformat(receipt["checked_at"])
         ).total_seconds()
-        return receipt.get("published") is True and 0 <= age <= 2 * INTERVAL_SECONDS
+        return (
+            receipt.get("published") is True
+            and not receipt.get("balance_refresh_failed", False)
+            and 0 <= age <= 2 * INTERVAL_SECONDS
+        )
     except (OSError, ValueError, KeyError, TypeError):
         return False
 

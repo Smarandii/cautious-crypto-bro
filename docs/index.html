@@ -6,10 +6,11 @@
     <title>Demo trading evidence — cautious-crypto-bro</title>
     <meta
       name="description"
-      content="Completed Demo trades, current risk settings and dated historical analysis."
+      content="Daily Demo wallet balance, day-specific account activity, current risk settings and dated analysis."
     />
     <link rel="stylesheet" href="style.css" />
     <script src="script.js" defer></script>
+    <script src="balance.js" defer></script>
   </head>
   <body>
     <header>
@@ -19,6 +20,7 @@
         establish profitability or verify current position protection.
       </p>
       <nav aria-label="Report navigation">
+        <a href="#daily-balance">Daily balance</a>
         <a href="#trade-history">Current trades and settings</a>
         <a href="#historical-snapshot">Historical analysis</a>
         <a href="#methodology">Methodology</a>
@@ -26,8 +28,22 @@
       </nav>
     </header>
     <main>
+      <section
+        id="daily-balance"
+        class="balance-panel"
+        aria-label="Daily Demo account balance"
+      >
+        <h2>Daily wallet balance</h2>
+        <p>
+          USDT wallet balance and daily account activity load independently.
+        </p>
+        <noscript
+          >Enable JavaScript for the interactive chart, or inspect the
+          <a href="balance.json">public balance and activity feed</a>.</noscript
+        >
+      </section>
       <section id="trade-history" aria-label="Current Demo trades and settings">
-        <h2>Actual trade outcomes</h2>
+        <h2>Current settings &amp; reconciled strategy trades</h2>
         <p role="status">
           Loading current trade evidence. Settings and outcomes are unavailable
           until the feed responds.

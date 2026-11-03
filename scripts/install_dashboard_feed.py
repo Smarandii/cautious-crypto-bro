@@ -10,7 +10,36 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from cautious_crypto_bro.dashboard_balance import (  # noqa: E402
+    MAX_BALANCE_BYTES,
+    decode_balance_feed,
+    validate_balance_feed,
+)
 from cautious_crypto_bro.dashboard_feed import validate_public_feed  # noqa: E402
+
+
+def install_balance() -> None:
+    encoded = os.environ.get("PUBLIC_BALANCE_FEED", "")
+    try:
+        if encoded:
+            feed = decode_balance_feed(encoded)
+        else:
+            try:
+                with urlopen(
+                    "https://smarandii.github.io/cautious-crypto-bro/balance.json",
+                    timeout=20,
+                ) as response:
+                    raw = response.read(MAX_BALANCE_BYTES + 1)
+            except URLError:
+                return  # No first publication yet: chart explicitly says unavailable.
+            if len(raw) > MAX_BALANCE_BYTES:
+                raise ValueError("Oversized public balance feed")
+            feed = validate_balance_feed(json.loads(raw))
+    except (ValueError, TypeError, UnicodeError):
+        raise SystemExit("Public balance validation failed; input withheld") from None
+    (ROOT / "docs" / "balance.json").write_text(
+        json.dumps(feed, allow_nan=False) + "\n", encoding="utf-8"
+    )
 
 
 def main() -> None:
@@ -40,3 +69,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    install_balance()

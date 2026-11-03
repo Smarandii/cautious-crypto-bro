@@ -10,6 +10,10 @@ on:
         description: Validated public Demo trade snapshot (no credentials or source text)
         required: false
         type: string
+      balance_feed:
+        description: Bounded gzip/base64 validated public Demo balance and activity
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -44,6 +48,7 @@ jobs:
       - name: Install validated public trade feed
         env:
           PUBLIC_TRADE_FEED: ${{ inputs.trade_feed }}
+          PUBLIC_BALANCE_FEED: ${{ inputs.balance_feed }}
         run: python3 scripts/install_dashboard_feed.py
 
       # No build step on purpose. docs/ is plain HTML and CSS with no bundler,

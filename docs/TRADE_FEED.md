@@ -5,6 +5,44 @@ service exports read-only Bybit Demo evidence and publishes through the existing
 Pages workflow every 15 minutes. Exchange coverage older than 30 minutes is stale.
 Historical aggregates retain their own timestamp and never override current risk.
 
+## Daily account balance
+
+The main chart independently loads `balance.json`. It shows the last 30 full UTC
+days plus provisional today, using **USDT wallet balance**, excluding unrealized
+PnL. A zero baseline keeps bar heights honest. Select a bar or a date to see all
+available account events for that day; arrow/Home/End keys navigate the bars.
+Refresh preserves the selected date. Certified strategy trades remain a separate
+disclosure with their own explicit latest-100 limit.
+
+The collector requests all transaction categories/types with complete pagination
+in seven-day windows. It validates cashFlow + funding - fee against change and
+orders equal-millisecond cash transitions by their actual before/after balances,
+then reconciles the full chain to an unchanged wallet anchor. Cash transfers,
+fees and funding affect this account balance; they are not all strategy profit.
+Execution Buy/Sell is not position LONG/SHORT. Funded non-USDT currencies,
+borrowing, an unlogged reset or cash gap, missing pages and changing anchors make
+the capture unavailable rather than manufacture a plausible historical curve.
+No-transaction history without a balance anchor stays unknown.
+
+`demo-balance.json` in the private publisher work volume retains up to 90 UTC
+days, scoped by Demo endpoint, resolved database path and a hash of the API key.
+It stores only approved balance/activity fields, never ledger/order/account IDs
+or credentials. Updates use mode 0600, file synchronization and atomic replace.
+Long capture gaps remain explicit unknown days. Preserve this volume during
+updates; the app state/session backup does not include it. A corrupt retained
+file refuses publication rather than silently overwriting evidence.
+
+The public balance contract has an exact whitelist, bounded amounts/timestamps
+and day/component consistency checks. Gzip/base64 fits the separate dispatch
+input without silently dropping daily records; decoding is bounded before JSON
+parsing. Limits are 2 MB expanded, 48 KB encoded balance input and 64 KB combined
+dispatch. Exceeding a limit is a visible refresh/publication failure. A failed
+capture retains the prior verified public window and timestamp, sets
+`refresh_failed`, and makes publisher health false. The trade feed can still
+refresh independently. If no verified balance exists, the chart says unavailable.
+Older images ignore the additive cache; rollback retains its files and lets
+the last published evidence age. No app schema migration or trading change.
+
 ## Compose service
 
 Use the same verified runtime image as the app. Provision the private
