@@ -2,6 +2,7 @@
 
 import io
 import json
+import sqlite3
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -216,3 +217,89 @@ def test_singleton_prevents_parallel_publishing_and_startup_clears_old_health(
         publisher.main()
     assert result.value.code == 0 and len(called) == 1
     assert publisher.healthy(settings)
+
+
+@pytest.mark.integration
+def test_publisher_keeps_private_terminal_evidence_across_temporary_exports(
+    settings, monkeypatch
+):
+    import export_forensic_replay
+    import export_trade_feed
+
+    settings.database_path.touch()
+    public = feed()
+    paths = []
+    requests = []
+
+    def export(bundle, **options):
+        path = options["terminal_evidence_path"]
+        assert path == settings.publisher_work_dir / "terminal-entry-evidence.json"
+        assert path.parent != bundle.parent
+        assert path.exists() is bool(paths)
+        paths.append(path)
+        path.write_text("PRIVATE_RETAINED_ORDER_CANARY", encoding="utf-8")
+        bundle.write_text("PRIVATE_ARCHIVE_CANARY", encoding="utf-8")
+
+    def build(database, bundle, risk):
+        with pytest.raises(sqlite3.OperationalError):
+            database.execute("CREATE TABLE forbidden_write (value TEXT)")
+        return public
+
+    def urlopen(request, *, timeout):
+        requests.append(request)
+        response = io.BytesIO(json.dumps(public).encode())
+        response.status = 204 if request.get_method() == "POST" else 200
+        return response
+
+    monkeypatch.setattr(export_forensic_replay, "export_bundle", export)
+    monkeypatch.setattr(export_trade_feed, "build_trade_feed", build)
+    monkeypatch.setattr(publisher, "_run_export", publisher.export_feed)
+    monkeypatch.setattr(publisher, "urlopen", urlopen)
+    assert publisher.refresh_once(settings)["published"]
+    assert publisher.refresh_once(settings)["published"]
+    assert len(paths) == 2 and paths[0] == paths[1]
+    assert not list(settings.publisher_work_dir.glob("trade-feed-*"))
+    assert paths[0].read_text() == "PRIVATE_RETAINED_ORDER_CANARY"
+    assert all(
+        "PRIVATE_RETAINED_ORDER_CANARY" not in (r.data or b"").decode()
+        for r in requests
+    )
+
+
+@pytest.mark.parametrize("returncode,pending", [(78, False), (1, True)])
+def test_private_evidence_failure_has_an_actionable_redacted_receipt(
+    settings, monkeypatch, capsys, returncode, pending
+):
+    def run(*args, **kwargs):
+        if pending:
+            (
+                settings.publisher_work_dir / "terminal-entry-evidence.json.pending"
+            ).touch()
+        return SimpleNamespace(
+            returncode=returncode, stdout="PRIVATE", stderr="PRIVATE"
+        )
+
+    monkeypatch.setattr(publisher.subprocess, "run", run)
+    with pytest.raises(SystemExit) as result:
+        publisher.publish_loop(settings, once=True)
+    assert result.value.code == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["error_type"] == "TerminalEvidenceUnavailable"
+    assert receipt["published"] is False and not publisher.healthy(settings)
+    assert "PRIVATE" not in json.dumps(receipt)
+    assert not list(settings.publisher_work_dir.glob("trade-feed-*"))
+
+
+def test_export_child_redacts_private_evidence_failure(settings, monkeypatch):
+    monkeypatch.setattr(publisher, "PublisherSettings", lambda: settings)
+    monkeypatch.setattr(
+        sys, "argv", ["publisher", "--export", "private.zip", "public.json"]
+    )
+
+    def export(*args):
+        raise publisher.TerminalEvidenceUnavailable("PRIVATE_DETAIL_CANARY")
+
+    monkeypatch.setattr(publisher, "export_feed", export)
+    with pytest.raises(SystemExit) as result:
+        publisher.main()
+    assert result.value.code == 78

@@ -64,6 +64,8 @@ This shared volume also contains existing app state files; it is
 not a per-file isolation boundary. Selected publisher credentials are mounted
 read-only at `/run/secrets`. Temporary forensic archives, the singleton lock and
 atomic health receipt live in a separate private `publisher_work` volume.
+That volume also retains verified terminal entry-order observations in
+`terminal-entry-evidence.json`; this file survives temporary export cleanup.
 The container root filesystem is read-only and all capabilities are dropped.
 Compose shares the explicit Demo-policy environment with the app; it does not
 copy Telegram or LLM credentials into the publisher environment.
@@ -75,6 +77,53 @@ a cycle succeeds. Private temporary files are removed on normal success/failure;
 an interrupted container may leave an abandoned private work directory.
 Each completed cycle logs only a public receipt or failure type. Failed cycles
 retry at the next interval; the old public feed visibly ages.
+
+## Terminal entry evidence
+
+Bybit's [order-history rules](https://bybit-exchange.github.io/docs/v5/order/order-list)
+limit fully cancelled, rejected and deactivated order history to 24 hours.
+Missing history is not proof that an unfilled scale-in was cancelled. The
+publisher retains only terminal records it actually observed and validated
+against the original physical request and cumulative fills. It stores order
+identity/status/quantity, the frozen request identity, and capture time; never a
+public completion flag, PnL total, source caption or API credential.
+
+Each new export prefers fresh history and rechecks retained records against
+fresh open orders and cumulative executions, including fees and exact
+symbol/side/link/quantity. Pending, conflicting, invalid or changed-fill evidence
+revokes the prior observation. A later missing history row cannot restore a
+revoked record. Older missing terminal records remain unknown; prior public
+P&L rows cannot backfill them. Research exports remain read-only by default and
+do not use a private cache unless explicitly supplied by the caller.
+
+The cache is scoped to the Demo endpoint, resolved database path and a hash of
+the API key. Credential rotation or switching state/account therefore requires
+an explicit cache transition, not reuse across scopes. Private archive metadata
+counts retained rows; a separate provenance member records their original
+capture times. These records never enter the public feed or release assets.
+
+Persistence uses the existing ownership lock, private files, atomic replacement
+and file/directory synchronization on Linux. An interrupted or failed update
+leaves `terminal-entry-evidence.json.pending`; later exports refuse the old file
+because it may hide an uncommitted revocation. A malformed or mismatched cache
+also refuses publication. The health receipt/log reports
+`TerminalEvidenceUnavailable`, with private child diagnostics withheld. Other
+failures still retain their existing redacted error classification.
+
+For recovery, stop the publisher and confirm no other exporter owns this cache.
+Preserve the cache, pending marker and abandoned cache temporary files in private
+storage for review, then start with an empty cache for the verified scope.
+**Do not merely remove the pending marker and trust the old cache.** Leave the
+stable `.owner.lock` file in place. The next successful cycle can retain only
+facts still obtainable from Bybit; unavailable older evidence stays unknown.
+Keep the `publisher_work` volume across updates and protect its backups
+separately: the app state/session backup does not include it. Windows files
+inherit destination ACLs; the supported Docker service uses Linux mode `0600`.
+
+No app schema migration or trading-policy change is involved. Older images
+ignore this cache and may lose certification again when history expires; retain
+the private work volume when rolling back rather than rewriting historical
+public snapshots or weakening settlement checks.
 
 Health is unavailable at startup, false after a failed cycle and false when the
 last verified receipt is over 30 minutes old. A dispatch acceptance alone is not

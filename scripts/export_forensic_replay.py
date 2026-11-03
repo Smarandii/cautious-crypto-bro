@@ -20,6 +20,10 @@ from cautious_crypto_bro.bybit.normalize import account_order_from_item
 from cautious_crypto_bro.config import get_settings
 from cautious_crypto_bro.domain import ExecutionPlan, TradeExecutionError
 from cautious_crypto_bro.entry_settlement import entry_orders_settled
+from cautious_crypto_bro.terminal_entry_evidence import (
+    retain_terminal_entries,
+    terminal_evidence_scope,
+)
 from cautious_crypto_bro.zone_ledger import ZoneOrder
 
 WINDOW = timedelta(days=7)
@@ -309,6 +313,7 @@ def export_bundle(
     *,
     skip_market_candles: bool = False,
     access: ForensicAccess | None = None,
+    terminal_evidence_path: Path | None = None,
 ) -> dict[str, int | str]:
     if output_path.exists():
         raise FileExistsError(output_path)
@@ -544,6 +549,28 @@ def export_bundle(
             executions_by_order[str(execution.get("orderId") or "")].append(execution)
 
     lineage = []
+    retained_terminal_entries = []
+    if terminal_evidence_path is not None:
+        entry_order_history, retained_terminal_entries = retain_terminal_entries(
+            terminal_evidence_path,
+            scope=terminal_evidence_scope(
+                settings.database_path, DEMO_BASE_URL, settings.bybit_api_key
+            ),
+            requests=[
+                (
+                    order,
+                    attempt.plan["symbol"],
+                    "Buy" if attempt.plan["side"] == "LONG" else "Sell",
+                )
+                for attempt in plans
+                if attempt.evidence and attempt.evidence["entry_identity_complete"]
+                for order in attempt.evidence["entry_orders"]
+            ],
+            history=entry_order_history,
+            current=current_entry_orders,
+            fills=executions_by_order,
+            as_of_ms=end_ms,
+        )
     symbols = set()
     first_fill_times = []
     for attempt in plans:
@@ -679,6 +706,12 @@ def export_bundle(
                 _write_jsonl(
                     archive,
                     root,
+                    "analysis/retained_terminal_entries.jsonl",
+                    retained_terminal_entries,
+                )
+                _write_jsonl(
+                    archive,
+                    root,
                     "bybit/entry_order_history.jsonl",
                     entry_order_history,
                 )
@@ -762,6 +795,7 @@ def export_bundle(
                     "symbols": len(candle_symbols),
                     "execution_rows": len(executions),
                     "entry_order_history_rows": len(entry_order_history),
+                    "retained_terminal_entry_rows": len(retained_terminal_entries),
                     "open_entry_order_rows": len(current_entry_orders),
                     "open_account_order_rows": len(open_account_orders),
                     "open_account_orders_as_of": open_account_orders_as_of,

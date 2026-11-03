@@ -356,6 +356,7 @@ def test_export_bundle_uses_supported_private_page_sizes(
             _env_file=None,
             database_path=database_path,
             publisher_secrets_dir=secrets,
+            publisher_work_dir=tmp_path / "publisher-work",
         )
         public_output = tmp_path / "public.json"
         try:
