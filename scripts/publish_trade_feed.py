@@ -25,6 +25,9 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from cautious_crypto_bro.dashboard_feed import validate_public_feed  # noqa: E402
 from cautious_crypto_bro.state_ownership import state_ownership  # noqa: E402
+from cautious_crypto_bro.terminal_entry_evidence import (  # noqa: E402
+    TerminalEvidenceUnavailable,
+)
 
 REPOSITORY = "Smarandii/cautious-crypto-bro"
 PUBLIC_URL = "https://smarandii.github.io/cautious-crypto-bro/trades.json"
@@ -63,7 +66,13 @@ def export_feed(settings: PublisherSettings, bundle: Path, output: Path) -> None
         bybit_api_key=_secret(settings, "bybit_api_key"),
         bybit_api_secret=_secret(settings, "bybit_api_secret"),
     )
-    export_bundle(bundle, skip_market_candles=True, access=access)
+    export_bundle(
+        bundle,
+        skip_market_candles=True,
+        access=access,
+        terminal_evidence_path=settings.publisher_work_dir
+        / "terminal-entry-evidence.json",
+    )
     risk = {
         "long_risk_multiplier": float(settings.demo_long_risk_multiplier),
         "long_momentum_gate_enabled": settings.demo_long_momentum_gate,
@@ -105,6 +114,15 @@ def _run_export(settings: PublisherSettings, bundle: Path, output: Path) -> None
         env=environment,
     )
     if result.returncode:
+        if (
+            result.returncode == 78
+            or (
+                settings.publisher_work_dir / "terminal-entry-evidence.json.pending"
+            ).exists()
+        ):
+            raise TerminalEvidenceUnavailable(
+                "Private terminal-entry evidence requires review"
+            )
         raise RuntimeError("Publisher export failed; private diagnostics withheld")
 
 
@@ -211,7 +229,10 @@ def main() -> None:
     if args.health:
         raise SystemExit(0 if healthy(settings) else 1)
     if args.export:
-        export_feed(settings, *args.export)
+        try:
+            export_feed(settings, *args.export)
+        except TerminalEvidenceUnavailable:
+            raise SystemExit(78) from None
         return
     settings.publisher_work_dir.mkdir(parents=True, exist_ok=True)
     with state_ownership(settings.publisher_work_dir / "publisher"):

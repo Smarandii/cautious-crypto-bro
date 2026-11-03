@@ -10,6 +10,40 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.57] - 2026-11-03
+
+### Fixed
+
+- Retain validated terminal entry-order observations in the publisher's private
+  work volume so expiry of Bybit's short zero-fill terminal history does not
+  withdraw otherwise valid whole-trade certificates (#342). Preserve original
+  capture provenance; prefer fresh history and recheck exact frozen physical
+  requests, fresh open orders and cumulative fills/fees on every export.
+- Revoke saved evidence on fresh contradictions rather than resurrecting it when
+  history later disappears. Use scoped ownership and atomic private persistence;
+  failed/killed writes leave an interruption marker that prevents reuse of a
+  potentially stale file. Expose a redacted `TerminalEvidenceUnavailable` receipt
+  for cache corruption/scope mismatch or interrupted updates.
+
+### Validation and compatibility
+
+- Reproduce certificate loss across two real store/export/reconciliation passes.
+  Cover LONG/SHORT and market/limit/range, pending/conflicting orders, changed
+  fills/fees/identity/quantity/timestamps, malformed/scope-mismatched files, failed
+  atomic replacement and a killed child process. Check persistent publisher work,
+  read-only app state and public-payload privacy at integration boundaries.
+- No dependency/app schema16 or strategy/risk/entry/exit/approval change. Research
+  exports keep their read-only default. No guessed backfill of already unavailable
+  historical terminal states; old public PnL alone cannot restore those records.
+- Keep the private publisher work volume and protect it separately from app state
+  backups. Key/account/database scope changes need explicit cache transition. On
+  corruption/interruption, stop the publisher, preserve evidence for review and
+  restart with an empty cache; removing only the pending marker is unsafe. Retain
+  the stable ownership-lock file. Older images ignore the cache and can again lose
+  certification after history expiry; no live-state migration is required.
+- Full profit magnitude/participation #248, architecture audit #262, independent
+  zone work #123/#312 and unresolved filled-entry review #340 remain unfinished.
+
 ## [2.2.56] - 2026-11-03
 
 ### Fixed

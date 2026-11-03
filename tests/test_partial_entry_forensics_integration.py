@@ -176,7 +176,9 @@ async def close_attempt(store, exchange, plan, side, bind_close, native_stop):
             )
 
 
-def export_attempt(database, exchange, bundle, monkeypatch, edit_pages=None):
+def export_attempt(
+    database, exchange, bundle, monkeypatch, edit_pages=None, **export_options
+):
     timestamp = int(datetime.now(UTC).timestamp() * 1000) - 1000
     executions = []
     for index, order in enumerate(exchange.orders.values()):
@@ -285,6 +287,7 @@ def export_attempt(database, exchange, bundle, monkeypatch, edit_pages=None):
             access=exporter.ForensicAccess(
                 database, "synthetic-key", "synthetic-secret"
             ),
+            **export_options,
         )
     finally:
         client.close()
