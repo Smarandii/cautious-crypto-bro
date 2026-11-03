@@ -10,6 +10,38 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.58] - 2026-11-03
+
+### Fixed
+
+- Clarify that a current filled-entry declaration does not imply LONG or SHORT
+  (#347). Require independently supported direction from the caption or a genuine
+  matching current position panel; promotional/history cards and chart trends
+  cannot fill the gap. Preserve unknown direction without manufacturing an OPEN.
+- Preserve valid directional fill declarations as already-open MARKET semantics,
+  matching current-panel evidence, copied-position updates and unrelated valid
+  candidates. The caption need not repeat a clearly matching panel's side.
+
+### Validation and compatibility
+
+- Two invented English/Russian captions reproduced unsupported LONG proposals
+  with the configured model; this does not establish a production order or lost
+  profit. Check invented positive/exclusion cases covering current panels,
+  promotional/chart-only input, explicit SHORT, owned updates, mixed posts and
+  prospective/historical/hypothetical exclusions. Provider samples are bounded
+  development evidence, not a guarantee of classification for unseen images.
+- Service/store/bot regressions retain original decisions, omit incomplete
+  candidates without orders or approvals, preserve valid proposals and prevent
+  duplicate intake. Full tests and CI gate delivery.
+- No dependency, transport/app schema16 or strategy/risk/exit-policy change.
+  Existing prompt-sensitive evaluation fingerprints separate prior cached model
+  results. Keep the previous image and restore-verified state backup for rollback;
+  preserve the private publisher work volume.
+- Durable non-executable review remains open in #340. Per the operator's priority,
+  daily Demo balance bars with day-specific trades (#346) come next, preserving
+  the minimalist dark design and truthful account-balance provenance. Full
+  magnitude/participation #248 and broad audit #262 remain unfinished.
+
 ## [2.2.57] - 2026-11-03
 
 ### Fixed
