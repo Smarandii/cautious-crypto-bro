@@ -47,6 +47,8 @@ Output rules:
   or caption-authorized position action proposal exists
 - if the post contains only UPDATE_EXISTING observations, actionable=false
 - maximum five intents and five position actions
+- entry_reviews contains at most five informational missing-direction items,
+  never executable proposals; apply the filled-entry routing rules below
 - omit ambiguous candidates without discarding unrelated valid candidates
 - every item in intents MUST set relation to exactly one of:
   NEW, ADD_OR_REENTRY, UPDATE_EXISTING
@@ -94,7 +96,8 @@ OPEN trade rules:
   "filled" do not mean a buy/long entry.
 - For example, "My BTCUSDT limit entry just filled" or "Лимитка по BTCUSDT
   исполнилась" with no independent direction is incomplete: omit that OPEN and
-  explain the missing direction. Do not manufacture a NEW MARKET proposal.
+  explain the missing direction and propose entry_reviews as described below.
+  Do not manufacture a NEW MARKET proposal.
   Preserve unrelated valid candidates. A genuine current position panel may
   still supply its own clearly visible side; an excluded promotional card may not.
 - When a current "just filled" declaration DOES independently establish direction,
@@ -109,6 +112,26 @@ OPEN trade rules:
   BTCUSDT filled-entry caption plus a current BTCUSDT LONG position panel supports
   a MARKET LONG candidate when not already copied. This exception never applies
   to a promotional/history card or a chart without a current position panel.
+- Filled-entry routing, in precedence order:
+  1. If current caption states direction OR a genuine matching current position
+     panel shows direction, use the normal OPEN relationship rules. This is NOT
+     an entry_review. No current price/stop/target/leverage is required for this
+     MARKET declaration. An attached promotional card does not veto independent
+     caption facts. In particular, "My BTCUSDT SHORT limit entry just filled."
+     with an unrelated results poster and no copied history MUST produce a NEW
+     MARKET SHORT intent, no entry_reviews. The same directionless caption with
+     a genuine current BTCUSDT LONG panel MUST produce NEW MARKET LONG when not
+     already copied; that panel supplies the side, not merely the symbol.
+  2. Only when neither trustworthy caption direction nor matching live-panel
+     direction is available, propose entry_reviews with symbol and evidence_text
+     quoting the exact current-caption declaration. Example: directionless
+     "My BTCUSDT limit entry just filled." plus only a results poster gives
+     entry_reviews=[{symbol:BTCUSDT,evidence_text:the exact caption}], intents=[].
+     Never include direction/price/leverage or create an OPEN for this case.
+  3. Exclude matching copied/in-flight updates, historical results, hypothetical
+     examples, conditional/future fills and promotional-only posts from reviews.
+     Retain independent valid candidates in mixed posts. Unavailable execution
+     context is unknown ownership, never evidence of a new uncopied position.
 - symbol and direction alone, market commentary, or possible future areas without
   a clear entry instruction are not executable OPEN candidates
 - MARKET when the author clearly says enter now/at market, clearly states
@@ -514,6 +537,7 @@ class IntentExtractor:
                 cached_signals = _signals_from_extraction(
                     source,
                     cached_extraction,
+                    position_context,
                 )
 
                 _log_if_not_actionable(
@@ -548,6 +572,7 @@ class IntentExtractor:
         signals = _signals_from_extraction(
             source,
             extraction,
+            position_context,
         )
 
         _log_if_not_actionable(

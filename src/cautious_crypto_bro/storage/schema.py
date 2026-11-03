@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-LATEST_SCHEMA_VERSION = 16
+LATEST_SCHEMA_VERSION = 17
 
 SOURCE_CURSOR_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS source_history_cursors (
@@ -109,3 +109,19 @@ ON planning_candidates(status, retry_after);
 """
 
 LATEST_SCHEMA_SQL += PLANNING_CANDIDATE_SCHEMA_SQL
+
+ENTRY_REVIEW_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS entry_reviews (
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    evaluation_fingerprint TEXT,
+    claim_token TEXT,
+    retry_after TEXT,
+    delivered_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(channel_id,message_id,symbol)
+);
+"""
+LATEST_SCHEMA_SQL += ENTRY_REVIEW_SCHEMA_SQL

@@ -10,6 +10,37 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.61] - 2026-11-04
+
+### Added
+
+- Current named filled-entry declarations lacking trustworthy direction can
+  produce a durable, source-linked human-review notice instead of silently
+  disappearing. Notices have no Execute button or executable trading fields.
+  Caption attribution and copied-position exclusions bound the model proposal;
+  unknown ownership remains explicit. Valid directional entries and matching
+  genuine current-position panels retain their normal path.
+- Independent leased review delivery retries failed sends and recovers after
+  process loss. Source/quotation/evaluation evidence stays private. Telegram
+  acknowledgement loss can still duplicate a notice; exactly-once remote
+  delivery is not claimed. No history replay or automatic ambiguity correction.
+
+### State and rollback
+
+- Schema16 -> 17 adds only `entry_reviews`. Old binaries reject schema17.
+  Offline `scripts/rollback_entry_review_schema.py` acquires state ownership,
+  checks integrity and makes a new current-state backup before restoring
+  schema16 compatibility; it preserves all current trading and review records.
+  Stop app/publisher first and restart both through the normal cutover flow.
+  Never restore an old pre-upgrade database after new trading activity. See
+  [review operations](docs/ENTRY_REVIEWS.md).
+- Validation covers synthetic provider positive/exclusion controls and real
+  service/SQLite/bot interactions, failed-send/restart/competing delivery,
+  stale claims, migration and rollback. Development samples do not prove unseen
+  language/image accuracy or a historical missed trade/profit. Broader
+  profitability and source-coverage audit work remains open. No dependency,
+  risk-budget, strategy or exit-policy change.
+
 ## [2.2.60] - 2026-11-03
 
 ### Fixed

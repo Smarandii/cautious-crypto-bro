@@ -49,6 +49,7 @@ from .domain import (
     AccountSnapshotDelivery,
     AccountStateSummary,
     ApprovalMode,
+    EntryReview,
     ExecutionPlan,
     IntentExecutionOutcome,
     IntentStatus,
@@ -561,6 +562,26 @@ class ApprovalBot:
                 exposure_error=exposure_error,
             ),
             reply_markup=keyboard,
+        )
+
+    async def send_entry_review(self, review: EntryReview) -> None:
+        ownership = (
+            "Copied-position ownership could not be verified."
+            if review.ownership_unknown
+            else "No matching active copied/in-flight source position was found."
+        )
+        await self._bot.send_message(
+            chat_id=self._approval_chat_id,
+            text="<b>FILLED ENTRY — HUMAN REVIEW REQUIRED</b>\n"
+            f"<b>{html.escape(review.symbol)}</b> · direction unavailable\n"
+            "The source reports a filled entry; no new trade was authorized from "
+            "this incomplete declaration. Review the original source manually.\n"
+            f"{ownership}\n"
+            f"Published: {review.source.published_at.isoformat()}\n"
+            f"Trader: {html.escape(review.source.channel_title)}\n"
+            f"{source_line(review.source.telegram_url)}",
+            parse_mode="HTML",
+            disable_web_page_preview=True,
         )
 
     async def send_unverified_position_action(

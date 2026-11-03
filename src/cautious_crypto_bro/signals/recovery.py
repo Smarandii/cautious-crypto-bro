@@ -62,6 +62,10 @@ class SignalRecovery:
                 await self.delivery.recover_auto_outcomes()
             except Exception:
                 logger.exception("AUTO outcome recovery failed")
+            try:
+                await self.delivery.recover_entry_reviews()
+            except Exception:
+                logger.exception("Entry review recovery failed")
             await asyncio.sleep(30)
 
     async def _reserve_recovery_notices(

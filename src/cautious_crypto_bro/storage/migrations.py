@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ._connection import sqlite_connection
 from .schema import (
+    ENTRY_REVIEW_SCHEMA_SQL,
     LATEST_SCHEMA_SQL,
     LATEST_SCHEMA_VERSION,
     PLANNING_CANDIDATE_SCHEMA_SQL,
@@ -70,7 +71,7 @@ async def initialize_database(database_path: Path) -> None:
         if version == LATEST_SCHEMA_VERSION:
             return
 
-        if version in {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}:
+        if version in {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}:
             try:
                 steps = (
                     (4, MIGRATION_4_TO_5_SQL),
@@ -85,6 +86,7 @@ async def initialize_database(database_path: Path) -> None:
                     (13, MIGRATION_13_TO_14_SQL),
                     (14, ZONE_HISTORY_SCHEMA_SQL),
                     (15, SOURCE_CURSOR_SCHEMA_SQL),
+                    (16, ENTRY_REVIEW_SCHEMA_SQL),
                 )
                 migration_sql = "\n".join(
                     sql for source_version, sql in steps if version <= source_version
@@ -109,7 +111,7 @@ async def initialize_database(database_path: Path) -> None:
         if version != 0:
             raise RuntimeError(
                 "Unsupported database schema version: "
-                f"{version}; expected 0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "
+                f"{version}; expected 0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, "
                 f"or {LATEST_SCHEMA_VERSION}"
             )
 

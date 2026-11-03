@@ -17,9 +17,11 @@ from ..domain import (
     PositionActionType,
     Side,
     SignalExtraction,
+    SignalPositionContext,
     SourceMessage,
     TradingIntent,
 )
+from .entry_review import entry_reviews
 from .evidence import (
     _SHORTHAND_REDUCE_PATTERN,
     _caption_is_market_update,
@@ -97,9 +99,14 @@ def _entry_from_transport(
 def _signals_from_extraction(
     source: SourceMessage,
     extraction: IntentExtraction,
+    position_context: SignalPositionContext | None = None,
 ) -> SignalExtraction:
+    opens = _open_intents_from_extraction(source, extraction)
     return SignalExtraction(
-        open_intents=_open_intents_from_extraction(source, extraction),
+        entry_reviews=entry_reviews(
+            source, extraction, position_context, {i.symbol for i in opens}
+        ),
+        open_intents=opens,
         position_actions=_position_actions_from_extraction(source, extraction),
     )
 

@@ -368,7 +368,7 @@ def test_schema15_upgrade_preserves_source_and_trade_state(tmp_path):
         await IntentStore(path).initialize()
         await IntentStore(path).initialize()
         with closing(sqlite3.connect(path)) as db:
-            assert db.execute("PRAGMA user_version").fetchone() == (16,)
+            assert db.execute("PRAGMA user_version").fetchone() == (17,)
             assert {
                 t: db.execute("SELECT * FROM " + t).fetchall() for t in tables
             } == before
