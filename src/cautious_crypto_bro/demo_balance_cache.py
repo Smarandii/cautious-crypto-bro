@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
+import hmac
 import json
 import os
 from datetime import date, datetime, timedelta
@@ -106,9 +106,13 @@ def collect_balance_feed(
     No raw ledger IDs or credentials are retained. Corrupt cache is an explicit
     failure, not permission to overwrite evidence or publish another account.
     """
-    scope = hashlib.sha256(
-        (DEMO_BASE_URL + "\0" + str(database_path.resolve()) + "\0" + api_key).encode()
-    ).hexdigest()
+    # A keyed namespace binds this cache to one credential and state location;
+    # it is not a stored password verifier or an authenticator for cache contents.
+    scope = hmac.digest(
+        api_key.encode(),
+        (DEMO_BASE_URL + "\0" + str(database_path.resolve())).encode(),
+        "sha256",
+    ).hex()
     previous = _retained(path, scope)
     try:
         current = fetch_daily_wallet_history(client)

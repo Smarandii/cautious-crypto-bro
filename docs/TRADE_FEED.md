@@ -25,7 +25,8 @@ the capture unavailable rather than manufacture a plausible historical curve.
 No-transaction history without a balance anchor stays unknown.
 
 `demo-balance.json` in the private publisher work volume retains up to 90 UTC
-days, scoped by Demo endpoint, resolved database path and a hash of the API key.
+days, scoped by Demo endpoint, resolved database path and a keyed credential
+fingerprint. This is an account namespace, not stored password verification.
 It stores only approved balance/activity fields, never ledger/order/account IDs
 or credentials. Updates use mode 0600, file synchronization and atomic replace.
 Long capture gaps remain explicit unknown days. Preserve this volume during
