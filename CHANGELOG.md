@@ -10,6 +10,33 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.55] - 2026-11-03
+
+### Documentation
+
+- Preserve the bounded original-source interpretation audit (#316): 42 supported
+  visible post groups, 47 member messages, five albums and 31 images. All original
+  request fingerprints match reconstructed inputs; all frozen decision records
+  match their stored production decisions. Separate provenance from manual policy
+  judgments, execution dispositions and profitable lifecycle evidence.
+- Record three extraction-contract discrepancies and a ticker transcription
+  discrepancy with their delivered atomic fixes (#317/#318/#319/#338). Preserve
+  one unresolved filled-entry review question in #340. Publish aggregate findings
+  only; private identities, captions, media and fingerprints stay out of artifacts.
+- Link the report from README. Full profit magnitude/participation #248, broad
+  audit #262 and independent zone work #123/#312 remain unfinished. Completing
+  the fixed-cohort review does not certify general recall or profitability.
+
+### Validation and compatibility
+
+- Validate population/grouping/category totals and original-input/decision
+  evidence against retained private manifests; check report links and public
+  content boundaries. No model rerun is used as ground truth.
+- Application, tests, dependencies, schema16 and approval/risk/entry/exit policy
+  are unchanged. No migration or historical replay. The preceding implementation
+  checkpoint passed 1,763 tests with one skip; normal full CI gates this report.
+  Retain the previous image and verified state backup for local delivery rollback.
+
 ## [2.2.54] - 2026-11-02
 
 ### Fixed
