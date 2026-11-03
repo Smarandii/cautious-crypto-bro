@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cautious_crypto_bro.dashboard_balance import decode_balance_feed
 from cautious_crypto_bro.dashboard_feed import public_feed_from_snapshot
 from cautious_crypto_bro.dashboard_metrics import public_trade_history
 from cautious_crypto_bro.state_ownership import state_ownership
@@ -49,15 +50,20 @@ def test_cycle_dispatches_only_public_feed_and_verifies_publication(
 ):
     public = feed()
     requests = []
+    balance = {"schema_version": 1, "refresh_failed": True, "history": None}
 
     def export(config, bundle, output):
         assert config == settings
         bundle.write_text("PRIVATE_ARCHIVE_CANARY", encoding="utf-8")
         output.write_text(json.dumps(public), encoding="utf-8")
+        output.with_suffix(".balance.json").write_text(
+            json.dumps(balance), encoding="utf-8"
+        )
 
     def urlopen(request, *, timeout):
         requests.append(request)
-        response = io.BytesIO(json.dumps(public).encode())
+        value = balance if "balance.json" in request.full_url else public
+        response = io.BytesIO(json.dumps(value).encode())
         response.status = 204 if request.get_method() == "POST" else 200
         assert timeout in (15, 30)
         return response
@@ -69,9 +75,12 @@ def test_cycle_dispatches_only_public_feed_and_verifies_publication(
         "published": True,
         "as_of": public["trade_history"]["as_of"],
         "completed_trades": 0,
+        "balance_as_of": None,
+        "balance_refresh_failed": True,
     }
     dispatched = json.loads(requests[0].data)
     assert json.loads(dispatched["inputs"]["trade_feed"]) == public
+    assert decode_balance_feed(dispatched["inputs"]["balance_feed"]) == balance
     assert all("PRIVATE" not in (request.data or b"").decode() for request in requests)
     assert requests[0].get_header("Authorization") == "Bearer PRIVATE_CREDENTIAL_CANARY"
     assert not list(settings.publisher_work_dir.iterdir())
@@ -165,6 +174,18 @@ def test_absent_or_corrupt_receipt_is_unhealthy(settings):
     assert not publisher.healthy(settings)
 
 
+def test_failed_balance_refresh_is_not_reported_as_healthy(settings):
+    publisher._write_receipt(
+        settings,
+        {
+            "checked_at": datetime.now(UTC).isoformat(),
+            "published": True,
+            "balance_refresh_failed": True,
+        },
+    )
+    assert not publisher.healthy(settings)
+
+
 def test_cycle_failure_is_private_and_next_interval_recovers(
     settings, monkeypatch, capsys
 ):
@@ -226,10 +247,13 @@ def test_publisher_keeps_private_terminal_evidence_across_temporary_exports(
     import export_forensic_replay
     import export_trade_feed
 
+    import cautious_crypto_bro.demo_balance_cache as balance_cache
+
     settings.database_path.touch()
     public = feed()
     paths = []
     requests = []
+    balance = {"schema_version": 1, "refresh_failed": True, "history": None}
 
     def export(bundle, **options):
         path = options["terminal_evidence_path"]
@@ -247,12 +271,16 @@ def test_publisher_keeps_private_terminal_evidence_across_temporary_exports(
 
     def urlopen(request, *, timeout):
         requests.append(request)
-        response = io.BytesIO(json.dumps(public).encode())
+        value = balance if "balance.json" in request.full_url else public
+        response = io.BytesIO(json.dumps(value).encode())
         response.status = 204 if request.get_method() == "POST" else 200
         return response
 
     monkeypatch.setattr(export_forensic_replay, "export_bundle", export)
     monkeypatch.setattr(export_trade_feed, "build_trade_feed", build)
+    monkeypatch.setattr(
+        balance_cache, "collect_balance_feed", lambda *args, **kwargs: balance
+    )
     monkeypatch.setattr(publisher, "_run_export", publisher.export_feed)
     monkeypatch.setattr(publisher, "urlopen", urlopen)
     assert publisher.refresh_once(settings)["published"]

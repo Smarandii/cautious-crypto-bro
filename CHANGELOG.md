@@ -10,6 +10,46 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.59] - 2026-11-03
+
+### Added
+
+- Daily Bybit Demo USDT wallet-balance bars and selectable day activity (#346),
+  preserving the minimalist dark design. Show UTC closing balances, day changes,
+  provisional today and explicit stale/unavailable evidence. Mouse, day selector
+  and arrow/Home/End navigation expose the selected day's full account activity.
+- A separate read-only account ledger capture verifies cash components, complete
+  pagination, same-timestamp cash transitions and an unchanged wallet anchor.
+  Include transfers, fees and funding without calling them strategy profit.
+  Borrowing, funded non-USDT assets, broken cash chains or changed anchors prevent
+  an unsupported overall USDT claim. Open unrealized PnL is explicitly excluded.
+- Account-scoped atomic retention in the publisher's private work volume preserves
+  up to 90 UTC days. Public `balance.json` exposes the last 30 full days plus today,
+  with every available activity in that window; the latest-100 certified-trade
+  cap does not truncate it. Failed captures retain prior timestamps and report
+  failure; unknown history is never synthesized from certified trade PnL.
+
+### Changed
+
+- Keep risk/settings visible and move certified strategy trades into a disclosure
+  below the balance chart. Preserve frozen policies and independent historical
+  analysis. Account execution Buy/Sell is not inferred position LONG/SHORT.
+- Reuse Pages with a separately whitelisted, bounded gzip/base64 balance input.
+  Oversized or invalid evidence fails explicitly instead of dropping activities.
+  Verify both published payloads; a failed balance refresh is unhealthy.
+
+### Validation and compatibility
+
+- Synthetic client/reducer/publisher/installer checks cover pagination, transfers,
+  fees/funding, equal timestamps/cycles, changed anchors, duplicate/corrupt rows,
+  unknown history, cache scope/recovery, privacy and bounded decompression.
+- No application database migration, dependencies or trading/risk/exit changes.
+  Preserve `publisher_work` during rollout/rollback; old images ignore the additive
+  balance cache. Existing trade-only dispatches and source rebuilds retain the
+  last validated public balance feed, whose original timestamp visibly ages.
+- This is Demo account reporting, not proof of profitable strategy attribution
+  or historical unrealized equity. Parent profitability/audit work remains open.
+
 ## [2.2.58] - 2026-11-03
 
 ### Fixed
