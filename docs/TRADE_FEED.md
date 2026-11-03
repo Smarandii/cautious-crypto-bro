@@ -57,6 +57,9 @@ read-only mode. The app retains an idle SQLite connection while running so WAL
 sidecars remain available to read-only readers. Its initial read completes before
 idling; it does not retain a snapshot or prevent checkpoints. Stop the publisher
 before deliberately stopping the app for state maintenance.
+Resume both services in the same foreground deployment operation, including its
+caught-failure recovery path; see [local-cutover.md](local-cutover.md). A later
+agent or operator step must not be required simply to restart the publisher.
 This shared volume also contains existing app state files; it is
 not a per-file isolation boundary. Selected publisher credentials are mounted
 read-only at `/run/secrets`. Temporary forensic archives, the singleton lock and

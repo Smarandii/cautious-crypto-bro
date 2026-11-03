@@ -59,6 +59,9 @@ schema compatibility and rollback.
 [State backup and restore drill](docs/state-backups.md) provides a locked,
 offline backup command and an isolated verification workflow for SQLite and the
 Telegram session. It leaves live restore/cutover as an explicit operator step.
+For deployments with the opt-in publisher, follow the
+[local cutover runbook](docs/local-cutover.md) to resume both services within the
+same foreground operation, including compatible failure recovery.
 
 Run one app per shared SQLite state directory. Startup takes an OS-held lock at
 `DATABASE_PATH.owner.lock` before database initialization, migration or quarantine,
