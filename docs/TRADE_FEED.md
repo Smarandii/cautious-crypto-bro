@@ -22,11 +22,20 @@ fees and funding affect this account balance; they are not all strategy profit.
 Execution Buy/Sell is not position LONG/SHORT. Funded non-USDT currencies,
 borrowing, an unlogged reset or cash gap, missing pages and changing anchors make
 the capture unavailable rather than manufacture a plausible historical curve.
-No-transaction history without a balance anchor stays unknown.
+The query's start does not prove an opening balance. Days before the first
+observed cash event stay unknown; the first observed close can be known while
+its DoD change is unavailable. A previously verified version-2 closed day is an
+independent anchor: extend it forward through complete quiet queries and verify
+the result against the current wallet. Unexplained changes or disappearing
+previous activity fail. No-transaction history without such an anchor stays
+unknown; current wallet value is still shown provisionally.
 
-`demo-balance.json` in the private publisher work volume retains up to 90 UTC
+`demo-balance-v2.json` in the private publisher work volume retains up to 90 UTC
 days, scoped by Demo endpoint, resolved database path and a keyed credential
 fingerprint. This is an account namespace, not stored password verification.
+The private envelope requires schema version 2. Legacy `demo-balance.json` is
+preserved privately and never reused as an opening anchor; the public feed's
+schema version remains 1. Keep the legacy file/backups as rollout evidence.
 It stores only approved balance/activity fields, never ledger/order/account IDs
 or credentials. Updates use mode 0600, file synchronization and atomic replace.
 Long capture gaps remain explicit unknown days. Preserve this volume during
@@ -41,8 +50,12 @@ dispatch. Exceeding a limit is a visible refresh/publication failure. A failed
 capture retains the prior verified public window and timestamp, sets
 `refresh_failed`, and makes publisher health false. The trade feed can still
 refresh independently. If no verified balance exists, the chart says unavailable.
-Older images ignore the additive cache; rollback retains its files and lets
-the last published evidence age. No app schema migration or trading change.
+Older images ignore the additive version-2 filename; rollback retains its files
+and lets last published evidence age. The untagged v2.2.59 reporter has the known
+prefix defect: hold that reporter on rollback rather than republish unproven
+values. The previously verified v2.2.58 image can provide trade-only recovery
+while Pages retains the corrected balance feed and its original timestamp.
+No app schema migration or trading change.
 
 ## Compose service
 

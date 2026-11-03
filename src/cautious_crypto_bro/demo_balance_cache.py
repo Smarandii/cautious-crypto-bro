@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -17,6 +18,8 @@ from .dashboard_balance import (
 )
 from .demo_balance import fetch_daily_wallet_history
 
+BALANCE_CACHE_FILENAME = "demo-balance-v2.json"
+
 
 def _retained(path: Path, scope: str) -> dict | None:
     if not path.exists():
@@ -24,8 +27,14 @@ def _retained(path: Path, scope: str) -> dict | None:
     if path.stat().st_size > MAX_BALANCE_BYTES + 1024:
         raise ValueError("Retained balance history exceeds its size budget")
     saved = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(saved, dict) or set(saved) != {"scope", "history"}:
+    if not isinstance(saved, dict) or set(saved) != {
+        "schema_version",
+        "scope",
+        "history",
+    }:
         raise ValueError("Invalid retained balance history")
+    if type(saved["schema_version"]) is not int or saved["schema_version"] != 2:
+        raise ValueError("Unsupported retained balance semantics")
     if saved["scope"] != scope:
         return None  # Never carry a previous account's balance into another key.
     return validate_balance_history(saved["history"])
@@ -38,6 +47,7 @@ def _merge(previous: dict | None, current: dict) -> dict:
         previous["as_of"]
     ):
         raise ValueError("Balance capture moved backwards")
+    current = _anchored_window(previous, current)
     first = current["days"][0]
     cutoff = (
         (datetime.fromisoformat(current["as_of"]) - timedelta(days=89))
@@ -81,6 +91,54 @@ def _merge(previous: dict | None, current: dict) -> dict:
     return validate_balance_history(result)
 
 
+def _observed_day(day: dict, prior: dict | None) -> dict:
+    if day["balance"] is not None or prior is None or not prior["complete"]:
+        return day
+    if day["activity"] != prior["activity"]:
+        raise ValueError("Previously observed account activity disappeared")
+    return deepcopy(prior)
+
+
+def _extend_day(day: dict, anchor: Decimal, *, complete: bool) -> dict:
+    movement = sum(
+        (Decimal(row["wallet_change"]) for row in day["activity"]), Decimal(0)
+    )
+    expected = anchor + movement
+    if day["balance"] is not None and Decimal(day["balance"]) != expected:
+        raise ValueError(
+            "Observed wallet disagrees with its retained closed-day anchor"
+        )
+    return {
+        **day,
+        "balance": format(expected, "f"),
+        "change": format(movement, "f"),
+        "complete": complete,
+    }
+
+
+def _anchored_window(previous: dict, current: dict) -> dict:
+    """Only version-2 observed closes may anchor a later quiet interval.
+
+    Reaching backward from the first new event is not evidence. A previously
+    observed closed day is independent evidence; extend it forward through a
+    complete quiet query and check the resulting amount against today's wallet.
+    """
+    old = {day["date"]: day for day in previous["days"]}
+    start = datetime.fromisoformat(current["start"])
+    as_of = datetime.fromisoformat(current["as_of"])
+    prior = old.get((start.date() - timedelta(days=1)).isoformat())
+    anchor = Decimal(prior["balance"]) if prior and prior["complete"] else None
+    days = []
+    for raw_day in current["days"]:
+        day = _observed_day(raw_day, old.get(raw_day["date"]))
+        if anchor is not None:
+            complete = start.date() <= date.fromisoformat(day["date"]) < as_of.date()
+            day = _extend_day(day, anchor, complete=complete)
+        anchor = Decimal(day["balance"]) if day["complete"] else None
+        days.append(day)
+    return validate_balance_history({**current, "days": days})
+
+
 def _public_window(history: dict | None) -> dict | None:
     if history is None:
         return None
@@ -117,7 +175,11 @@ def collect_balance_feed(
     try:
         current = fetch_daily_wallet_history(client)
         history = _merge(previous, current)
-        feed = {"schema_version": 1, "refresh_failed": False, "history": current}
+        feed = {
+            "schema_version": 1,
+            "refresh_failed": False,
+            "history": _public_window(history),
+        }
         encode_balance_feed(feed)  # Fail before saving anything that cannot dispatch.
     except Exception:
         # The calling publisher already reports failures; no raw exchange errors
@@ -130,7 +192,11 @@ def collect_balance_feed(
     temporary = path.with_suffix(".next")
     with temporary.open("w", encoding="utf-8") as output:
         os.chmod(temporary, 0o600)
-        json.dump({"scope": scope, "history": history}, output, allow_nan=False)
+        json.dump(
+            {"schema_version": 2, "scope": scope, "history": history},
+            output,
+            allow_nan=False,
+        )
         output.flush()
         os.fsync(output.fileno())
     temporary.replace(path)

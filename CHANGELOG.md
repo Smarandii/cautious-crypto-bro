@@ -10,6 +10,37 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.60] - 2026-11-03
+
+### Fixed
+
+- Leave wallet balances unknown before the first observed cash event (#350).
+  Preserve that day's observed close and all activity, but do not invent its
+  day-over-day change without an independent previous closing balance. This
+  corrects an acceptance gap caught before tagging the daily-balance rollout.
+- Only version-2 retained, observed closed days can anchor later quiet periods.
+  Extend those anchors forward through complete queries and reconcile to the
+  current wallet; an unexplained change or disappearing activity fails rather
+  than manufacturing history. A requested window is not an opening-balance fact.
+
+### Delivery and compatibility
+
+- First verified release of the dark daily Demo wallet chart/day activity feature
+  introduced by MR #349. v2.2.59 was an untagged rollout, not completed delivery.
+  Retain explicit UTC/USDT semantics, partial/unknown/stale states, complete daily
+  activity and independent settings/certified strategy reporting; open PnL and
+  strategy profitability are not inferred from account cash movements.
+- Reproduce the prefix defect with synthetic first-event-after-start and
+  first-event-today cases; preserve cash-cycle, full-pagination, privacy,
+  account-scope and observed-then-quiet controls, including unexplained changes.
+- Additive private cache transition: `demo-balance-v2.json` requires version 2;
+  legacy `demo-balance.json` remains private rollback evidence and cannot supply
+  an opening anchor. No application schema16, dependency or trading/risk change.
+- Preserve the publisher work volume. The known reporting defect makes v2.2.59's
+  publisher an unsuitable rollback target; use the previously verified v2.2.58
+  image for trade-only recovery, retaining corrected public balance timestamps.
+  Full #248 profitability, #262 audit and #340 review routing remain open.
+
 ## [2.2.59] - 2026-11-03
 
 ### Added
