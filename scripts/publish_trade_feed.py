@@ -97,13 +97,16 @@ def export_feed(settings: PublisherSettings, bundle: Path, output: Path) -> None
         feed = build_trade_feed(database, bundle, risk)
     output.write_text(json.dumps(feed, allow_nan=False) + "\n", encoding="utf-8")
     from cautious_crypto_bro.bybit.client import DEMO_BASE_URL, BybitClient
-    from cautious_crypto_bro.demo_balance_cache import collect_balance_feed
+    from cautious_crypto_bro.demo_balance_cache import (
+        BALANCE_CACHE_FILENAME,
+        collect_balance_feed,
+    )
 
     client = BybitClient(DEMO_BASE_URL, access.bybit_api_key, access.bybit_api_secret)
     try:
         balance = collect_balance_feed(
             client,
-            settings.publisher_work_dir / "demo-balance.json",
+            settings.publisher_work_dir / BALANCE_CACHE_FILENAME,
             api_key=access.bybit_api_key,
             database_path=settings.database_path,
         )

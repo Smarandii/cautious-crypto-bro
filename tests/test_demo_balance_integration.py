@@ -172,8 +172,10 @@ def test_complete_account_pages_reconcile_daily_balances_and_private_boundary():
         client.close()
     days = {day["date"]: day for day in result["days"]}
     assert len(days) == 31
-    assert days["2026-10-04"]["balance"] == "1000"
-    assert days["2026-10-05"]["change"] == "500"
+    assert days["2026-10-04"]["balance"] is None
+    assert not days["2026-10-04"]["complete"]
+    assert days["2026-10-05"]["balance"] == "1500"
+    assert days["2026-10-05"]["change"] is None
     assert days["2026-10-06"]["balance"] == "1597"
     assert days["2026-10-06"]["change"] == "97"
     assert days["2026-10-07"]["balance"] == "1594"
@@ -249,7 +251,8 @@ def test_day_detail_is_not_capped_at_latest_hundred_and_cycles_are_valid():
         wallet_balance="1150",
     )
     day = next(d for d in result["days"] if d["date"] == "2026-10-05")
-    assert day["balance"] == "1150" and day["change"] == "150"
+    assert day["balance"] == "1150" and day["change"] is None
+    assert sum(Decimal(a["wallet_change"]) for a in day["activity"]) == 150
     assert len(day["activity"]) == 152
 
 
@@ -258,6 +261,22 @@ def test_empty_ledger_does_not_invent_historical_balances():
     assert all(d["balance"] is None and not d["complete"] for d in result["days"][:-1])
     assert result["days"][-1]["balance"] == "1500"
     assert result["days"][-1]["change"] is None
+
+
+def test_first_observation_today_does_not_create_a_month_of_prior_balances():
+    row = event("first", "2026-11-03T11:00:00+00:00", "1000", "500", kind="TRANSFER_IN")
+    result = daily_wallet_history(
+        [row], start=START, as_of=AS_OF, wallet_balance="1500"
+    )
+    assert all(
+        day["balance"] is None and day["change"] is None and not day["complete"]
+        for day in result["days"][:-1]
+    )
+    today = result["days"][-1]
+    assert today["balance"] == "1500" and today["change"] is None
+    assert (
+        len(today["activity"]) == 1 and today["activity"][0]["wallet_change"] == "500"
+    )
 
 
 def test_public_transport_roundtrips_every_activity_without_private_fields():
@@ -370,6 +389,67 @@ def test_retention_keeps_older_days_but_public_window_stays_explicit(
     saved = json.loads(path.read_text())["history"]
     assert len(saved["days"]) == 32 and saved["days"][0]["date"] == "2026-10-04"
     assert validate_balance_history(saved) == saved
+
+
+@pytest.mark.parametrize("wallet,expected_failure", [("1500", False), ("1600", True)])
+def test_verified_closed_day_anchor_preserves_quiet_periods_and_detects_unlogged_changes(
+    tmp_path, monkeypatch, wallet, expected_failure
+):
+    observed = daily_wallet_history(
+        history(), start=START, as_of=AS_OF, wallet_balance="1500"
+    )
+    monkeypatch.setattr(
+        balance_cache, "fetch_daily_wallet_history", lambda client: deepcopy(observed)
+    )
+    path = tmp_path / balance_cache.BALANCE_CACHE_FILENAME
+    args = {"api_key": "invented-key", "database_path": tmp_path / "state.db"}
+    balance_cache.collect_balance_feed(None, path, **args)
+    before = path.read_bytes()
+    quiet = daily_wallet_history(
+        [],
+        start=datetime(2026, 10, 10, tzinfo=UTC),
+        as_of=datetime(2026, 11, 9, 12, tzinfo=UTC),
+        wallet_balance=wallet,
+    )
+    monkeypatch.setattr(
+        balance_cache, "fetch_daily_wallet_history", lambda client: deepcopy(quiet)
+    )
+    feed = balance_cache.collect_balance_feed(None, path, **args)
+    assert feed["refresh_failed"] is expected_failure
+    if expected_failure:
+        assert path.read_bytes() == before
+        assert feed["history"]["as_of"] == observed["as_of"]
+    else:
+        days = feed["history"]["days"]
+        assert all(d["balance"] == "1500" and d["change"] == "0" for d in days)
+        assert all(d["complete"] for d in days[:-1]) and not days[-1]["complete"]
+        saved = json.loads(path.read_text())
+        assert saved["schema_version"] == 2
+        assert saved["history"]["days"][0]["balance"] is None
+
+
+def test_legacy_balance_cache_is_preserved_and_not_an_opening_anchor(
+    tmp_path, monkeypatch
+):
+    legacy = tmp_path / "demo-balance.json"
+    legacy.write_text(
+        json.dumps({"scope": "old-scope", "history": {"unproven": "1000"}})
+    )
+    before = legacy.read_bytes()
+    current = daily_wallet_history(
+        history(), start=START, as_of=AS_OF, wallet_balance="1500"
+    )
+    monkeypatch.setattr(
+        balance_cache, "fetch_daily_wallet_history", lambda client: deepcopy(current)
+    )
+    target = tmp_path / balance_cache.BALANCE_CACHE_FILENAME
+    feed = balance_cache.collect_balance_feed(
+        None, target, api_key="invented-key", database_path=tmp_path / "state.db"
+    )
+    assert legacy.read_bytes() == before and target != legacy
+    assert json.loads(target.read_text())["schema_version"] == 2
+    assert feed["history"]["days"][0]["balance"] is None
+    assert feed["history"]["days"][1]["change"] is None
 
 
 def test_corrupt_retention_does_not_get_overwritten_or_published(tmp_path, monkeypatch):

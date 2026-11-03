@@ -141,18 +141,15 @@ def daily_wallet_history(
     )
     groups = []
     previous = None
-    opening = None
     for timestamp, batch in groupby(ordered, lambda row: int(row["transactionTime"])):
         path = _cash_path(list(batch), previous)
-        if opening is None:
-            opening = path[0]
         previous = path[-1]
         groups.append((timestamp, previous))
     if previous is not None and previous != wallet:
         raise ValueError("Demo ledger does not reconcile to its wallet anchor")
 
     activities = _public_activities(ordered)
-    days = _daily_closes(start, as_of, groups, opening, wallet, activities)
+    days = _daily_closes(start, as_of, groups, wallet, activities)
     return {
         "metric": "USDT wallet balance",
         "currency": "USDT",
@@ -191,13 +188,14 @@ def _daily_closes(
     start: datetime,
     as_of: datetime,
     groups: list[tuple[int, Decimal]],
-    opening: Decimal | None,
     wallet: Decimal,
     activities: dict[str, list[dict]],
 ) -> list[dict]:
     days = []
     cursor = start.replace(hour=0, minute=0, second=0, microsecond=0)
-    balance = opening
+    # A cash transition proves its observed balance, not that the account held
+    # its pre-transition amount on earlier, unobserved calendar days.
+    balance = None
     index = 0
     while cursor.date() <= as_of.date():
         next_day = cursor + timedelta(days=1)
