@@ -687,6 +687,24 @@ class ExtractedPositionAction(BaseModel):
     confidence: float = Field(ge=0, le=1)
 
 
+class ExtractedEntryReview(BaseModel):
+    """Current filled-entry evidence that cannot authorize an OPEN."""
+
+    model_config = ConfigDict(extra="forbid")
+    symbol: str = Field(pattern=r"^[A-Z0-9]{2,30}USDT$")
+    evidence_text: str = Field(min_length=1, max_length=300)
+
+
+class EntryReview(BaseModel):
+    """Informational only: deliberately has no side, price or execution status."""
+
+    model_config = ConfigDict(extra="forbid")
+    source: SourceMessage
+    symbol: str = Field(pattern=r"^[A-Z0-9]{2,30}USDT$")
+    evidence_text: str = Field(min_length=1, max_length=300)
+    ownership_unknown: bool
+
+
 class IntentExtraction(BaseModel):
     """Raw model response.
 
@@ -699,6 +717,8 @@ class IntentExtraction(BaseModel):
 
     actionable: bool
     reason: str = Field(min_length=1, max_length=500)
+
+    entry_reviews: tuple[ExtractedEntryReview, ...] = Field(default=(), max_length=5)
 
     intents: tuple[
         ExtractedIntent,
@@ -856,6 +876,7 @@ class SignalExtraction:
     raw_extraction: IntentExtraction | None = None
     evaluation_fingerprint: str | None = None
     evaluation_model: str | None = None
+    entry_reviews: tuple[EntryReview, ...] = ()
 
     @property
     def actionable(self) -> bool:

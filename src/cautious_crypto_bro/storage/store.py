@@ -3,6 +3,7 @@ from __future__ import annotations
 from ._connection import SQLiteConnectionMixin
 from .attention import OperatorAttentionRepositoryImpl
 from .auto_outcome import AutoOutcomeRepositoryImpl
+from .entry_review import EntryReviewRepositoryImpl
 from .execution_policy import ExecutionPolicyRepositoryImpl
 from .guidance import GuidanceRepositoryImpl
 from .intent import IntentRepositoryImpl
@@ -19,6 +20,7 @@ from .zone_history import ZoneHistoryRepositoryImpl
 
 class SQLiteStore(
     SQLiteConnectionMixin,
+    EntryReviewRepositoryImpl,
     OperatorAttentionRepositoryImpl,
     AutoOutcomeRepositoryImpl,
     IntentRepositoryImpl,

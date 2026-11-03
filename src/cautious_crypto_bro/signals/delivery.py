@@ -16,12 +16,19 @@ from ..domain import (
     PositionActionIntent,
     TradingIntent,
 )
-from ..ports import ApprovalSender, AutoOutcomeRepository, ManualDeliveryRepository
+from ..ports import (
+    ApprovalSender,
+    AutoOutcomeRepository,
+    EntryReviewRepository,
+    ManualDeliveryRepository,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class DeliveryStore(ManualDeliveryRepository, AutoOutcomeRepository, Protocol):
+class DeliveryStore(
+    ManualDeliveryRepository, AutoOutcomeRepository, EntryReviewRepository, Protocol
+):
     async def prepare_manual_action_delivery(
         self, action_id: UUID, *, max_age_seconds: int
     ) -> PositionActionIntent | None: ...
@@ -125,6 +132,19 @@ class SignalDelivery:
                     IntentStatus.SKIPPED,
                 }:
                     await self.manual(action)
+
+    async def recover_entry_reviews(self) -> None:
+        for review in await self._store.pending_entry_reviews():
+            token = await self._store.claim_entry_review(review)
+            if token is None:
+                continue
+            try:
+                await self._approval_bot.send_entry_review(review)
+            except Exception:
+                await self._store.finish_entry_review(review, token, delivered=False)
+                logger.exception("Entry review delivery failed; retry scheduled")
+                continue
+            await self._store.finish_entry_review(review, token, delivered=True)
 
     async def recover_auto_outcomes(self) -> None:
         for record_id, kind in await self._store.pending_auto_outcome_deliveries():

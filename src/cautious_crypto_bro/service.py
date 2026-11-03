@@ -309,6 +309,24 @@ class SignalService:
         ):
             return None
 
+        if signals.entry_reviews:
+            try:
+                retained = await self._store.save_entry_reviews(
+                    source,
+                    claim_token,
+                    signals.entry_reviews,
+                    signals.evaluation_fingerprint,
+                )
+            except Exception:
+                await self._store.mark_source_failed(
+                    source, claim_token, "Entry review persistence failed"
+                )
+                logger.exception("Entry review persistence failed")
+                return None
+            if not retained:
+                return None
+            await self.delivery.recover_entry_reviews()
+
         if not signals.actionable:
             await self._store.mark_source_completed(
                 source,
@@ -397,6 +415,9 @@ class SignalService:
                 mode="json"
             ),
             "normalized": {
+                "entry_reviews": [
+                    item.model_dump(mode="json") for item in signals.entry_reviews
+                ],
                 "open_intents": [
                     item.model_dump(mode="json") for item in signals.open_intents
                 ],

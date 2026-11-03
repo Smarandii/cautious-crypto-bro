@@ -14,6 +14,7 @@ from .domain import (
     AccountStateSummary,
     ApprovalMode,
     ClosedPnlRecord,
+    EntryReview,
     ExecutionPlan,
     ExecutionPolicy,
     IncomingPost,
@@ -135,6 +136,7 @@ class AccountGateway(Protocol):
 
 
 class ApprovalSender(Protocol):
+    async def send_entry_review(self, review: EntryReview) -> None: ...
     async def send_unverified_position_action(
         self, action: PositionActionIntent
     ) -> None: ...
@@ -490,6 +492,24 @@ class PositionStrategyRepository(Protocol):
     ) -> None: ...
 
 
+class EntryReviewRepository(Protocol):
+    async def save_entry_reviews(
+        self,
+        source: SourceMessage,
+        claim_token: str,
+        reviews: tuple[EntryReview, ...],
+        fingerprint: str | None,
+    ) -> bool: ...
+
+    async def pending_entry_reviews(self) -> tuple[EntryReview, ...]: ...
+
+    async def claim_entry_review(self, review: EntryReview) -> str | None: ...
+
+    async def finish_entry_review(
+        self, review: EntryReview, token: str, *, delivered: bool
+    ) -> None: ...
+
+
 class ManualDeliveryRepository(Protocol):
     async def pending_manual_deliveries(
         self,
@@ -593,6 +613,7 @@ class PlanningCandidateRepository(Protocol):
 
 
 class SignalServiceStore(
+    EntryReviewRepository,
     PlanningCandidateRepository,
     SourceRepository,
     GuidanceRepository,
