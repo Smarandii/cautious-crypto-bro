@@ -1,8 +1,10 @@
 let selectedBalanceDate;
 let lastBalanceFeed;
 let balanceRefreshPending = false;
+let balanceChartObserver;
 
 function renderDailyBalance(feed, refreshFailed = false) {
+  balanceChartObserver?.disconnect();
   let section = document.querySelector("#daily-balance");
   if (!section) {
     section = document.createElement("section");
@@ -19,6 +21,7 @@ function renderDailyBalance(feed, refreshFailed = false) {
   const priorScroll = section.querySelector(
     ".balance-chart-scroll",
   )?.scrollLeft;
+  const priorBenchmarkMethod = section.querySelector(".benchmark-method")?.open;
   section.replaceChildren();
   const add = (tag, text, parent = section) => {
     const element = document.createElement(tag);
@@ -49,9 +52,51 @@ function renderDailyBalance(feed, refreshFailed = false) {
   status.textContent = `${refreshFailed || feed?.refresh_failed ? "Refresh failed; last verified data retained. " : ""}${stale ? "STALE or unavailable balance evidence. " : ""}${Number.isFinite(captured) ? `Updated ${new Date(captured).toISOString().replace("T", " ")}. ` : ""}Published every 15 minutes.`;
   if (!history || !Array.isArray(history.days) || !history.days.length) {
     add("p", "Daily balance unavailable. No historical values inferred.");
+    const point = feed?.benchmark?.history?.days?.at(-1);
+    if (point)
+      add(
+        "p",
+        `BTC hold ${number(point.value)} USDT · ${point.date} · ${feed.benchmark.history.as_of}${feed.benchmark.refresh_failed ? " · retained after refresh failure" : ""}`,
+      ).className = "balance-btc-value";
     return;
   }
   const days = history.days;
+  const benchmark = feed?.benchmark?.history;
+  const btcDays = new Map(
+    (benchmark?.days ?? []).map((day) => [day.date, day]),
+  );
+  const btcAsOf = Date.parse(benchmark?.as_of);
+  const btcStale =
+    !Number.isFinite(btcAsOf) ||
+    Date.now() - btcAsOf > 30 * 60 * 1000 ||
+    btcAsOf > Date.now() + 5 * 60 * 1000;
+  const legend = add("p", "");
+  legend.className = "balance-legend";
+  add("span", "▮ Wallet balance · ", legend);
+  add("span", "━ BTC buy & hold (marked value)", legend).className =
+    "balance-btc-value";
+  add(
+    "p",
+    benchmark
+      ? `BTC hold from 2026-10-04 · ${feed.benchmark.refresh_failed ? "Refresh failed; previous benchmark retained. " : ""}${btcStale ? "STALE. " : ""}Updated ${new Date(btcAsOf).toISOString().slice(0, 16).replace("T", " ")} UTC.`
+      : "BTC benchmark unavailable: verified starting capital and complete spot prices are required.",
+  ).className = "balance-note";
+  const method = add("details", "");
+  method.className = "benchmark-method";
+  method.open = !!priorBenchmarkMethod;
+  add("summary", "How this comparison works", method);
+  add(
+    "p",
+    benchmark
+      ? `Hypothetical BTC/USDT spot purchase at 2026-10-04 00:00 UTC: ${number(benchmark.capital)} USDT at ${number(benchmark.entry_price)} USDT/BTC. Fixed holding, gross of trading costs; no later benchmark deposits or withdrawals.`
+      : "The comparison requires independently verified opening capital and complete BTC/USDT spot prices. Missing evidence stays unavailable.",
+    method,
+  );
+  add(
+    "p",
+    "Wallet bars include actual fees, funding and account cash movements, and exclude open P&L. BTC is marked to market. The unadjusted gap is not strategy alpha; inspect selected-day account activity for cash movements.",
+    method,
+  );
   add(
     "p",
     `${days[0].date} – ${days.at(-1).date} · Last day is provisional; gaps remain unknown. No account activity is omitted within this window.`,
@@ -76,7 +121,10 @@ function renderDailyBalance(feed, refreshFailed = false) {
   }
   const chart = add("div", "");
   chart.className = "balance-chart";
-  const values = days.map((day) => Number(day.balance) || 0);
+  const values = days.flatMap((day) => [
+    Number(day.balance) || 0,
+    Number(btcDays.get(day.date)?.value) || 0,
+  ]);
   const negative = values.some((value) => value < 0);
   const max = Math.max(1, ...values.map(Math.abs));
   const zero = negative ? 50 : 0;
@@ -94,6 +142,61 @@ function renderDailyBalance(feed, refreshFailed = false) {
     "Daily USDT wallet balance; arrow keys change day",
   );
   const buttons = [];
+  const overlay = benchmark
+    ? document.createElementNS("http://www.w3.org/2000/svg", "svg")
+    : null;
+  if (overlay) {
+    overlay.classList.add("balance-btc-overlay");
+    overlay.setAttribute("aria-hidden", "true");
+    bars.append(overlay);
+  }
+  function drawBenchmark() {
+    if (!overlay || !buttons.length) return;
+    const bounds = bars.getBoundingClientRect();
+    const height = buttons[0].getBoundingClientRect().height;
+    overlay.setAttribute("viewBox", `0 0 ${bounds.width} ${height}`);
+    overlay.replaceChildren();
+    let previous;
+    for (const button of buttons) {
+      const day = btcDays.get(button.dataset.date);
+      if (!day) {
+        previous = null;
+        continue;
+      }
+      const rect = button.getBoundingClientRect();
+      const point = {
+        x: rect.left - bounds.left + rect.width / 2,
+        y:
+          height *
+          (1 -
+            (negative ? 0.5 : 0) -
+            Number(day.value) / (negative ? 2 * max : max)),
+        complete: day.complete,
+      };
+      if (previous) {
+        const line = document.createElementNS(overlay.namespaceURI, "line");
+        for (const [key, value] of Object.entries({
+          x1: previous.x,
+          y1: previous.y,
+          x2: point.x,
+          y2: point.y,
+        }))
+          line.setAttribute(key, String(value));
+        if (!point.complete || !previous.complete)
+          line.setAttribute("stroke-dasharray", "4 3");
+        overlay.append(line);
+      }
+      const circle = document.createElementNS(overlay.namespaceURI, "circle");
+      circle.setAttribute("cx", String(point.x));
+      circle.setAttribute("cy", String(point.y));
+      circle.setAttribute(
+        "r",
+        button.dataset.date === selectedBalanceDate ? "4" : "2",
+      );
+      overlay.append(circle);
+      previous = point;
+    }
+  }
   const detail = add("div", "");
   detail.className = "balance-detail";
   detail.id = "balance-day-detail";
@@ -124,6 +227,20 @@ function renderDailyBalance(feed, refreshFailed = false) {
         : Number(day.change) >= 0
           ? "balance-positive"
           : "balance-negative";
+    const btcDay = btcDays.get(date);
+    add(
+      "p",
+      btcDay
+        ? `BTC hold ${number(btcDay.value)} USDT · ${btcDay.complete ? "Daily close" : "Provisional last price"} ${number(btcDay.price)} USDT/BTC · Return since purchase ${signed((Number(btcDay.price) / Number(benchmark.entry_price) - 1) * 100)}%${btcStale || feed.benchmark.refresh_failed ? " · stale / retained" : ""}`
+        : "BTC hold unavailable for this day.",
+      summary,
+    ).className = "balance-btc-value";
+    if (btcDay && day.balance != null)
+      add(
+        "p",
+        `Unadjusted balance gap ${signed(Number(day.balance) - Number(btcDay.value))} USDT`,
+        summary,
+      ).className = "balance-note";
     buttons.forEach((button) => {
       const selected = button.dataset.date === date;
       button.setAttribute("aria-pressed", String(selected));
@@ -141,6 +258,7 @@ function renderDailyBalance(feed, refreshFailed = false) {
         }
       }
     });
+    drawBenchmark();
     detail.replaceChildren();
     add("h3", `Trades and account activity · ${date}`, detail);
     if (day.balance == null) {
@@ -246,6 +364,17 @@ function renderDailyBalance(feed, refreshFailed = false) {
     });
     buttons.push(button);
   });
+  for (const button of buttons) {
+    const btc = btcDays.get(button.dataset.date);
+    button.setAttribute(
+      "aria-label",
+      `${button.getAttribute("aria-label")}; BTC hold ${btc ? `${number(btc.value)} USDT${btc.complete ? "" : ", provisional"}` : "unavailable"}`,
+    );
+  }
+  if (overlay) {
+    balanceChartObserver = new ResizeObserver(drawBenchmark);
+    balanceChartObserver.observe(bars);
+  }
   select.addEventListener("change", () => showDay(select.value));
   showDay(selectedBalanceDate);
   if (priorScroll != null) scroll.scrollLeft = priorScroll;
@@ -264,7 +393,8 @@ async function refreshDailyBalance() {
     });
     if (!response.ok) throw new Error("balance unavailable");
     const feed = await response.json();
-    if (feed.schema_version !== 1) throw new Error("unsupported balance feed");
+    if (![1, 2].includes(feed.schema_version))
+      throw new Error("unsupported balance feed");
     renderDailyBalance(feed);
     lastBalanceFeed = feed;
   } catch (error) {

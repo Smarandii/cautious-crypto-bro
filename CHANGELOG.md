@@ -10,6 +10,45 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.62] - 2026-11-04
+
+### Added
+
+- Daily Demo wallet bars can display a BTC buy-and-hold line from
+  2026-10-04 00:00 UTC. The hypothetical fixed holding uses independently
+  verified starting USDT capital and Bybit spot BTCUSDT opening price; subsequent
+  deposits/withdrawals do not change the benchmark. Missing baseline or price
+  evidence stays unavailable. Historical daily closes and provisional current
+  price are explicit.
+- Selecting a day shows wallet and benchmark values, BTC return since purchase,
+  an explicitly unadjusted balance gap and the existing complete account activity.
+  Dark desktop/mobile layout, keyboard navigation and selection across refreshes
+  remain. Native method disclosure explains gross benchmark costs, account cash
+  movements and wallet-excluded versus BTC-marked unrealized PnL; the gap is not
+  presented as strategy alpha.
+- Independent benchmark retention/freshness preserves the previous timestamp
+  after market, baseline or persistence failures. Public validation remains
+  stdlib-only for Pages; no chart framework or service dependency is added.
+
+### State and rollback
+
+- App SQLite schema17 and trading/risk/exit behavior are unchanged. Public
+  balance envelope v2 adds a bounded whitelisted benchmark; v1 remains readable.
+  Account-scoped private `btc-hold-v1.json` retains the immutable baseline and last
+  verified series. Existing `demo-balance-v2.json` semantics are preserved.
+- Runtime rollback to verified v2.2.61 is schema-compatible: stop/restart app and
+  publisher through normal coupled cutover and retain private work/state volumes.
+  Its v1 feed omits the BTC line; the new UI shows benchmark unavailability. Let
+  the old publisher publish v1 before rebuilding an old v1-only Pages validator.
+  Do not restore an old trading database. Earlier pre-schema17 rollback still
+  requires the separate compatibility operation documented for v2.2.61.
+- Validation uses invented flat/rising/falling prices, paginated signed ledger
+  and public-price transports, unknown baselines, gaps/corrupt data, scoped
+  retention and failed-refresh/write cases, plus actual rendered interaction.
+  A read-only candidate capture verifies live coverage and dispatch bounds without
+  writing production caches or mutating the exchange. This descriptive benchmark
+  does not certify profitability or complete the broader audit goals.
+
 ## [2.2.61] - 2026-11-04
 
 ### Added

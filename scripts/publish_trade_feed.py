@@ -96,10 +96,15 @@ def export_feed(settings: PublisherSettings, bundle: Path, output: Path) -> None
     with closing(sqlite3.connect(uri, uri=True)) as database:
         feed = build_trade_feed(database, bundle, risk)
     output.write_text(json.dumps(feed, allow_nan=False) + "\n", encoding="utf-8")
+    from cautious_crypto_bro.btc_benchmark import (
+        BENCHMARK_CACHE_FILENAME,
+        collect_benchmark,
+    )
     from cautious_crypto_bro.bybit.client import DEMO_BASE_URL, BybitClient
     from cautious_crypto_bro.demo_balance_cache import (
         BALANCE_CACHE_FILENAME,
         collect_balance_feed,
+        retained_balance_history,
     )
 
     client = BybitClient(DEMO_BASE_URL, access.bybit_api_key, access.bybit_api_secret)
@@ -110,6 +115,27 @@ def export_feed(settings: PublisherSettings, bundle: Path, output: Path) -> None
             api_key=access.bybit_api_key,
             database_path=settings.database_path,
         )
+        market = BybitClient("https://api.bybit.com", "", "")
+        try:
+            benchmark = collect_benchmark(
+                client,
+                market,
+                settings.publisher_work_dir / BENCHMARK_CACHE_FILENAME,
+                api_key=access.bybit_api_key,
+                database_path=settings.database_path,
+                retained_wallet=retained_balance_history(
+                    settings.publisher_work_dir / BALANCE_CACHE_FILENAME,
+                    api_key=access.bybit_api_key,
+                    database_path=settings.database_path,
+                ),
+            )
+        except Exception:
+            # Untrusted/corrupt benchmark retention cannot invalidate wallet data
+            # or be replaced silently with a guessed opening amount.
+            benchmark = {"refresh_failed": True, "history": None}
+        finally:
+            market.close()
+        balance = {**balance, "schema_version": 2, "benchmark": benchmark}
     finally:
         client.close()
     output.with_suffix(".balance.json").write_text(
@@ -180,6 +206,23 @@ def _github_dispatch(
             raise RuntimeError("Pages dispatch was not accepted")
 
 
+def _balance_receipt(balance: dict | None) -> dict:
+    if balance is None:
+        return {}
+    result = {
+        "balance_as_of": (balance["history"] or {}).get("as_of"),
+        "balance_refresh_failed": balance["refresh_failed"],
+    }
+    if balance["schema_version"] == 2:
+        result.update(
+            {
+                "benchmark_as_of": (balance["benchmark"]["history"] or {}).get("as_of"),
+                "benchmark_refresh_failed": balance["benchmark"]["refresh_failed"],
+            }
+        )
+    return result
+
+
 def _verify_publication(feed: dict, balance: dict | None = None) -> dict:
     deadline = time.monotonic() + 180
     while time.monotonic() < deadline:
@@ -208,14 +251,7 @@ def _verify_publication(feed: dict, balance: dict | None = None) -> dict:
                     "published": True,
                     "as_of": feed["trade_history"]["as_of"],
                     "completed_trades": feed["trade_history"]["total_completed"],
-                    **(
-                        {
-                            "balance_as_of": (balance["history"] or {}).get("as_of"),
-                            "balance_refresh_failed": balance["refresh_failed"],
-                        }
-                        if balance is not None
-                        else {}
-                    ),
+                    **_balance_receipt(balance),
                 }
         except (OSError, ValueError):
             pass

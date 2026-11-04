@@ -247,13 +247,21 @@ def test_publisher_keeps_private_terminal_evidence_across_temporary_exports(
     import export_forensic_replay
     import export_trade_feed
 
+    import cautious_crypto_bro.btc_benchmark as benchmark_module
     import cautious_crypto_bro.demo_balance_cache as balance_cache
 
     settings.database_path.touch()
     public = feed()
     paths = []
     requests = []
-    balance = {"schema_version": 1, "refresh_failed": True, "history": None}
+    wallet = {"schema_version": 1, "refresh_failed": True, "history": None}
+    benchmark = {"refresh_failed": True, "history": None}
+    balance = {**wallet, "schema_version": 2, "benchmark": benchmark}
+    benchmark_calls = []
+
+    def capture_benchmark(*args, **kwargs):
+        benchmark_calls.append(kwargs)
+        return benchmark
 
     def export(bundle, **options):
         path = options["terminal_evidence_path"]
@@ -279,13 +287,15 @@ def test_publisher_keeps_private_terminal_evidence_across_temporary_exports(
     monkeypatch.setattr(export_forensic_replay, "export_bundle", export)
     monkeypatch.setattr(export_trade_feed, "build_trade_feed", build)
     monkeypatch.setattr(
-        balance_cache, "collect_balance_feed", lambda *args, **kwargs: balance
+        balance_cache, "collect_balance_feed", lambda *args, **kwargs: wallet
     )
+    monkeypatch.setattr(benchmark_module, "collect_benchmark", capture_benchmark)
     monkeypatch.setattr(publisher, "_run_export", publisher.export_feed)
     monkeypatch.setattr(publisher, "urlopen", urlopen)
     assert publisher.refresh_once(settings)["published"]
     assert publisher.refresh_once(settings)["published"]
     assert len(paths) == 2 and paths[0] == paths[1]
+    assert len(benchmark_calls) == 2
     assert not list(settings.publisher_work_dir.glob("trade-feed-*"))
     assert paths[0].read_text() == "PRIVATE_RETAINED_ORDER_CANARY"
     assert all(
@@ -331,3 +341,42 @@ def test_export_child_redacts_private_evidence_failure(settings, monkeypatch):
     with pytest.raises(SystemExit) as result:
         publisher.main()
     assert result.value.code == 78
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("failed", [False, True])
+def test_benchmark_status_is_independent_in_publication_receipt(
+    settings, monkeypatch, tmp_path, failed
+):
+    from test_btc_benchmark_integration import BenchmarkHTTP, capture, retained
+
+    http = BenchmarkHTTP()
+    benchmark = capture(tmp_path, http)
+    benchmark["refresh_failed"] = failed
+    balance = {
+        "schema_version": 2,
+        "refresh_failed": False,
+        "history": retained(http),
+        "benchmark": benchmark,
+    }
+    public = feed()
+
+    def export(config, bundle, output):
+        output.write_text(json.dumps(public))
+        output.with_suffix(".balance.json").write_text(json.dumps(balance))
+
+    def urlopen(request, *, timeout):
+        response = io.BytesIO(
+            json.dumps(
+                balance if "balance.json" in request.full_url else public
+            ).encode()
+        )
+        response.status = 204 if request.get_method() == "POST" else 200
+        return response
+
+    monkeypatch.setattr(publisher, "_run_export", export)
+    monkeypatch.setattr(publisher, "urlopen", urlopen)
+    result = publisher.refresh_once(settings)
+    assert result["published"] and not result["balance_refresh_failed"]
+    assert result["benchmark_refresh_failed"] is failed
+    assert result["benchmark_as_of"] == benchmark["history"]["as_of"]
