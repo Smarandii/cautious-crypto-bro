@@ -31,7 +31,7 @@ private and are not repository or release assets.
 | Are recorded skips evidence of missed entries? | The inspected publication-window skips were lifecycle actions. Their original recorded account contexts were available and did not authorize an executable matching position. This validates the skip against recorded context, not a reconstruction of historical exchange state. |
 | Does a no-op prove a post had no useful instruction? | No. Raw extraction, normalization and context are different stages. Filtered updates/actions and extraction no-ops require original-input semantic review; a completed source row alone cannot certify correctness. |
 | Does a closed strategy certify its whole-trade result? | No. Physical entry identity, terminal settlement, quantities, fees and signed funding remain required. Missing terminal facts remain unknown. |
-| Does the current evidence establish the magnitude goal or an exit-policy winner? | No. Complete and incomplete outcomes remain separate; different frozen exit/participation cohorts cannot supply each other's experimental sample requirements. |
+| Does example-scale magnitude establish profitability or an exit-policy winner? | No. A completed frozen-policy lifecycle matches the requested example scale through captured Bybit Closed-PnL and execution records. This is a magnitude observation only; complete/incomplete outcomes and frozen exit/participation cohorts remain separate. |
 
 The visible-history window was `2026-11-03T20:53:13.908703Z` through
 `2026-11-04T20:53:13.908703Z`, with a 120-second settling delay and a
@@ -56,6 +56,13 @@ exit profile, entry TTL and participation arm/mechanism. Use the verified
 plan-creation cutover separately from fill/close times. Frozen records do not
 contain every global configuration field, so a timestamp is not proof of a
 fully identical policy. Never relabel old plans using today's settings.
+
+The magnitude observation was checked against original frozen sizing, settled
+physical entries, a matching non-probe Closed-PnL row and actual closing execution
+quantity. Its private receipt retains the audit identity; account values and
+order identifiers are not public evidence. An observed large loss also meets
+the operator's two-sided magnitude example; it cannot establish profitable scale
+or justify changing exits.
 
 The inspected historical settlement gaps predate prospective terminal retention;
 absence of an old zero-fill terminal row is not evidence of cancellation. Keep
