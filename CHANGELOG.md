@@ -10,6 +10,34 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.64] - 2026-11-04
+
+### Fixed
+
+- Source participation audits identify normalized informational entry reviews
+  as `HUMAN_REVIEW` rather than no-ops; filtered raw reviews remain explicitly
+  filtered. Reviews never certify trade execution or approval.
+- The offline read-only report independently exposes current normalized review
+  proposals and linked persisted pending/delivered review notifications. Mixed
+  posts retain execution uncertainty and planning-failure precedence. Legacy
+  decisions remain readable; a missing legacy review table yields unavailable
+  delivery evidence instead of invented success. The existing source-processing
+  update-time window also defines linked review scope; it is not a delivery-time
+  or Telegram publication-time cohort.
+- Report aggregates share a read-only SQLite snapshot, preserving consistency
+  when source processing or notification delivery changes during the audit.
+
+### Delivery and rollback
+
+- Synthetic SQLite lifecycle regressions cover pending/delivered/missing review
+  evidence, legacy databases, mixed uncertain orders, unchanged database bytes
+  and aggregate-only output; existing source decision and audit consumers remain
+  part of the verification gates.
+- SQLite remains schema 17. No model/Telegram delivery, replay, dependency,
+  trading, risk or entry/exit-policy change. Roll back app/publisher together to
+  v2.2.63 with retained state and images; no schema downgrade is required.
+  Broader profitability and architecture work remain open.
+
 ## [2.2.63] - 2026-11-04
 
 ### Fixed

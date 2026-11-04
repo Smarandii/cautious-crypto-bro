@@ -92,6 +92,16 @@ expiry (introduced in SQLite schema 11). Use `scripts/report_source_coverage.py 
 Historical missing decisions remain unknown; see STRATEGY.md for evidence privacy,
 upgrade and rollback requirements.
 
+Review-only decisions are reported as `HUMAN_REVIEW`, never as executed orders.
+`normalized_entry_reviews` counts current decision proposals;
+`linked_entry_review_deliveries` independently counts persisted `PENDING` and
+`DELIVERED` informational notifications linked to sources processed in the report
+window. Delivery is not human approval or trade execution. A missing legacy review
+table is reported as `null`, rather than inventing delivery evidence. Mixed posts
+retain their execution/planning disposition alongside these review counts.
+All aggregates use one read-only SQLite snapshot, so concurrent delivery cannot
+silently move only part of the report to a later state.
+
 To compare available channel history with intake records, explicitly opt in:
 
 ```console
