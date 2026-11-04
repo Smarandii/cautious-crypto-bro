@@ -73,10 +73,12 @@ def decision_disposition(
         return "UNRESOLVED"
     normalized = decision["normalized"]
     if not normalized["open_intents"] and not normalized["position_actions"]:
+        if normalized.get("entry_reviews"):
+            return "HUMAN_REVIEW"
         raw = decision["extraction"]
         return (
             "NORMALIZATION_FILTERED"
-            if raw["intents"] or raw["position_actions"]
+            if raw["intents"] or raw["position_actions"] or raw.get("entry_reviews")
             else "PROCESSED_NO_OP"
         )
     planning = decision.get("planning")
@@ -111,10 +113,30 @@ def _record_disposition(record_statuses: list[str]) -> str:
     return "UNRESOLVED"
 
 
+async def _entry_review_deliveries(
+    db: aiosqlite.Connection, since: str
+) -> dict[str, int] | None:
+    cursor = await db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='entry_reviews'"
+    )
+    if await cursor.fetchone() is None:
+        return None
+    cursor = await db.execute(
+        "SELECT CASE WHEN r.delivered_at IS NULL THEN 'PENDING' ELSE 'DELIVERED' END, "
+        "COUNT(*) FROM entry_reviews r JOIN source_messages s USING(channel_id,message_id) "
+        "WHERE s.updated_at>=? GROUP BY r.delivered_at IS NULL",
+        (since,),
+    )
+    return {"PENDING": 0, "DELIVERED": 0} | {
+        str(status): int(count) for status, count in await cursor.fetchall()
+    }
+
+
 async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
     """Return aggregate counts only; raw model/source evidence stays in SQLite."""
     uri = database_path.resolve().as_uri() + "?mode=ro"
     async with aiosqlite.connect(uri, uri=True) as db:
+        await db.execute("BEGIN")
         cursor = await db.execute(
             """
             SELECT channel_id, message_id, status, last_error FROM source_messages
@@ -129,6 +151,7 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
         source_statuses: Counter[str] = Counter()
         approval_modes: Counter[str] = Counter()
         missing = 0
+        normalized_reviews = 0
         cursor = await db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='planning_candidates'"
         )
@@ -137,6 +160,9 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
         for channel_id, message_id, status, reason in sources:
             source_statuses[status] += 1
             decision = await production_decision(db, channel_id, message_id)
+            normalized_reviews += len(
+                (decision or {}).get("normalized", {}).get("entry_reviews", [])
+            )
             records = []
             for table in ("intents", "position_actions"):
                 cursor = await db.execute(
@@ -184,4 +210,8 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
             "linked_record_statuses": dict(sorted(statuses.items())),
             "planning_candidate_statuses": dict(sorted(candidate_counts.items())),
             "linked_approval_modes": dict(sorted(approval_modes.items())),
+            "normalized_entry_reviews": normalized_reviews,
+            "linked_entry_review_deliveries": await _entry_review_deliveries(
+                db, since.strftime("%Y-%m-%d %H:%M:%S")
+            ),
         }
