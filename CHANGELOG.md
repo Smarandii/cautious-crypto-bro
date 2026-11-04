@@ -10,6 +10,26 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.65] - 2026-11-04
+
+### Documented
+
+- Preserve the bounded Demo evidence checkpoint for #359: independent intake,
+  interpretation, execution and whole-lifecycle outcome evidence; frozen cohort
+  boundaries; original-context skip validation and historical settlement limits.
+- No profitable-edge, complete semantic coverage, magnitude-goal completion or
+  independent-zone activation claim follows from this audit. Private source and
+  account evidence remain excluded from repository and release assets.
+
+### Delivery and rollback
+
+- Documentation checkpoint only; application behavior, approved trading policy,
+  dependencies and SQLite schema 17 are unchanged. Local coupled app/publisher
+  delivery still requires exact revision, authentication, supervision, native
+  protection and fresh publication checks. The previous image is compatible
+  with the unchanged schema; preserve state and scoped publisher caches.
+
+
 ## [2.2.64] - 2026-11-04
 
 ### Fixed
