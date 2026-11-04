@@ -16,6 +16,7 @@ from datetime import (
 )
 from io import BytesIO
 from typing import Any, cast
+from weakref import WeakValueDictionary
 
 from telethon import (
     TelegramClient,
@@ -395,6 +396,9 @@ class TelegramSource:
         self._channels = channels
         self._on_message = on_message
         self._post_slots = asyncio.Semaphore(MAX_CONCURRENT_POSTS)
+        self._post_locks: WeakValueDictionary[tuple[int | None, int], asyncio.Lock] = (
+            WeakValueDictionary()
+        )
 
         self._startup_lookback_hours = startup_lookback_hours
         self._catchup_interval_seconds = catchup_interval_seconds
@@ -726,6 +730,17 @@ class TelegramSource:
                 chat if chat is not None else messages[0].chat_id,
                 messages,
             )
+        key = (messages[0].chat_id, min(message.id for message in messages))
+        lock = self._post_locks.setdefault(key, asyncio.Lock())
+        # Keep duplicate waiters outside the media/model admission slots.
+        # Weak retention drops coordination once no owner or waiter holds it.
+        async with lock:
+            await self._deliver_messages(messages, chat=chat)
+
+    async def _deliver_messages(
+        self, messages: Sequence[Message], *, chat: object | None
+    ) -> None:
+        async with self._post_slots:
             channel_id = messages[0].chat_id
             if (
                 self._source_completed is not None

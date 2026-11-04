@@ -72,6 +72,7 @@ class SourceRecovery:
         alert_seconds: float = 900,
         auth_retry_seconds: float = 300,
         read_check_seconds: float = 30,
+        degraded_grace_seconds: float = 120,
     ) -> None:
         self._source = source
         self._bot = bot
@@ -81,6 +82,8 @@ class SourceRecovery:
         self._alert_seconds = alert_seconds
         self._auth_retry_seconds = auth_retry_seconds
         self._read_check_seconds = read_check_seconds
+        self._degraded_grace_seconds = degraded_grace_seconds
+        self._degraded_since: float | None = None
         self._lock = asyncio.Lock()
         self._wake = asyncio.Event()
         self._next_alert = 0.0
@@ -112,6 +115,11 @@ class SourceRecovery:
         pin_source_identity(self._identity_path, user_id)
 
     async def _alert(self) -> None:
+        if self.state == "DEGRADED":
+            if self._degraded_since is None:
+                self._degraded_since = monotonic()
+            if monotonic() - self._degraded_since < self._degraded_grace_seconds:
+                return
         if monotonic() < self._next_alert:
             return
         try:
@@ -132,10 +140,11 @@ class SourceRecovery:
         except Exception as exc:
             logger.warning("Source outage notification failed: %s", type(exc).__name__)
         else:
+            self._outage = True
             self._next_alert = monotonic() + self._alert_seconds
 
     async def _announce_restored(self) -> None:
-        self._next_alert = 0
+        self._degraded_since = None
         if self._outage:
             if monotonic() < self._next_recovery_notice:
                 return
@@ -157,7 +166,6 @@ class SourceRecovery:
             warnings = self._source.read_warnings()
             if warnings:
                 self.state, self.reason = "DEGRADED", "; ".join(warnings)
-                self._outage = True
                 await self._alert()
             elif startup_complete.is_set():
                 if self.state == "DEGRADED":
@@ -203,7 +211,7 @@ class SourceRecovery:
                 self.state = state
                 # Exception strings can contain sensitive transport data.
                 self.reason = self._manual_reason or _failure_reason(exc)
-                self._outage = True
+                self._degraded_since = None
                 logger.warning("Telegram reader unavailable: %s", self.reason)
                 await self._alert()
             try:

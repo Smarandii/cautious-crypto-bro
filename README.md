@@ -155,9 +155,14 @@ Order submission errors do not gain automatic replay.
 
 Reader outages leave the operator bot and position supervisor running. Network
 reconnects retry every 30 seconds; missing authorization is rechecked every five
-minutes. The approval chat receives an immediate human-review alert and reminders
-every 15 minutes while the outage continues. Failed alert delivery is retried.
-Channel history failures show `DEGRADED`; unaffected channels keep processing.
+minutes. Authorization failures and disconnections alert immediately. Channel
+history/post-processing degradation must persist for two minutes before alerting;
+it remains visible immediately in logs and `/source`, and unaffected channels
+keep processing. Reminders are limited to every 15 minutes; short recoveries do
+not reset that cooldown. Failed alert delivery is retried. Recovery messages are
+sent only after a warning was delivered, so short automatic retries stay quiet.
+Concurrent live/catch-up delivery waits for the same post's active processing,
+then rechecks completion; unrelated posts retain their bounded concurrency.
 
 Chronological catch-up progress is saved per channel and survives restarts.
 A newer live message cannot skip an earlier unprocessed post. Failed/in-flight
