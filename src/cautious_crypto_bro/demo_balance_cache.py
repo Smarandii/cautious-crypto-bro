@@ -21,6 +21,18 @@ from .demo_balance import fetch_daily_wallet_history
 BALANCE_CACHE_FILENAME = "demo-balance-v2.json"
 
 
+def retained_balance_history(
+    path: Path, *, api_key: str, database_path: Path
+) -> dict | None:
+    """Read validated full retention, including independently observed older days."""
+    scope = hmac.digest(
+        api_key.encode(),
+        (DEMO_BASE_URL + "\0" + str(database_path.resolve())).encode(),
+        "sha256",
+    ).hex()
+    return _retained(path, scope)
+
+
 def _retained(path: Path, scope: str) -> dict | None:
     if not path.exists():
         return None

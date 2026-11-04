@@ -216,3 +216,46 @@ No historical trade is relabeled with new sizing settings.
 
 These observations do not prove profitability or satisfy #248's natural
 trade-magnitude requirement by themselves.
+
+## BTC buy-and-hold comparison
+
+Public balance envelope v2 adds `benchmark: {refresh_failed, history}`. Its
+history has an exact whitelist: fixed start, price source/fee convention,
+verified starting capital, purchase reference price, its own capture timestamp
+and consecutive UTC days containing price/value/completion. The existing wallet
+history and activity contract is unchanged; v1 input remains accepted. Validation
+and gzip/base64 transport remain stdlib-only, bounded by the existing full-feed
+and dispatch budgets. Private IDs and source/account credentials stay excluded.
+
+The benchmark buys hypothetical BTC at the Bybit **spot BTCUSDT** daily opening
+price on 2026-10-04 00:00 UTC and holds the fixed amount. Initial capital requires
+an independent observed prior-day wallet close, complete category/type/page
+coverage and cash-chain reconciliation through the retained first-day evidence.
+The first day's closing wallet is not substituted for opening capital. If that
+evidence is absent, the dollar comparison stays unavailable.
+
+Values are capital × daily spot price ÷ purchase price, rounded to eight USDT
+decimal places for publication; displayed values may use fewer places. Historical
+prices are UTC daily closes. Today's candle uses the provisional last traded
+price. The collector explicitly requests `category=spot` (Bybit defaults to
+linear), validates the returned instrument, candle timestamps, positive finite
+OHLC values, reverse-order pagination and complete day coverage.
+
+This is gross of hypothetical execution costs, with no subsequent benchmark cash
+flows. Wallet bars include actual fees, funding and account movements, and exclude
+unrealized open PnL. Marked BTC value includes unrealized price movement. The
+selected-day gap is explicitly unadjusted, not alpha or an investment-return
+claim. The native comparison-method disclosure retains these assumptions beside
+the chart; day drill-down still lists all available account activity.
+
+Private `btc-hold-v1.json` binds its immutable baseline and last verified series
+to the credential/state namespace, with atomic mode0600 writes. It does not reuse
+another account's history or infer a replacement baseline after corruption. A
+benchmark-only failure retains the old benchmark timestamp without hiding fresh
+wallet data. The receipt exposes benchmark capture time and refresh failure;
+core publisher health continues to require verified fresh trade/wallet evidence.
+
+No SQLite migration, trading-policy change, new chart framework or extra service
+is involved. A v2.2.61 runtime rollback ignores the retained benchmark cache and
+publishes the supported v1 envelope; the current UI then explains that the BTC
+series is unavailable. Preserve private volumes and current trading ownership.

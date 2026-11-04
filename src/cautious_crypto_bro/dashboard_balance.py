@@ -10,6 +10,8 @@ import re
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+from .dashboard_benchmark import validate_benchmark
+
 MAX_BALANCE_BYTES = 2_000_000
 MAX_ENCODED_BYTES = 48_000
 HEADER = (
@@ -162,9 +164,18 @@ def validate_balance_history(value: object) -> dict:
 
 
 def validate_balance_feed(value: object) -> dict:
-    feed = _fields(value, ("schema_version", "refresh_failed", "history"))
-    if type(feed["schema_version"]) is not int or feed["schema_version"] != 1:
+    if (
+        not isinstance(value, dict)
+        or type(value.get("schema_version")) is not int
+        or value["schema_version"] not in (1, 2)
+    ):
         raise ValueError("Unsupported balance feed version")
+    fields = ("schema_version", "refresh_failed", "history")
+    if value["schema_version"] == 2:
+        fields += ("benchmark",)
+    feed = _fields(value, fields)
+    if feed["schema_version"] == 2:
+        validate_benchmark(feed["benchmark"])
     if type(feed["refresh_failed"]) is not bool:
         raise ValueError("Invalid balance refresh status")
     if feed["history"] is not None:
