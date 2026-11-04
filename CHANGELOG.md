@@ -10,6 +10,31 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.63] - 2026-11-04
+
+### Fixed
+
+- Simultaneous live/catch-up deliveries of a canonical Telegram post now wait
+  for its active processing and recheck completion, preventing false incomplete
+  processing errors. Other posts retain bounded concurrency; cancellation and
+  actual failures preserve durable retries and chronological cursors.
+- Channel degradation alerts require two minutes of persistence. Short automatic
+  recoveries remain visible in logs and `/source` without warning/recovery spam.
+  Recovery is announced only after a delivered warning; flapping does not reset
+  the 15-minute reminder cooldown. Authorization failures and disconnections still
+  alert immediately, and failed notifications remain retryable.
+
+### Delivery and rollback
+
+- Synthetic source/bot lifecycle tests cover the duplicate race, canonical
+  albums, independent-post progress, cancellation, notification failure, grace,
+  reminder cooldown and recovery. Existing source recovery and workflow checks
+  preserve authentication and post-processing failure behavior.
+- SQLite remains schema 17, with no dependency, risk or entry/exit-policy change.
+  Roll back app and publisher together to v2.2.62 using retained state and images;
+  no schema downgrade is required. Verify exact local readiness and fresh
+  publication before tagging. Broader profitability and source audit remain open.
+
 ## [2.2.62] - 2026-11-04
 
 ### Added

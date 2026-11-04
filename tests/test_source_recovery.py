@@ -103,7 +103,15 @@ class RecoveringClient(FakeTelegramClient):
         return self.qr
 
 
-def harness(monkeypatch, tmp_path, client, *, fail_notice_once=False, retry_ids=None):
+def harness(
+    monkeypatch,
+    tmp_path,
+    client,
+    *,
+    fail_notice_once=False,
+    retry_ids=None,
+    degraded_grace_seconds=0,
+):
     monkeypatch.setattr(telegram_source, "TelegramClient", lambda *a, **kw: client)
     source = telegram_source.TelegramSource(
         api_id=1,
@@ -158,6 +166,7 @@ def harness(monkeypatch, tmp_path, client, *, fail_notice_once=False, retry_ids=
         retry_seconds=3600,
         auth_retry_seconds=3600,
         read_check_seconds=0.01,
+        degraded_grace_seconds=degraded_grace_seconds,
     )
     bot.bind_source_recovery(recovery)
     return SimpleNamespace(
