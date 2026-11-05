@@ -4,6 +4,10 @@ Run from repository root. Local checks need Python 3.12 and uv.
 
 ## Quality gate
 
+Ruff enforces a cyclomatic complexity ceiling of 10. CodeQL uses the
+`security-extended` query suite. These are repository quality settings, not
+evidence of deployed trading behavior or current position protection.
+
 ```sh
 uv sync --frozen --group dev
 uv run ruff format --check src scripts tests

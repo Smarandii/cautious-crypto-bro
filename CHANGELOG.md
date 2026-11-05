@@ -10,6 +10,25 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.66] - 2026-11-05
+
+### Fixed
+
+- Public dashboard methodology no longer presents the repository's disabled
+  approval default or developer CI settings beside deployed trading evidence.
+  Developer setup and test guidance remain in repository documentation. Current
+  settings, frozen outcomes, freshness/error states, wallet/BTC comparison and
+  day drilldown retain their existing bindings and minimalist dark layout.
+
+### Delivery and rollback
+
+- Presentation-only change; trading policy, dependencies and SQLite schema 17
+  are unchanged. Verify the published page on desktop/mobile and coupled local
+  authentication, supervision/native protection and fresh publication. Preserve
+  state and publisher caches; the prior image is compatible with this schema.
+  No profitable-edge, mainnet or independent-zone activation claim is made.
+
+
 ## [2.2.65] - 2026-11-04
 
 ### Documented
