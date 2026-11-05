@@ -401,6 +401,9 @@ class SignalPlanning:
                     - batch_reserved_risk
                 )
                 if remaining_portfolio_risk <= 0:
+                    planning_rejections.append(
+                        f"{intent.symbol}: portfolio stop-risk cap is full"
+                    )
                     logger.info(
                         "Skipping %s because portfolio stop-risk cap is full",
                         intent.symbol,
