@@ -816,6 +816,19 @@ class TradingIntent(BaseModel):
             raise ValueError("SHORT requires take_profit < stop_loss")
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PlanningCandidate:
+    intent: TradingIntent
+    duplicate_in_batch: bool
+    deadline: datetime
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ClaimedPlanningCandidate:
+    candidate: PlanningCandidate
+    claim_token: str
+
+
 class PositionActionIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

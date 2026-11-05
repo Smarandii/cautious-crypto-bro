@@ -139,13 +139,14 @@ def test_post_resolution_outage_retains_raw_identity_for_restart(tmp_path):
                     planning.retry_candidates,
                 )
                 assert not planned and errors
-                saved, duplicate, deadline = candidates[0]
+                candidate = candidates[0]
+                saved = candidate.intent
                 assert (
                     saved.symbol == "PEPEUSDT" and saved.intent_id == intent.intent_id
                 )
-                assert duplicate
-                assert len(candidates) == 2 and candidates[1][1]
-                assert deadline > intent.source.published_at
+                assert candidate.duplicate_in_batch
+                assert len(candidates) == 2 and candidates[1].duplicate_in_batch
+                assert candidate.deadline > intent.source.published_at
                 restored = type(intent).model_validate_json(saved.model_dump_json())
                 with patch.object(
                     executor, "market_context", wraps=executor.market_context

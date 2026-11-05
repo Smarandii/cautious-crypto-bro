@@ -28,6 +28,7 @@ from ..domain import (
     InstrumentContext,
     IntentStatus,
     OpenRelation,
+    PlanningCandidate,
     PositionActionIntent,
     PositionActionType,
     PositionStrategy,
@@ -77,7 +78,7 @@ class OpenPlanningResult:
     planned: list[tuple[TradingIntent, ExecutionPlan]]
     errors: list[str]
     rejections: list[str]
-    retry_candidates: list[tuple[TradingIntent, bool, datetime]]
+    retry_candidates: list[PlanningCandidate]
 
 
 class SignalPlanning:
@@ -297,7 +298,7 @@ class SignalPlanning:
         ] = []
         planning_errors: list[str] = []
         planning_rejections: list[str] = []
-        retry_candidates: list[tuple[TradingIntent, bool, datetime]] | None = (
+        retry_candidates: list[PlanningCandidate] | None = (
             [] if retain_retry_candidates else None
         )
 
@@ -460,7 +461,7 @@ class SignalPlanning:
         signals: SignalExtraction,
         errors: list[str],
         rejections: list[str],
-        retry_candidates: list[tuple[TradingIntent, bool, datetime]] | None,
+        retry_candidates: list[PlanningCandidate] | None,
         *,
         original_duplicate: bool,
     ) -> tuple[
@@ -523,7 +524,7 @@ class SignalPlanning:
         self,
         intents: tuple[TradingIntent, ...],
         counts: Counter[tuple[str, Side]],
-        candidates: list[tuple[TradingIntent, bool, datetime]] | None,
+        candidates: list[PlanningCandidate] | None,
     ) -> None:
         if candidates is None:
             return
@@ -532,7 +533,11 @@ class SignalPlanning:
                 seconds=self._intent_max_age_seconds
             )
             candidates.append(
-                (intent, counts[(intent.symbol, intent.side)] > 1, deadline)
+                PlanningCandidate(
+                    intent=intent,
+                    duplicate_in_batch=counts[(intent.symbol, intent.side)] > 1,
+                    deadline=deadline,
+                )
             )
 
     async def _existing_portfolio_stop_risk(

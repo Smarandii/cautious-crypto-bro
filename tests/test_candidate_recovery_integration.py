@@ -150,16 +150,19 @@ def test_partial_batch_recovers_after_restart_without_reextracting(tmp_path, rec
                     )
                 second = await IntentStore(database).claim_planning_candidate()
                 assert second is not None
-                assert second.intent.intent_id == first.intent.intent_id
+                assert (
+                    second.candidate.intent.intent_id
+                    == first.candidate.intent.intent_id
+                )
                 assert second.claim_token != first.claim_token
                 assert not await restarted_store.finish_planning_candidate(
-                    first.intent.intent_id,
+                    first.candidate.intent.intent_id,
                     first.claim_token,
                     status="REJECTED",
                     error="stale owner",
                 )
                 assert await restarted_store.finish_planning_candidate(
-                    second.intent.intent_id,
+                    second.candidate.intent.intent_id,
                     second.claim_token,
                     status="PENDING",
                     error="temporary outage",

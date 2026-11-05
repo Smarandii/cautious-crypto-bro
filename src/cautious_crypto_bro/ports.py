@@ -13,6 +13,7 @@ from .domain import (
     AccountSnapshotDelivery,
     AccountStateSummary,
     ApprovalMode,
+    ClaimedPlanningCandidate,
     ClosedPnlRecord,
     EntryReview,
     ExecutionPlan,
@@ -22,6 +23,7 @@ from .domain import (
     IntentExecutionOutcome,
     MarketPrimaryExecutionResult,
     OperatorAttentionItem,
+    PlanningCandidate,
     PositionActionExecutionOutcome,
     PositionActionExecutionResult,
     PositionActionIntent,
@@ -36,7 +38,6 @@ from .domain import (
     TradingIntent,
 )
 from .execution_history import ExecutionHistoryPage, HistoryQuery
-from .storage.planning_candidate import PlanningCandidate
 from .zone_ledger import ZoneExecution, ZoneOrder
 
 # ---------------------------------------------------------------------------
@@ -325,7 +326,7 @@ class SourceRepository(Protocol):
         position_actions: Sequence[PositionActionIntent],
         claim_token: str,
         *,
-        planning_candidates: Sequence[tuple[TradingIntent, bool, datetime]] = (),
+        planning_candidates: Sequence[PlanningCandidate] = (),
     ) -> bool: ...
 
     async def reset_stale_processing_sources(
@@ -599,7 +600,7 @@ class RecoveryRepository(Protocol):
 
 
 class PlanningCandidateRepository(Protocol):
-    async def claim_planning_candidate(self) -> PlanningCandidate | None: ...
+    async def claim_planning_candidate(self) -> ClaimedPlanningCandidate | None: ...
 
     async def pending_transferred_auto_candidates(self) -> tuple[UUID, ...]: ...
 
@@ -608,7 +609,10 @@ class PlanningCandidateRepository(Protocol):
     ) -> bool: ...
 
     async def transfer_planning_candidate(
-        self, candidate: PlanningCandidate, intent: TradingIntent, plan: ExecutionPlan
+        self,
+        claim: ClaimedPlanningCandidate,
+        intent: TradingIntent,
+        plan: ExecutionPlan,
     ) -> bool: ...
 
 
