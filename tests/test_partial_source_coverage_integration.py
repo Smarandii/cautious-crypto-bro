@@ -70,6 +70,7 @@ def test_failed_entry_disposition_uses_strategy_evidence(tmp_path, strategy, evi
         if strategy is None:
             with sqlite3.connect(path) as db:
                 db.execute("DROP TABLE position_strategies")
+                db.execute("DROP TABLE planning_candidates")
         decision = {
             "extraction": {"intents": [], "position_actions": []},
             "normalized": {"open_intents": [{}], "position_actions": []},
@@ -122,6 +123,7 @@ def test_failed_entry_disposition_uses_strategy_evidence(tmp_path, strategy, evi
             path, source.channel_id, source.message_id
         )
         assert state["production_disposition"] == expected
+        assert state["planning_candidate_statuses"] == []
         assert state["persisted_intents"][0]["status"] == "FAILED"
         assert path.read_bytes() == before
 

@@ -43,6 +43,7 @@ from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 from cautious_crypto_bro.source_coverage import (
     decision_disposition,
     has_uncertain_entry_strategy,
+    planning_candidate_statuses,
     production_decision,
     record_disposition_status,
 )
@@ -344,6 +345,10 @@ async def current_app_state(
         result["production_decision"] = await production_decision(
             db, channel_id, message_id
         )
+        candidate_statuses = await planning_candidate_statuses(
+            db, channel_id, message_id
+        )
+        result["planning_candidate_statuses"] = candidate_statuses
         processing = result["source_processing"]
         if processing is not None:
             result["production_disposition"] = decision_disposition(
@@ -355,6 +360,7 @@ async def current_app_state(
                     + result["persisted_position_actions"]
                 ],
                 source_reason=processing["last_error"],
+                planning_statuses=candidate_statuses,
                 uncertain_entry_strategy=await has_uncertain_entry_strategy(
                     db, channel_id, message_id
                 ),

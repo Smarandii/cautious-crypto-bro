@@ -129,7 +129,7 @@ wheels = [
 
 [[package]]
 name = "cautious-crypto-bro"
-version = "2.2.73"
+version = "2.2.74"
 source = { editable = "." }
 dependencies = [
     { name = "aiogram" },

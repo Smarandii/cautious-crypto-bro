@@ -10,6 +10,22 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.74] - 2026-11-06
+
+### Fixed
+
+- Recent signal audits use the same persisted planning candidate statuses as
+  aggregate source coverage. Expired or rejected candidates stay visible
+  alongside any successful sibling, and pending candidates remain unresolved.
+- SQLite integration coverage exercises recovered candidates and older
+  snapshots without the planning candidate table.
+
+### Delivery and rollback
+
+- Schema 17 and configuration are compatible with v2.2.73. Roll back both
+  local services together using the retained images and state. Independent
+  zones and profitability verification remain open.
+
 ## [2.2.73] - 2026-11-05
 
 ### Fixed
