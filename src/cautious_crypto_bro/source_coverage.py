@@ -38,6 +38,21 @@ def record_disposition_status(status: str, approval_mode: str) -> str:
     return status
 
 
+async def planning_candidate_statuses(
+    db: aiosqlite.Connection, channel_id: int, message_id: int
+) -> list[str]:
+    cursor = await db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='planning_candidates'"
+    )
+    if await cursor.fetchone() is None:
+        return []
+    cursor = await db.execute(
+        "SELECT status FROM planning_candidates WHERE channel_id=? AND message_id=? ORDER BY status",
+        (channel_id, message_id),
+    )
+    return [row[0] for row in await cursor.fetchall()]
+
+
 async def has_uncertain_entry_strategy(
     db: aiosqlite.Connection, channel_id: int, message_id: int
 ) -> bool:
@@ -182,10 +197,6 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
         approval_modes: Counter[str] = Counter()
         missing = 0
         normalized_reviews = 0
-        cursor = await db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='planning_candidates'"
-        )
-        has_candidates = await cursor.fetchone() is not None
         candidate_counts: Counter[str] = Counter()
         for channel_id, message_id, status, reason in sources:
             source_statuses[status] += 1
@@ -205,14 +216,10 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
                     records.append(
                         record_disposition_status(record_status, approval_mode)
                     )
-            candidate_statuses = []
-            if has_candidates:
-                cursor = await db.execute(
-                    "SELECT status FROM planning_candidates WHERE channel_id=? AND message_id=?",
-                    (channel_id, message_id),
-                )
-                candidate_statuses = [row[0] for row in await cursor.fetchall()]
-                candidate_counts.update(candidate_statuses)
+            candidate_statuses = await planning_candidate_statuses(
+                db, channel_id, message_id
+            )
+            candidate_counts.update(candidate_statuses)
             disposition = decision_disposition(
                 decision,
                 status,

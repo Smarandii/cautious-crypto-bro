@@ -1,8 +1,10 @@
 import asyncio
+import importlib.util
 import json
 import sqlite3
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -250,6 +252,19 @@ def test_partial_batch_recovers_after_restart_without_reextracting(tmp_path, rec
                 }[recovery]
                 assert summary["planning_candidate_statuses"] == {status: 1}
                 assert summary["dispositions"] == {disposition: 1}
+                spec = importlib.util.spec_from_file_location(
+                    "audit_recent_signals_test",
+                    Path(__file__).resolve().parents[1]
+                    / "scripts/audit_recent_signals.py",
+                )
+                assert spec is not None and spec.loader is not None
+                audit = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(audit)
+                state = await audit.current_app_state(
+                    database, source.channel_id, source.message_id
+                )
+                assert state["production_disposition"] == disposition
+                assert state["planning_candidate_statuses"] == [status]
                 if recovery == "expired":
                     with sqlite3.connect(database) as db:
                         db.execute(
@@ -263,6 +278,18 @@ def test_partial_batch_recovers_after_restart_without_reextracting(tmp_path, rec
                     assert summary["planning_candidate_statuses"] == {"EXPIRED": 1}
                     assert summary["dispositions"] == {"UNRESOLVED": 1}
                     assert database.read_bytes() == before
+                    with sqlite3.connect(database) as db:
+                        db.execute("UPDATE planning_candidates SET status='REJECTED'")
+                        db.execute("UPDATE intents SET status='EXECUTED'")
+                    summary = await coverage_summary(
+                        database, since=datetime.now(UTC) - timedelta(days=1)
+                    )
+                    state = await audit.current_app_state(
+                        database, source.channel_id, source.message_id
+                    )
+                    assert summary["dispositions"] == {"PARTIAL_PLANNING_FAILURE": 1}
+                    assert state["production_disposition"] == "PARTIAL_PLANNING_FAILURE"
+                    assert state["planning_candidate_statuses"] == ["REJECTED"]
                 if recovery == "available":
                     # Model the persisted AUTO handoff before dispatch, then prove
                     # that UNCERTAIN is never selected for execution recovery.
