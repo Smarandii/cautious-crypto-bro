@@ -38,6 +38,26 @@ def record_disposition_status(status: str, approval_mode: str) -> str:
     return status
 
 
+async def has_uncertain_entry_strategy(
+    db: aiosqlite.Connection, channel_id: int, message_id: int
+) -> bool:
+    cursor = await db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='position_strategies'"
+    )
+    if await cursor.fetchone() is None:
+        return False
+    cursor = await db.execute(
+        """
+        SELECT 1 FROM intents i
+        JOIN position_strategies s ON s.strategy_id = i.intent_id
+        WHERE i.channel_id = ? AND i.message_id = ? AND s.status = 'UNCERTAIN'
+        LIMIT 1
+        """,
+        (channel_id, message_id),
+    )
+    return await cursor.fetchone() is not None
+
+
 def planning_rejection_kind(error: str) -> str:
     """Classify a terminal planning rejection without retaining source text."""
     text = error.lower()
@@ -62,15 +82,19 @@ def decision_disposition(
     record_statuses: list[str],
     source_reason: str | None = None,
     planning_statuses: list[str] | None = None,
+    *,
+    uncertain_entry_strategy: bool = False,
 ) -> str:
+    if uncertain_entry_strategy or (
+        decision is not None and source_status == "PROCESSING"
+    ):
+        return "UNRESOLVED"
     if decision is None:
         return (
             "SOURCE_REJECTED"
             if source_status == "COMPLETED" and source_reason
             else "UNKNOWN"
         )
-    if source_status == "PROCESSING":
-        return "UNRESOLVED"
     normalized = decision["normalized"]
     if not normalized["open_intents"] and not normalized["position_actions"]:
         if normalized.get("entry_reviews"):
@@ -190,9 +214,16 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
                 candidate_statuses = [row[0] for row in await cursor.fetchall()]
                 candidate_counts.update(candidate_statuses)
             disposition = decision_disposition(
-                decision, status, records, reason, candidate_statuses
+                decision,
+                status,
+                records,
+                reason,
+                candidate_statuses,
+                uncertain_entry_strategy=await has_uncertain_entry_strategy(
+                    db, channel_id, message_id
+                ),
             )
-            missing += disposition == "UNKNOWN"
+            missing += decision is None and (status != "COMPLETED" or not reason)
             dispositions[disposition] += 1
             planning = (decision or {}).get("planning") or {}
             errors = planning.get("rejections")
