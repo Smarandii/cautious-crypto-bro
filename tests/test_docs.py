@@ -40,23 +40,27 @@ def test_landing_page_starts_with_unavailable_evidence() -> None:
     assert not re.search(r"[\d,]+ tests|4 / 4 passing|STABLE|B<small>", page)
 
 
-def test_landing_page_complexity_ceiling_matches_pyproject() -> None:
-    assert "cyclomatic complexity ceiling of 10" in _landing_page()
+def test_testing_guide_complexity_ceiling_matches_pyproject() -> None:
+    assert "cyclomatic complexity ceiling of 10" in (REPO / "TESTING.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "max-complexity = 10" in _pyproject(), (
-        "landing page advertises a complexity ceiling of 10; "
+        "testing guide advertises a complexity ceiling of 10; "
         "pyproject.toml no longer sets it"
     )
 
 
-def test_landing_page_auto_mode_default_matches_env_example() -> None:
-    """The page says AUTO_APPROVAL_MODE ships disabled. It must."""
-    assert "AUTO_APPROVAL_MODE" in _landing_page()
+def test_readme_auto_mode_default_matches_env_example() -> None:
+    """Developer setup documents the repository default, not the runtime mode."""
+    assert "`AUTO_APPROVAL_MODE` defaults to `disabled`" in (
+        REPO / "README.md"
+    ).read_text(encoding="utf-8")
 
     env_example = (REPO / ".env.example").read_text(encoding="utf-8")
 
     assert "AUTO_APPROVAL_MODE=disabled" in env_example, (
-        "landing page says AUTO_APPROVAL_MODE ships as disabled; "
+        "README says AUTO_APPROVAL_MODE defaults to disabled; "
         ".env.example no longer says so"
     )
 
@@ -69,13 +73,13 @@ def test_landing_page_license_matches_pyproject() -> None:
     )
 
 
-def test_landing_page_codeql_query_suite_matches_workflow() -> None:
-    assert "security-extended" in _landing_page()
+def test_testing_guide_codeql_query_suite_matches_workflow() -> None:
+    assert "security-extended" in (REPO / "TESTING.md").read_text(encoding="utf-8")
 
     codeql = (REPO / ".github" / "workflows" / "codeql.yml").read_text(encoding="utf-8")
 
     assert "queries: security-extended" in codeql, (
-        "landing page claims CodeQL security-extended; codeql.yml changed"
+        "testing guide documents CodeQL security-extended; codeql.yml changed"
     )
 
 
