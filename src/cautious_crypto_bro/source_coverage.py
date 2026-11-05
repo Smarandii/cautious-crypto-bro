@@ -103,6 +103,8 @@ def _record_disposition(record_statuses: list[str]) -> str:
     if "PENDING" in record_statuses:
         return "AWAITING_DECISION"
     if "EXECUTED" in record_statuses:
+        if {"FAILED", "SKIPPED"}.intersection(record_statuses):
+            return "PARTIAL_EXECUTION"
         return "EXECUTED"
     if record_statuses and all(status == "SKIPPED" for status in record_statuses):
         return "SKIPPED"

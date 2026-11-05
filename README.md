@@ -99,6 +99,11 @@ Review-only decisions are reported as `HUMAN_REVIEW`, never as executed orders.
 window. Delivery is not human approval or trade execution. A missing legacy review
 table is reported as `null`, rather than inventing delivery evidence. Mixed posts
 retain their execution/planning disposition alongside these review counts.
+`PARTIAL_EXECUTION` means at least one linked entry or action executed while
+another failed or was skipped. It does not diagnose an execution defect or prove
+missing intake; inspect the linked outcomes. Uncertain work, pending decisions
+and planning failures retain their existing precedence. `EXECUTED` alone is not
+proof of a fully reconciled, profitable trade lifecycle.
 All aggregates use one read-only SQLite snapshot, so concurrent delivery cannot
 silently move only part of the report to a later state.
 
