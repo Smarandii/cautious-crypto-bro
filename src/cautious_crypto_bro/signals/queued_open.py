@@ -52,14 +52,15 @@ class QueuedOpenExecution:
         await self._recover_transferred()
         # Bound each pass so delivery recovery is not starved by a large backlog.
         for _ in range(10):
-            candidate = await self._store.claim_planning_candidate()
-            if candidate is None:
+            claim = await self._store.claim_planning_candidate()
+            if claim is None:
                 return
+            candidate = claim.candidate
             intent = candidate.intent
             if datetime.now(UTC) >= candidate.deadline:
                 await self._store.finish_planning_candidate(
                     intent.intent_id,
-                    candidate.claim_token,
+                    claim.claim_token,
                     status="EXPIRED",
                     error="Original source deadline exceeded",
                 )
@@ -83,7 +84,7 @@ class QueuedOpenExecution:
                 if not planned:
                     await self._store.finish_planning_candidate(
                         intent.intent_id,
-                        candidate.claim_token,
+                        claim.claim_token,
                         status="REJECTED" if rejections else "PENDING",
                         error="; ".join(errors + rejections)
                         or "Portfolio admission unavailable",
@@ -91,13 +92,13 @@ class QueuedOpenExecution:
                     continue
                 recovered, plan = planned[0]
                 if not await self._store.transfer_planning_candidate(
-                    candidate, recovered, plan
+                    claim, recovered, plan
                 ):
                     continue
             except Exception as exc:
                 await self._store.finish_planning_candidate(
                     intent.intent_id,
-                    candidate.claim_token,
+                    claim.claim_token,
                     status="PENDING",
                     error=f"{type(exc).__name__}: {exc}",
                 )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from datetime import datetime
 from uuid import uuid4
 
 import aiosqlite
@@ -11,6 +10,7 @@ from ..domain import (
     ApprovalMode,
     ExecutionPlan,
     IntentStatus,
+    PlanningCandidate,
     PositionActionIntent,
     SourceMessage,
     TradingIntent,
@@ -263,10 +263,10 @@ class SourceRepositoryImpl(_Store):
         position_actions: Sequence[PositionActionIntent],
         claim_token: str,
         *,
-        planning_candidates: Sequence[tuple[TradingIntent, bool, datetime]] = (),
+        planning_candidates: Sequence[PlanningCandidate] = (),
     ) -> bool:
         if planning_candidates and not (items or position_actions):
-            source = planning_candidates[0][0].source
+            source = planning_candidates[0].intent.source
         else:
             source = self._validate_batch_inputs(items, position_actions)
         self._validate_planning_candidates(source, planning_candidates)
@@ -318,7 +318,8 @@ class SourceRepositoryImpl(_Store):
                         (record_id, kind),
                     )
 
-                for intent, duplicate, deadline in planning_candidates:
+                for candidate in planning_candidates:
+                    intent = candidate.intent
                     await db.execute(
                         "INSERT INTO planning_candidates(intent_id,channel_id,message_id,"
                         "payload_json,duplicate_in_batch,deadline) VALUES (?,?,?,?,?,?)",
@@ -330,8 +331,8 @@ class SourceRepositoryImpl(_Store):
                                 intent.model_dump(mode="json")
                                 | {"approval_mode": intent.approval_mode.value}
                             ),
-                            int(duplicate),
-                            deadline.isoformat(),
+                            int(candidate.duplicate_in_batch),
+                            candidate.deadline.isoformat(),
                         ),
                     )
 
@@ -355,15 +356,16 @@ class SourceRepositoryImpl(_Store):
     @staticmethod
     def _validate_planning_candidates(
         source: SourceMessage,
-        candidates: Sequence[tuple[TradingIntent, bool, datetime]],
+        candidates: Sequence[PlanningCandidate],
     ) -> None:
-        for intent, _, deadline in candidates:
-            if (intent.source.channel_id, intent.source.message_id) != (
+        for candidate in candidates:
+            candidate_source = candidate.intent.source
+            if (candidate_source.channel_id, candidate_source.message_id) != (
                 source.channel_id,
                 source.message_id,
             ):
                 raise ValueError("Planning candidate belongs to another source")
-            if deadline.tzinfo is None:
+            if candidate.deadline.tzinfo is None:
                 raise ValueError("Planning deadline must be timezone-aware")
 
     @staticmethod

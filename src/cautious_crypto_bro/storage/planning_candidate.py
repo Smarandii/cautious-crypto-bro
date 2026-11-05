@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from ..domain import ApprovalMode, ExecutionPlan, TradingIntent
+from ..domain import (
+    ApprovalMode,
+    ClaimedPlanningCandidate,
+    ExecutionPlan,
+    PlanningCandidate,
+    TradingIntent,
+)
 from ._connection import sqlite_connection
 from .source import SourceRepositoryImpl
-
-
-@dataclass(frozen=True)
-class PlanningCandidate:
-    intent: TradingIntent
-    duplicate_in_batch: bool
-    deadline: datetime
-    claim_token: str
 
 
 class PlanningCandidateRepositoryImpl(SourceRepositoryImpl):
@@ -27,7 +24,7 @@ class PlanningCandidateRepositoryImpl(SourceRepositoryImpl):
         )
         return tuple(UUID(row[0]) for row in rows)
 
-    async def claim_planning_candidate(self) -> PlanningCandidate | None:
+    async def claim_planning_candidate(self) -> ClaimedPlanningCandidate | None:
         """Lease one due candidate; interrupted planning becomes due after five minutes."""
         async with sqlite_connection(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
@@ -43,10 +40,12 @@ class PlanningCandidateRepositoryImpl(SourceRepositoryImpl):
                     await db.rollback()
                     return None
                 token = str(uuid4())
-                candidate = PlanningCandidate(
-                    intent=TradingIntent.model_validate_json(row[1]),
-                    duplicate_in_batch=bool(row[2]),
-                    deadline=datetime.fromisoformat(row[3]),
+                claim = ClaimedPlanningCandidate(
+                    candidate=PlanningCandidate(
+                        intent=TradingIntent.model_validate_json(row[1]),
+                        duplicate_in_batch=bool(row[2]),
+                        deadline=datetime.fromisoformat(row[3]),
+                    ),
                     claim_token=token,
                 )
                 await db.execute(
@@ -57,7 +56,7 @@ class PlanningCandidateRepositoryImpl(SourceRepositoryImpl):
                     (token, row[0]),
                 )
                 await db.commit()
-                return candidate
+                return claim
             except BaseException:
                 await db.rollback()
                 raise
@@ -79,10 +78,13 @@ class PlanningCandidateRepositoryImpl(SourceRepositoryImpl):
             return cursor.rowcount == 1
 
     async def transfer_planning_candidate(
-        self, candidate: PlanningCandidate, intent: TradingIntent, plan: ExecutionPlan
+        self,
+        claim: ClaimedPlanningCandidate,
+        intent: TradingIntent,
+        plan: ExecutionPlan,
     ) -> bool:
         if (
-            intent.intent_id != candidate.intent.intent_id
+            intent.intent_id != claim.candidate.intent.intent_id
             or plan.intent_id != intent.intent_id
         ):
             raise ValueError("Recovered candidate identity changed")
@@ -94,7 +96,7 @@ class PlanningCandidateRepositoryImpl(SourceRepositoryImpl):
                     "last_error=NULL,updated_at=CURRENT_TIMESTAMP "
                     "WHERE intent_id=? AND claim_token=? AND status='PENDING' "
                     "AND retry_after>CURRENT_TIMESTAMP AND julianday(deadline)>julianday('now')",
-                    (str(intent.intent_id), candidate.claim_token),
+                    (str(intent.intent_id), claim.claim_token),
                 )
                 if cursor.rowcount != 1:
                     await db.rollback()

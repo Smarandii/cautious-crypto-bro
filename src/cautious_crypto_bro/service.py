@@ -18,6 +18,7 @@ from .domain import (
     AutoApprovalMode,
     ExecutionPlan,
     IncomingPost,
+    PlanningCandidate,
     PositionActionIntent,
     SignalContextSnapshot,
     SignalExtraction,
@@ -53,7 +54,7 @@ class _PlannedBatch:
     position_actions: tuple[PositionActionIntent, ...]
     planning_errors: list[str]
     planning_rejections: list[str]
-    retry_candidates: list[tuple[TradingIntent, bool, datetime]]
+    retry_candidates: list[PlanningCandidate]
     account_state: AccountStateSummary | None
     account_state_error: str | None
 
@@ -481,7 +482,7 @@ class SignalService:
             ]
         ],
         position_actions: tuple[PositionActionIntent, ...],
-        retry_candidates: list[tuple[TradingIntent, bool, datetime]],
+        retry_candidates: list[PlanningCandidate],
     ) -> bool:
         try:
             finalized = await self._store.create_signal_batch_and_complete_source(

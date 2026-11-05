@@ -9,7 +9,7 @@ from datetime import timedelta
 import pytest
 from test_remaining_concerns import make_intent
 
-from cautious_crypto_bro.domain import ApprovalMode
+from cautious_crypto_bro.domain import ApprovalMode, PlanningCandidate
 from cautious_crypto_bro.storage import IntentStore
 
 pytestmark = pytest.mark.integration
@@ -28,16 +28,30 @@ def test_candidate_only_batch_cannot_complete_without_valid_owned_candidates(
         assert claim is not None
         active_claim = claim
         deadline = intent.source.published_at + timedelta(seconds=900)
-        candidates = [(intent, False, deadline)]
+        candidates = [
+            PlanningCandidate(
+                intent=intent, duplicate_in_batch=False, deadline=deadline
+            )
+        ]
         if failure == "empty":
             candidates = []
         elif failure == "mixed":
             other = make_intent().model_copy(
                 update={"source": intent.source.model_copy(update={"message_id": 2})}
             )
-            candidates.append((other, False, deadline))
+            candidates.append(
+                PlanningCandidate(
+                    intent=other, duplicate_in_batch=False, deadline=deadline
+                )
+            )
         elif failure == "naive":
-            candidates = [(intent, False, deadline.replace(tzinfo=None))]
+            candidates = [
+                PlanningCandidate(
+                    intent=intent,
+                    duplicate_in_batch=False,
+                    deadline=deadline.replace(tzinfo=None),
+                )
+            ]
         elif failure == "lost":
             assert await store.mark_source_failed(
                 intent.source, claim, "Synthetic interruption"
@@ -86,7 +100,14 @@ def test_candidate_approval_provenance_is_explicit_and_legacy_defaults_manual(
         claim = await store.claim_source(intent.source, lease_seconds=300)
         assert claim is not None
         assert await store.create_signal_batch_and_complete_source(
-            (), (), claim, planning_candidates=[(intent, False, deadline)]
+            (),
+            (),
+            claim,
+            planning_candidates=[
+                PlanningCandidate(
+                    intent=intent, duplicate_in_batch=False, deadline=deadline
+                )
+            ],
         )
         with closing(sqlite3.connect(database)) as db:
             payload = json.loads(
@@ -107,8 +128,9 @@ def test_candidate_approval_provenance_is_explicit_and_legacy_defaults_manual(
                     (json.dumps(payload),),
                 )
                 db.commit()
-        candidate = await IntentStore(database).claim_planning_candidate()
-        assert candidate is not None
+        recovered = await IntentStore(database).claim_planning_candidate()
+        assert recovered is not None
+        candidate = recovered.candidate
         assert (
             candidate.intent.intent_id == intent.intent_id
             and candidate.deadline == deadline

@@ -10,6 +10,21 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.75] - 2026-11-06
+
+### Changed
+
+- Planning, storage and recovery share named retry candidate and claim
+  types. SQLite remains responsible for mapping rows and enforcing lease
+  ownership. Integration tests exercise deadlines, approval provenance,
+  rollback and recovery across restarts.
+
+### Delivery and rollback
+
+- Schema 17 and configuration remain compatible with v2.2.74. Roll back
+  both local services together using the retained images and state.
+  Independent zones and profitability verification remain open.
+
 ## [2.2.74] - 2026-11-06
 
 ### Fixed
