@@ -104,6 +104,10 @@ another failed or was skipped. It does not diagnose an execution defect or prove
 missing intake; inspect the linked outcomes. Uncertain work, pending decisions
 and planning failures retain their existing precedence. `EXECUTED` alone is not
 proof of a fully reconciled, profitable trade lifecycle.
+Explicit original planning rejections, including a full portfolio cap, retain
+`PLANNING_REJECTED` or `PARTIAL_PLANNING_FAILURE` outcomes. Full-cap admission
+remains terminal without automatic retry. Pending recovery remains unresolved;
+untyped legacy errors are not assumed to be permanent rejections.
 All aggregates use one read-only SQLite snapshot, so concurrent delivery cannot
 silently move only part of the report to a later state.
 

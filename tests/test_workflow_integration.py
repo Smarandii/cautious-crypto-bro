@@ -107,7 +107,13 @@ class ExchangeTransport(Exchange):
 
 
 def workflow(
-    store, executor, provider, *, mode=AutoApprovalMode.OPEN_ONLY, max_age=900
+    store,
+    executor,
+    provider,
+    *,
+    mode=AutoApprovalMode.OPEN_ONLY,
+    max_age=900,
+    portfolio_cap=None,
 ):
     planner = ExecutionPlanner()
     lock = asyncio.Lock()
@@ -117,6 +123,7 @@ def workflow(
         planner=planner,
         max_age_seconds=max_age,
         execution_lock=lock,
+        portfolio_stop_risk_cap_usdt=portfolio_cap,
     )
     bot = ApprovalBot(
         token="123456:synthetic-integration-token",
@@ -135,6 +142,7 @@ def workflow(
         context_provider=SignalContextProvider(store=store, executor=executor),
         auto_approval_mode=mode,
         intent_max_age_seconds=max_age,
+        demo_portfolio_stop_risk_cap_usdt=portfolio_cap,
     )
     supervisor = PositionSupervisor(store=store, executor=executor, mutation_lock=lock)
     return service, bot, supervisor

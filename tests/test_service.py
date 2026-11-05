@@ -649,7 +649,7 @@ def test_full_portfolio_cap_completes_source_without_retriable_planning_failure(
         async def get_active_position_strategies(self):
             return ()
 
-        async def mark_source_completed(self, source, claim_token):
+        async def mark_source_completed(self, source, claim_token, *, reason=None):
             self.completed += 1
             return True
 

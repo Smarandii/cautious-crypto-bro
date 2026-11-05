@@ -86,7 +86,11 @@ def decision_disposition(
         return "UNRESOLVED"
     if planning and planning.get("retryable_errors") and not planning_statuses:
         return "UNRESOLVED"
-    if planning_statuses and {"EXPIRED", "REJECTED"}.intersection(planning_statuses):
+    terminal_candidates = bool(
+        planning_statuses and {"EXPIRED", "REJECTED"}.intersection(planning_statuses)
+    )
+    original_rejections = bool(planning and planning.get("rejections"))
+    if terminal_candidates or original_rejections:
         return "PARTIAL_PLANNING_FAILURE" if record_statuses else "PLANNING_REJECTED"
     if (
         planning is not None

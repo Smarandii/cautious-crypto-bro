@@ -10,6 +10,34 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.70] - 2026-11-05
+
+### Fixed
+
+- A full portfolio stop-risk cap now leaves an explicit rejection in the original
+  source decision instead of appearing as unexplained context filtering. Admission
+  remains terminal without retry or rejected-entry submission; configured budgets,
+  cap enforcement and the mutation-boundary recheck are unchanged.
+- Source reports recognize typed original planning rejections in mixed posts as
+  `PARTIAL_PLANNING_FAILURE`, alongside rejected/expired recovery candidates.
+  Pending recovery retains precedence; untyped legacy errors are not assumed
+  to be permanent rejections. Historical unexplained skips are not backfilled.
+
+### Validation
+
+- Real extraction/planner/SQLite/coordinator workflows reproduce missing rejection
+  evidence, exercise exact and exceeded cap capacity, mixed lifecycle outcomes,
+  pending transient recovery and available capacity. Repeated intake does not
+  re-extract or submit rejected entries; aggregate reporting leaves database
+  bytes unchanged. No live orders or model-service calls are required.
+
+### Delivery and rollback
+
+- No dependency, configuration, risk/exit/approval policy or SQLite schema17
+  change. Keep the compatible patched v2.2.69 app/publisher image and restore-tested
+  state backup for coupled rollback. Independent-zone admission/protection and
+  the full participation/profitability goals remain unfinished.
+
 ## [2.2.69] - 2026-11-05
 
 ### Fixed
