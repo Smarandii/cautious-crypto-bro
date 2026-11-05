@@ -17,6 +17,7 @@ from cautious_crypto_bro import telegram_source
 from cautious_crypto_bro.approval_bot import ApprovalBot
 from cautious_crypto_bro.domain import (
     AutoApprovalMode,
+    IncomingPost,
     IntentStatus,
     PositionActionIntent,
     PositionActionType,
@@ -146,6 +147,75 @@ def workflow(
     )
     supervisor = PositionSupervisor(store=store, executor=executor, mutation_lock=lock)
     return service, bot, supervisor
+
+
+def test_invalid_limit_preserves_valid_sibling_and_original_decision(tmp_path):
+    async def run():
+        path = tmp_path / "state.sqlite3"
+        store = IntentStore(path)
+        await store.initialize()
+        source = make_intent().source.model_copy(
+            update={"text": "Limit buy BTCUSDT at 100 with stop at 90"}
+        )
+        provider = ModelTransport()
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                json.dumps(
+                    {
+                        "actionable": True,
+                        "reason": "Synthetic mixed entry candidates",
+                        "intents": [
+                            {
+                                "symbol": symbol,
+                                "side": "LONG",
+                                "entry": {"type": "LIMIT", "price": price},
+                                "stop_loss": 90,
+                                "relation": "NEW",
+                                "summary": "Limit entry",
+                                "confidence": 1,
+                            }
+                            for symbol, price in (("ETHUSDT", 0), ("BTCUSDT", 100))
+                        ],
+                    }
+                )
+            )
+        )
+        exchange = ExchangeTransport()
+        with executor_for(exchange) as executor:
+            service, bot, _ = workflow(
+                store, executor, provider, mode=AutoApprovalMode.DISABLED
+            )
+            try:
+                with patch.object(bot._bot, "send_message", new=AsyncMock()):
+                    await service.on_message(IncomingPost(source=source))
+                    await service.on_message(IncomingPost(source=source))
+                async with aiosqlite.connect(path) as db:
+                    cursor = await db.execute(
+                        "SELECT status, attempt_count FROM source_messages"
+                    )
+                    assert await cursor.fetchall() == [("COMPLETED", 1)]
+                    cursor = await db.execute(
+                        "SELECT payload_json FROM source_decisions"
+                    )
+                    (row,) = await cursor.fetchall()
+                    decision = json.loads(row[0])
+                    assert len(decision["extraction"]["intents"]) == 2
+                    assert [
+                        intent["symbol"]
+                        for intent in decision["normalized"]["open_intents"]
+                    ] == ["BTCUSDT"]
+                    cursor = await db.execute(
+                        "SELECT payload_json, status FROM intents"
+                    )
+                    ((payload, status),) = await cursor.fetchall()
+                    assert json.loads(payload)["symbol"] == "BTCUSDT"
+                    assert status == "PENDING"
+                provider.complete.assert_awaited_once()
+                assert not exchange.orders
+            finally:
+                await bot.close()
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("path", ["catchup", "live", "startup"])

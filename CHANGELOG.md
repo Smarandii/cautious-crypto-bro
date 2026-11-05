@@ -10,6 +10,21 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.72] - 2026-11-05
+
+### Fixed
+
+- An invalid model-generated LIMIT price is discarded at normalization.
+  Valid sibling candidates can reach planning, and the original extraction
+  remains available for audit. A synthetic workflow test covers source
+  completion, persistence, and repeated delivery.
+
+### Delivery and rollback
+
+- Schema 17 and existing configuration are compatible with v2.2.71. Roll back
+  app and publisher together using retained images and state. Independent
+  zones and profitability verification remain open.
+
 ## [2.2.71] - 2026-11-05
 
 ### Fixed

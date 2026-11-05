@@ -70,7 +70,10 @@ def _entry_from_transport(
     if entry_type is EntryType.LIMIT:
         if price is None:
             return None
-        return Entry(type=EntryType.LIMIT, price=price)
+        try:
+            return Entry(type=EntryType.LIMIT, price=price)
+        except ValidationError:
+            return None
 
     range_low = (
         raw.range_low
