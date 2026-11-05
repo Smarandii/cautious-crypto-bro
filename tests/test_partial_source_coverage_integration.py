@@ -1,6 +1,7 @@
 """A successful sibling must not hide incomplete post participation."""
 
 import asyncio
+import importlib.util
 import json
 import os
 import sqlite3
@@ -13,12 +14,118 @@ from uuid import uuid4
 import pytest
 from test_remaining_concerns import make_intent
 
-from cautious_crypto_bro.domain import PositionActionIntent, PositionActionType
+from cautious_crypto_bro.domain import (
+    PositionActionIntent,
+    PositionActionType,
+    StrategyStatus,
+)
 from cautious_crypto_bro.source_coverage import coverage_summary
 from cautious_crypto_bro.storage import IntentStore
 
 pytestmark = pytest.mark.integration
 REPO = Path(__file__).parents[1]
+
+
+@pytest.mark.parametrize(
+    "strategy,evidence",
+    [
+        ("UNCERTAIN", "original"),
+        ("UNCERTAIN", "mixed"),
+        ("UNCERTAIN", "missing"),
+        ("CLOSED", "original"),
+        (None, "original"),
+    ],
+)
+def test_failed_entry_disposition_uses_strategy_evidence(tmp_path, strategy, evidence):
+    async def run():
+        path = tmp_path / "state.sqlite3"
+        store = IntentStore(path)
+        await store.initialize()
+        intent = make_intent()
+        source = intent.source
+        token = await store.claim_source(source, lease_seconds=300)
+        with sqlite3.connect(path) as db:
+            db.execute(
+                "INSERT INTO intents(intent_id,channel_id,message_id,payload_json,"
+                "status,approval_mode,created_at,updated_at) "
+                "VALUES (?,?,?,?,'EXECUTING','MANUAL',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+                (
+                    str(intent.intent_id),
+                    source.channel_id,
+                    source.message_id,
+                    intent.model_dump_json(),
+                ),
+            )
+            if strategy is not None:
+                db.execute(
+                    "INSERT INTO position_strategies(strategy_id,symbol,side,status,"
+                    "created_at,updated_at) VALUES (?,?,?,'PENDING',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+                    (str(intent.intent_id), intent.symbol, intent.side.value),
+                )
+        await store.record_entry_failure(
+            intent.intent_id,
+            "Synthetic execution acknowledgement failure",
+            strategy_status=StrategyStatus(strategy) if strategy else None,
+        )
+        if strategy is None:
+            with sqlite3.connect(path) as db:
+                db.execute("DROP TABLE position_strategies")
+        decision = {
+            "extraction": {"intents": [], "position_actions": []},
+            "normalized": {"open_intents": [{}], "position_actions": []},
+        }
+        if evidence == "mixed":
+            action = PositionActionIntent(
+                source=source,
+                symbol="BTCUSDT",
+                action=PositionActionType.CLOSE,
+                summary="Synthetic close",
+                confidence=1,
+            )
+            with sqlite3.connect(path) as db:
+                db.execute(
+                    "INSERT INTO position_actions(action_id,channel_id,message_id,payload_json,"
+                    "status,approval_mode,created_at,updated_at) "
+                    "VALUES (?,?,?,?,'EXECUTED','MANUAL',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+                    (
+                        str(action.action_id),
+                        source.channel_id,
+                        source.message_id,
+                        action.model_dump_json(),
+                    ),
+                )
+            decision["planning"] = {"rejections": ["Portfolio stop-risk cap"]}
+        if evidence != "missing":
+            assert await store.record_source_decision(
+                source, token, json.dumps(decision)
+            )
+        assert await store.mark_source_completed(source, token)
+        before = path.read_bytes()
+        report = await coverage_summary(
+            path, since=datetime.now(UTC) - timedelta(days=1)
+        )
+        expected = "UNRESOLVED" if strategy == "UNCERTAIN" else "FAILED"
+        assert report["dispositions"] == {expected: 1}
+        raw_statuses = {"FAILED": 1}
+        if evidence == "mixed":
+            raw_statuses["EXECUTED"] = 1
+            assert report["planning_rejection_reasons"] == {"portfolio_risk_cap": 1}
+        assert report["linked_record_statuses"] == raw_statuses
+        assert report["missing_original_decisions"] == int(evidence == "missing")
+        spec = importlib.util.spec_from_file_location(
+            "audit_recent_signals_test", REPO / "scripts/audit_recent_signals.py"
+        )
+        assert spec is not None and spec.loader is not None
+        audit = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(audit)
+        state = await audit.current_app_state(
+            path, source.channel_id, source.message_id
+        )
+        assert state["production_disposition"] == expected
+        assert state["persisted_intents"][0]["status"] == "FAILED"
+        assert path.read_bytes() == before
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(

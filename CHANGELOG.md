@@ -10,6 +10,22 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.73] - 2026-11-05
+
+### Fixed
+
+- Source coverage and recent signal audits report unresolved entry strategies
+  even when the entry attempt is recorded as failed. The reports retain the
+  raw attempt status and separately count missing source decisions.
+- SQLite integration tests cover uncertain and terminal entry outcomes,
+  missing decisions, mixed sibling outcomes and snapshots without strategies.
+
+### Delivery and rollback
+
+- Schema 17 and configuration remain compatible with v2.2.72. Roll back both
+  local services together using the retained images and state. Independent
+  zones and profitability verification remain open.
+
 ## [2.2.72] - 2026-11-05
 
 ### Fixed

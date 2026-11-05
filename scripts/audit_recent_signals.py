@@ -42,6 +42,7 @@ from cautious_crypto_bro.signals.extraction import (
 from cautious_crypto_bro.signals.normalization import _signals_from_extraction
 from cautious_crypto_bro.source_coverage import (
     decision_disposition,
+    has_uncertain_entry_strategy,
     production_decision,
     record_disposition_status,
 )
@@ -244,8 +245,10 @@ async def current_app_state(
         "persisted_position_actions": [],
     }
 
-    async with aiosqlite.connect(database_path) as db:
+    uri = database_path.resolve().as_uri() + "?mode=ro"
+    async with aiosqlite.connect(uri, uri=True) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN")
 
         cursor = await db.execute(
             """
@@ -341,6 +344,21 @@ async def current_app_state(
         result["production_decision"] = await production_decision(
             db, channel_id, message_id
         )
+        processing = result["source_processing"]
+        if processing is not None:
+            result["production_disposition"] = decision_disposition(
+                result["production_decision"],
+                processing["status"],
+                [
+                    record_disposition_status(item["status"], item["approval_mode"])
+                    for item in result["persisted_intents"]
+                    + result["persisted_position_actions"]
+                ],
+                source_reason=processing["last_error"],
+                uncertain_entry_strategy=await has_uncertain_entry_strategy(
+                    db, channel_id, message_id
+                ),
+            )
 
     return result
 
@@ -709,17 +727,9 @@ async def main() -> int:
                                 derived_open_intents=normalized["open_intents"],
                                 derived_position_actions=normalized["position_actions"],
                                 production_decision=original,
-                                production_disposition=decision_disposition(
-                                    original,
-                                    app_state["source_processing"]["status"],
-                                    [
-                                        record_disposition_status(
-                                            item["status"], item["approval_mode"]
-                                        )
-                                        for item in app_state["persisted_intents"]
-                                        + app_state["persisted_position_actions"]
-                                    ],
-                                ),
+                                production_disposition=app_state[
+                                    "production_disposition"
+                                ],
                                 category="ACTIONABLE"
                                 if actionable
                                 else "NON_ACTIONABLE",
