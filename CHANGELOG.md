@@ -10,7 +10,7 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
-## [2.2.68] - 2026-11-05
+## [2.2.69] - 2026-11-05
 
 ### Fixed
 
@@ -32,9 +32,35 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 ### Delivery and rollback
 
 - Reporting-only change; dependencies, configuration, trading policy and SQLite
-  schema 17 are unchanged. Retain the compatible v2.2.67 app/publisher image and
+  schema 17 are unchanged. Retain the compatible v2.2.68 app/publisher image and
   restore-tested state backup for coupled rollback. Independent per-zone trailing
   protection and the broader participation/profitability goals remain unfinished.
+
+
+## [2.2.68] - 2026-11-05
+
+### Security
+
+- Upgrade inherited Bookworm `apt` and `libapt-pkg6.0` to the Debian security
+  release addressing CVE-2026-109518, retaining targeted OpenSSL updates and the
+  immutable base-image digests. Disable APT download retries while bootstrapping
+  from the vulnerable pinned base. Signed repository/package verification and
+  fixable HIGH/CRITICAL image-scan gates remain enabled.
+
+### Validation
+
+- Inspect installed APT/libapt and OpenSSL versions in the exact committed
+  runtime image; verify the existing scanner, runtime smoke, repository checks
+  and required CI. No scanner ignore entry or weaker security gate is introduced.
+
+### Delivery and rollback
+
+- No Python dependency, trading-policy, configuration or SQLite schema17 change.
+  Deploy app/publisher together with a restore-tested backup. The prior v2.2.67
+  image is state-compatible but retains the vulnerable APT packages; prefer a
+  patched forward build over a prolonged security rollback. Partial source
+  execution reporting (#366/#367) remains pending in its separate branch, as do
+  independent per-zone protection and the broader profitability goals.
 
 ## [2.2.67] - 2026-11-05
 

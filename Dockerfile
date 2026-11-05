@@ -3,9 +3,10 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58 AS uv
 
 FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 AS os
-# The official image can lag Debian security updates (CVE-2026-84782).
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade libssl3 openssl \
+# The pinned image can lag security fixes for OpenSSL and APT.
+# Disable download retries while bootstrapping past CVE-2026-109518.
+RUN apt-get -o Acquire::Retries=0 update \
+    && apt-get -o Acquire::Retries=0 install -y --no-install-recommends --only-upgrade apt libapt-pkg6.0 libssl3 openssl \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
 ENV UV_TOOL_BIN_DIR=/usr/local/bin
