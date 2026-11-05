@@ -33,6 +33,7 @@ CMD ["/app/.venv/bin/cautious-crypto-bro"]
 
 FROM runtime AS test
 
+COPY README.md TESTING.md ./
 COPY tests ./tests
 COPY docs ./docs
 COPY .env.example ./.env.example

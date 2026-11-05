@@ -30,3 +30,5 @@ debug
 forensic_exports
 .planning
 *.md
+!README.md
+!TESTING.md
