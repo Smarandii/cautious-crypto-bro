@@ -21,17 +21,20 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.parametrize(
-    "cap,mixed,complete_action,transient,expected",
+    "cap,mixed,action_status,transient,expected",
     [
-        ("100", False, False, False, "PLANNING_REJECTED"),
-        ("50", True, False, False, "PARTIAL_PLANNING_FAILURE"),
-        ("50", True, True, False, "PARTIAL_PLANNING_FAILURE"),
-        ("50", True, False, True, "UNRESOLVED"),
-        ("500", False, False, False, "AWAITING_DECISION"),
+        ("100", False, None, False, "PLANNING_REJECTED"),
+        ("50", True, "PENDING", False, "PARTIAL_PLANNING_FAILURE"),
+        ("50", True, "EXECUTED", False, "PARTIAL_PLANNING_FAILURE"),
+        ("50", True, "UNCERTAIN", False, "UNRESOLVED"),
+        ("50", True, "EXECUTING", False, "UNRESOLVED"),
+        ("50", True, "AUTO_PENDING", False, "UNRESOLVED"),
+        ("50", True, "PENDING", True, "UNRESOLVED"),
+        ("500", False, None, False, "AWAITING_DECISION"),
     ],
 )
 def test_original_cap_rejection_is_visible_without_retry_or_orders(
-    tmp_path, cap, mixed, complete_action, transient, expected
+    tmp_path, cap, mixed, action_status, transient, expected
 ):
     class Model:
         calls = 0
@@ -142,17 +145,30 @@ def test_original_cap_rejection_is_visible_without_retry_or_orders(
                     assert len(candidates) == 1 and candidates[0][1] == "PENDING"
                     assert "PEPEUSDT" in candidates[0][0]
                 assert len(actions) == int(mixed)
-                if complete_action:
+                if action_status == "EXECUTED":
                     action = await store.get_position_action(actions[0][0])
                     assert action
                     await store.complete_position_action(action, "synthetic-close")
+                elif action_status in {"UNCERTAIN", "EXECUTING", "AUTO_PENDING"}:
+                    # Seed the persisted execution boundary without submitting orders.
+                    with sqlite3.connect(path) as db:
+                        db.execute(
+                            "UPDATE position_actions SET status=?,approval_mode=? WHERE action_id=?",
+                            (
+                                "PENDING"
+                                if action_status == "AUTO_PENDING"
+                                else action_status,
+                                "AUTO" if action_status == "AUTO_PENDING" else "MANUAL",
+                                actions[0][0],
+                            ),
+                        )
                 before = path.read_bytes()
                 report = await coverage_summary(
                     path, since=datetime.now(UTC) - timedelta(days=1)
                 )
                 assert path.read_bytes() == before
                 assert report["dispositions"] == {expected: 1}
-                if rejected and not transient:
+                if rejected:
                     assert report["planning_rejection_reasons"] == {
                         "portfolio_risk_cap": 1
                     }

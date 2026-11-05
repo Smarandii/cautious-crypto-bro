@@ -10,6 +10,23 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.71] - 2026-11-05
+
+### Fixed
+
+- Source coverage reports unresolved execution before sibling planning
+  rejections. Explicit rejection reasons remain counted even while execution
+  or planning recovery is unresolved. Manual approval behavior is unchanged.
+- SQLite integration regressions cover uncertain and in-flight actions, pending
+  automatic dispatch, and uncertain entries alongside expired recovery.
+
+### Delivery and rollback
+
+- Reporting only; no schema, trading policy or configuration change. Roll back
+  app and publisher together to v2.2.70 with the retained images and compatible
+  schema 17 state. Independent-zone admission and profitability verification
+  remain open.
+
 ## [2.2.70] - 2026-11-05
 
 ### Fixed

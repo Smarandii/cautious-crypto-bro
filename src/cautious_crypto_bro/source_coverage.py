@@ -86,6 +86,8 @@ def decision_disposition(
         return "UNRESOLVED"
     if planning and planning.get("retryable_errors") and not planning_statuses:
         return "UNRESOLVED"
+    if {"UNCERTAIN", "EXECUTING", "AUTO_PENDING"}.intersection(record_statuses):
+        return "UNRESOLVED"
     terminal_candidates = bool(
         planning_statuses and {"EXPIRED", "REJECTED"}.intersection(planning_statuses)
     )
@@ -102,8 +104,6 @@ def decision_disposition(
 
 
 def _record_disposition(record_statuses: list[str]) -> str:
-    if {"UNCERTAIN", "EXECUTING", "AUTO_PENDING"}.intersection(record_statuses):
-        return "UNRESOLVED"
     if "PENDING" in record_statuses:
         return "AWAITING_DECISION"
     if "EXECUTED" in record_statuses:
@@ -194,18 +194,15 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
             )
             missing += disposition == "UNKNOWN"
             dispositions[disposition] += 1
-            if decision is not None and disposition in {
+            planning = (decision or {}).get("planning") or {}
+            errors = planning.get("rejections")
+            if "rejections" not in planning and disposition in {
                 "PLANNING_REJECTED",
                 "PARTIAL_PLANNING_FAILURE",
             }:
-                planning = decision.get("planning") or {}
-                errors = (
-                    planning.get("rejections")
-                    if "rejections" in planning
-                    else planning.get("errors")
-                )
-                for error in errors or []:
-                    rejection_reasons[planning_rejection_kind(str(error))] += 1
+                errors = planning.get("errors")
+            for error in errors or []:
+                rejection_reasons[planning_rejection_kind(str(error))] += 1
         return {
             "window_basis": "source processing updated_at (not publication time)",
             "sources": len(sources),
