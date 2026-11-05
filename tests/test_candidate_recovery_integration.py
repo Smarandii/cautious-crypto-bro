@@ -250,6 +250,19 @@ def test_partial_batch_recovers_after_restart_without_reextracting(tmp_path, rec
                 }[recovery]
                 assert summary["planning_candidate_statuses"] == {status: 1}
                 assert summary["dispositions"] == {disposition: 1}
+                if recovery == "expired":
+                    with sqlite3.connect(database) as db:
+                        db.execute(
+                            "UPDATE intents SET status='UNCERTAIN' WHERE intent_id=?",
+                            (original[0][0],),
+                        )
+                    before = database.read_bytes()
+                    summary = await coverage_summary(
+                        database, since=datetime.now(UTC) - timedelta(days=1)
+                    )
+                    assert summary["planning_candidate_statuses"] == {"EXPIRED": 1}
+                    assert summary["dispositions"] == {"UNRESOLVED": 1}
+                    assert database.read_bytes() == before
                 if recovery == "available":
                     # Model the persisted AUTO handoff before dispatch, then prove
                     # that UNCERTAIN is never selected for execution recovery.
