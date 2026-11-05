@@ -4,11 +4,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from datetime import (
-    UTC,
-    datetime,
-    timedelta,
-)
+from datetime import datetime
 from decimal import ROUND_DOWN, Decimal
 
 from ..cancellation import finish_before_cancellation
@@ -33,6 +29,7 @@ from ..domain import (
 )
 from ..execution import ExecutionPlanner
 from ..execution_history import HISTORY_WINDOW_MS, ExecutionHistoryPage
+from . import account_reads
 from .client import DEMO_BASE_URL, BybitClient
 from .entry_limits import allocate_entry_slices
 from .leverage import (
@@ -44,10 +41,7 @@ from .leverage import (
 )
 from .normalize import (
     account_order_from_item,
-    account_position_from_item,
-    closed_pnl_record_from_item,
     format_decimal,
-    is_live_open_order,
     parse_decimal,
     pending_entry_order_from_item,
     position_exposure_from_item,
@@ -96,40 +90,9 @@ class BybitDemoExecutor:
     def _execution_history_page_sync(
         self, symbol: str, start_ms: int, end_ms: int, cursor: str
     ) -> ExecutionHistoryPage:
-        self._sync_clock()
-        result = self._client.private_get(
-            "/v5/execution/list",
-            {
-                "category": "linear",
-                "symbol": symbol,
-                "startTime": start_ms,
-                "endTime": end_ms,
-                "limit": 100,
-                "cursor": cursor,
-            },
-        ).get("result")
-        if not isinstance(result, dict):
-            raise TradeExecutionError(
-                "Bybit execution history returned an invalid result"
-            )
-        rows, next_cursor = result.get("list"), result.get("nextPageCursor")
-        if (
-            not isinstance(rows, list)
-            or len(rows) > 100
-            or any(not isinstance(row, dict) for row in rows)
-        ):
-            raise TradeExecutionError(
-                "Bybit execution history returned an invalid page"
-            )
-        if (
-            not isinstance(next_cursor, str)
-            or len(next_cursor) > 2048
-            or (next_cursor and next_cursor == cursor)
-        ):
-            raise TradeExecutionError(
-                "Bybit execution history returned an invalid cursor"
-            )
-        return ExecutionHistoryPage(tuple(rows), next_cursor)
+        return account_reads.execution_history_page(
+            self._client, symbol, start_ms, end_ms, cursor
+        )
 
     async def execution_history(
         self,
@@ -148,18 +111,7 @@ class BybitDemoExecutor:
         symbol: str,
         since_ms: int,
     ) -> tuple[dict, ...]:
-        self._sync_clock()
-        return tuple(
-            self._client.paginate_private_list(
-                "/v5/execution/list",
-                {
-                    "category": "linear",
-                    "symbol": symbol,
-                    "startTime": int(since_ms),
-                    "limit": 100,
-                },
-            )
-        )
+        return account_reads.execution_history(self._client, symbol, since_ms)
 
     async def one_minute_closes(
         self,
@@ -428,137 +380,19 @@ class BybitDemoExecutor:
     def _wallet_balance_usdt_sync(
         self,
     ) -> Decimal:
-        response = self._client.private_get(
-            "/v5/account/wallet-balance",
-            {
-                "accountType": "UNIFIED",
-            },
-        )
-
-        accounts = response.get("result", {}).get("list", [])
-
-        if (
-            not isinstance(accounts, list)
-            or len(accounts) != 1
-            or not isinstance(accounts[0], dict)
-        ):
-            raise TradeExecutionError(
-                "Bybit wallet balance response did not contain exactly one account"
-            )
-
-        balance = parse_decimal(accounts[0].get("totalWalletBalance"))
-
-        if balance <= 0:
-            raise TradeExecutionError("Bybit totalWalletBalance must be positive")
-
-        return balance
+        return account_reads.wallet_balance_usdt(self._client)
 
     def _account_state_sync(
         self,
     ) -> AccountStateSummary:
-        self._sync_clock()
-
-        now = datetime.now(UTC)
-        position_items = self._client.paginate_private_list(
-            "/v5/position/list",
-            {
-                "category": "linear",
-                "settleCoin": "USDT",
-                "limit": 200,
-            },
-        )
-
-        positions = [
-            position
-            for position in map(account_position_from_item, position_items)
-            if position is not None
-        ]
-
-        open_items = self._client.paginate_private_list(
-            "/v5/order/realtime",
-            {
-                "category": "linear",
-                "settleCoin": "USDT",
-                "openOnly": 0,
-                "limit": 50,
-            },
-        )
-
-        open_orders = tuple(
-            account_order_from_item(item)
-            for item in open_items
-            if is_live_open_order(item)
-        )
-
-        return AccountStateSummary(
-            as_of=now,
-            positions=tuple(
-                sorted(
-                    positions,
-                    key=lambda position: position.symbol,
-                )
-            ),
-            open_orders=tuple(
-                sorted(
-                    open_orders,
-                    key=lambda order: order.updated_at,
-                    reverse=True,
-                )
-            ),
-        )
+        return account_reads.account_state(self._client)
 
     def _closed_pnl_history_sync(
         self,
         start: datetime,
         end: datetime,
     ) -> tuple[ClosedPnlRecord, ...]:
-        if start.tzinfo is None or end.tzinfo is None:
-            raise ValueError("Closed-PnL range must be timezone-aware")
-
-        start = start.astimezone(UTC)
-        end = end.astimezone(UTC)
-
-        if end <= start:
-            return ()
-
-        self._sync_clock()
-
-        records: dict[
-            str,
-            ClosedPnlRecord,
-        ] = {}
-
-        window_start = start
-
-        while window_start < end:
-            window_end = min(
-                window_start + timedelta(days=7),
-                end,
-            )
-
-            items = self._client.paginate_private_list(
-                "/v5/position/closed-pnl",
-                {
-                    "category": "linear",
-                    "startTime": int(window_start.timestamp() * 1000),
-                    "endTime": int(window_end.timestamp() * 1000),
-                    "limit": 100,
-                },
-            )
-
-            for item in items:
-                record = closed_pnl_record_from_item(item)
-
-                records[record.record_id] = record
-
-            window_start = window_end
-
-        return tuple(
-            sorted(
-                records.values(),
-                key=lambda item: item.updated_at,
-            )
-        )
+        return account_reads.closed_pnl_history(self._client, start, end)
 
     async def strategy_order(self, symbol: str, link_id: str) -> AccountOrder | None:
         """Read open or completed orders; absence from open orders is not a fill."""

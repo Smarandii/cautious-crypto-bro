@@ -10,6 +10,32 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.67] - 2026-11-05
+
+### Changed
+
+- Bybit account, wallet, execution-history and Closed-PnL reads now have one
+  focused module, separate from order mutation orchestration. Existing executor
+  interfaces, signed requests, pagination, clock synchronization, errors and
+  cancellation ownership are preserved.
+- The Docker test target now explicitly includes README.md and TESTING.md,
+  allowing its existing documentation-coherence checks to run without host
+  fixtures. Runtime stages remain unchanged by that test-fixture correction.
+
+### Validation
+
+- Existing read/execution/cancellation checks plus coarse HTTP integration
+  coverage verify paginated multi-window PnL, invalid evidence, empty ranges and
+  repeated cancellation while an account read is blocked. Query-body equivalence
+  and unchanged surrounding executor methods were checked during extraction.
+
+### Delivery and rollback
+
+- No dependency, configuration, trading-policy or SQLite schema 17 change.
+  The previous v2.2.66 image is compatible with the same state; restore both
+  app and publisher together if rollback is needed. This refactor does not
+  establish profitability or complete independent per-zone trailing protection.
+
 ## [2.2.66] - 2026-11-05
 
 ### Fixed
