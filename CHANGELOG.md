@@ -18,6 +18,9 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
   focused module, separate from order mutation orchestration. Existing executor
   interfaces, signed requests, pagination, clock synchronization, errors and
   cancellation ownership are preserved.
+- The Docker test target now explicitly includes README.md and TESTING.md,
+  allowing its existing documentation-coherence checks to run without host
+  fixtures. Runtime stages remain unchanged by that test-fixture correction.
 
 ### Validation
 
