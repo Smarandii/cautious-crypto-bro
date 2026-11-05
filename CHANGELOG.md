@@ -10,6 +10,33 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.69] - 2026-11-05
+
+### Fixed
+
+- Source coverage now reports `PARTIAL_EXECUTION` when one linked entry/action
+  executed while another failed or was skipped, instead of hiding the sibling
+  outcome inside `EXECUTED`. Original-decision audits reuse the same rule.
+  Unresolved work, pending decisions and planning-failure precedence are retained.
+  Partial execution describes stored outcomes; it does not identify a missing
+  post, diagnose a trading defect or establish a profitable trade lifecycle.
+
+### Validation
+
+- Real SQLite source/entry/action transitions reproduce the former classification
+  and verify mixed outcomes in either order, approval-mode conversion and existing
+  pending/uncertain/all-terminal meanings. The offline CLI uses aggregate-only
+  output and leaves database bytes unchanged; no live orders or model calls are
+  needed for this regression.
+
+### Delivery and rollback
+
+- Reporting-only change; dependencies, configuration, trading policy and SQLite
+  schema 17 are unchanged. Retain the compatible v2.2.68 app/publisher image and
+  restore-tested state backup for coupled rollback. Independent per-zone trailing
+  protection and the broader participation/profitability goals remain unfinished.
+
+
 ## [2.2.68] - 2026-11-05
 
 ### Security
