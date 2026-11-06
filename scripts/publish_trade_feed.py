@@ -39,6 +39,7 @@ PUBLIC_URL = "https://smarandii.github.io/cautious-crypto-bro/trades.json"
 BALANCE_URL = "https://smarandii.github.io/cautious-crypto-bro/balance.json"
 INTERVAL_SECONDS = 15 * 60
 EXPORT_TIMEOUT_SECONDS = 270
+PAGES_VERIFICATION_SECONDS = 10 * 60
 
 
 class PublisherSettings(BaseSettings):
@@ -223,8 +224,12 @@ def _balance_receipt(balance: dict | None) -> dict:
     return result
 
 
+class PagesVerificationTimeout(TimeoutError):
+    """The public feeds did not match the dispatched feeds in time."""
+
+
 def _verify_publication(feed: dict, balance: dict | None = None) -> dict:
-    deadline = time.monotonic() + 180
+    deadline = time.monotonic() + PAGES_VERIFICATION_SECONDS
     while time.monotonic() < deadline:
         try:
             request = Request(
@@ -256,7 +261,7 @@ def _verify_publication(feed: dict, balance: dict | None = None) -> dict:
         except (OSError, ValueError):
             pass
         time.sleep(15)
-    raise RuntimeError("Pages publication not verified before deadline")
+    raise PagesVerificationTimeout("Pages publication not verified before deadline")
 
 
 def refresh_once(settings: PublisherSettings) -> dict:
