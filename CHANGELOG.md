@@ -10,6 +10,20 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.79] - 2026-11-06
+
+### Fixed
+
+- Telegram authorization errors during catch-up or targeted post retries
+  reach the session recovery loop. Tests verify that the cursor and saved
+  retry survive an authorization failure during a media download.
+
+### Delivery and rollback
+
+- Schema 17 and configuration remain compatible with v2.2.78. Roll back
+  both local services together using the retained images and state.
+  Independent zones and profitability verification remain open.
+
 ## [2.2.78] - 2026-11-06
 
 ### Fixed
