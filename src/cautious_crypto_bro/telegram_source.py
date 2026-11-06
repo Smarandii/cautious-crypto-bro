@@ -375,6 +375,7 @@ class TelegramSource:
         load_history_cursor: Callable[[int], Awaitable[int | None]] | None = None,
         save_history_cursor: Callable[[int, int], Awaitable[None]] | None = None,
         source_completed: Callable[[int, int], Awaitable[bool]] | None = None,
+        source_failed: Callable[[int, int], Awaitable[bool]] | None = None,
     ) -> None:
         if startup_lookback_hours < 0:
             raise ValueError("startup_lookback_hours must not be negative")
@@ -407,6 +408,7 @@ class TelegramSource:
         self._load_history_cursor = load_history_cursor
         self._save_history_cursor = save_history_cursor
         self._source_completed = source_completed
+        self._source_failed = source_failed
         self._entities: list[Any] = []
         # Only chronological history reconciliation may advance this cursor.
         # A newer live delivery says nothing about earlier missed messages.
@@ -786,6 +788,14 @@ class TelegramSource:
                         post.source.channel_id, post.source.message_id
                     )
                 ):
+                    if (
+                        self._retry_message_ids is not None
+                        and self._source_failed is not None
+                        and await self._source_failed(
+                            post.source.channel_id, post.source.message_id
+                        )
+                    ):
+                        return
                     raise RuntimeError("Source post processing remains incomplete")
 
     async def run_until_disconnected(

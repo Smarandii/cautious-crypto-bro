@@ -228,6 +228,7 @@ async def _build_runtime(
         load_history_cursor=store.get_source_history_cursor,
         save_history_cursor=store.save_source_history_cursor,
         source_completed=store.source_completed,
+        source_failed=store.source_failed,
     )
     cleanup.push_async_callback(source.disconnect)
     source_recovery = SourceRecovery(
