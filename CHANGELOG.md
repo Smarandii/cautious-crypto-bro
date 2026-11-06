@@ -10,6 +10,20 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.76] - 2026-11-06
+
+### Fixed
+
+- Source completion records planning retries whose original deadline has
+  already passed as expired. Their audit records remain visible and
+  recovery slots stay available for eligible candidates.
+
+### Delivery and rollback
+
+- Schema 17 and configuration remain compatible with v2.2.75. Roll back
+  both local services together using the retained images and state.
+  Independent zones and profitability verification remain open.
+
 ## [2.2.75] - 2026-11-06
 
 ### Changed

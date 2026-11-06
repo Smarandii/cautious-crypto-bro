@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import aiosqlite
@@ -318,11 +319,14 @@ class SourceRepositoryImpl(_Store):
                         (record_id, kind),
                     )
 
+                now = datetime.now(UTC)
                 for candidate in planning_candidates:
                     intent = candidate.intent
+                    expired = candidate.deadline <= now
                     await db.execute(
                         "INSERT INTO planning_candidates(intent_id,channel_id,message_id,"
-                        "payload_json,duplicate_in_batch,deadline) VALUES (?,?,?,?,?,?)",
+                        "payload_json,duplicate_in_batch,deadline,status,last_error) "
+                        "VALUES (?,?,?,?,?,?,?,?)",
                         (
                             str(intent.intent_id),
                             source.channel_id,
@@ -333,6 +337,8 @@ class SourceRepositoryImpl(_Store):
                             ),
                             int(candidate.duplicate_in_batch),
                             candidate.deadline.isoformat(),
+                            "EXPIRED" if expired else "PENDING",
+                            "Original source deadline exceeded" if expired else None,
                         ),
                     )
 
