@@ -10,6 +10,19 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.78] - 2026-11-06
+
+### Fixed
+
+- Telegram reports a failed write when deferring a missing retry post and
+  continues processing available retries and channel history.
+
+### Delivery and rollback
+
+- Schema 17 and configuration remain compatible with v2.2.77. Roll back
+  both local services together using the retained images and state.
+  Independent zones and profitability verification remain open.
+
 ## [2.2.77] - 2026-11-06
 
 ### Fixed
