@@ -10,6 +10,20 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.80] - 2026-11-06
+
+### Fixed
+
+- Give the Demo publisher ten minutes to verify both public feeds after
+  dispatching GitHub Pages. Report a distinct verification timeout when
+  either feed still differs. The publisher startup grace covers the first cycle.
+
+### Delivery and rollback
+
+- Schema 17 and configuration remain compatible with v2.2.79. Roll back
+  both local services together using the retained images and state.
+  Independent zones and profitability verification remain open.
+
 ## [2.2.79] - 2026-11-06
 
 ### Fixed

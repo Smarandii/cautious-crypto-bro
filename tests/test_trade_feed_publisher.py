@@ -45,12 +45,18 @@ def feed():
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("publish_after", [210, None])
 def test_cycle_dispatches_only_public_feed_and_verifies_publication(
-    settings, monkeypatch
+    settings, monkeypatch, publish_after
 ):
     public = feed()
     requests = []
     balance = {"schema_version": 1, "refresh_failed": True, "history": None}
+    clock = 0
+
+    def sleep(seconds):
+        nonlocal clock
+        clock += seconds
 
     def export(config, bundle, output):
         assert config == settings
@@ -63,6 +69,9 @@ def test_cycle_dispatches_only_public_feed_and_verifies_publication(
     def urlopen(request, *, timeout):
         requests.append(request)
         value = balance if "balance.json" in request.full_url else public
+        if request.get_method() == "GET" and "balance.json" in request.full_url:
+            if publish_after is None or clock < publish_after:
+                value = balance | {"refresh_failed": False}
         response = io.BytesIO(json.dumps(value).encode())
         response.status = 204 if request.get_method() == "POST" else 200
         assert timeout in (15, 30)
@@ -70,20 +79,34 @@ def test_cycle_dispatches_only_public_feed_and_verifies_publication(
 
     monkeypatch.setattr(publisher, "_run_export", export)
     monkeypatch.setattr(publisher, "urlopen", urlopen)
-    result = publisher.refresh_once(settings)
-    assert result == {
-        "published": True,
-        "as_of": public["trade_history"]["as_of"],
-        "completed_trades": 0,
-        "balance_as_of": None,
-        "balance_refresh_failed": True,
-    }
+    monkeypatch.setattr(
+        publisher, "time", SimpleNamespace(monotonic=lambda: clock, sleep=sleep)
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        publisher.publish_loop(settings, once=True)
+    result = json.loads((settings.publisher_work_dir / "status.json").read_text())
+    assert result.pop("checked_at")
+    if publish_after is None:
+        assert clock == 600
+        assert exit_info.value.code == 1
+        assert result == {"published": False, "error_type": "PagesVerificationTimeout"}
+    else:
+        assert clock == publish_after
+        assert exit_info.value.code == 0
+        assert result == {
+            "published": True,
+            "as_of": public["trade_history"]["as_of"],
+            "completed_trades": 0,
+            "balance_as_of": None,
+            "balance_refresh_failed": True,
+        }
+    assert sum(request.get_method() == "POST" for request in requests) == 1
     dispatched = json.loads(requests[0].data)
     assert json.loads(dispatched["inputs"]["trade_feed"]) == public
     assert decode_balance_feed(dispatched["inputs"]["balance_feed"]) == balance
     assert all("PRIVATE" not in (request.data or b"").decode() for request in requests)
     assert requests[0].get_header("Authorization") == "Bearer PRIVATE_CREDENTIAL_CANARY"
-    assert not list(settings.publisher_work_dir.iterdir())
+    assert not list(settings.publisher_work_dir.glob("trade-feed-*"))
 
 
 def test_private_input_never_reaches_dispatch_and_temp_files_are_removed(
