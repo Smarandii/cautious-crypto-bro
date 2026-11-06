@@ -43,11 +43,17 @@ class SourceRepositoryImpl(_Store):
             await db.commit()
 
     async def source_completed(self, channel_id: int, message_id: int) -> bool:
+        return await self._source_status(channel_id, message_id) == "COMPLETED"
+
+    async def source_failed(self, channel_id: int, message_id: int) -> bool:
+        return await self._source_status(channel_id, message_id) == "FAILED"
+
+    async def _source_status(self, channel_id: int, message_id: int) -> str | None:
         row = await self._fetch(
             "SELECT status FROM source_messages WHERE channel_id=? AND message_id=?",
             (channel_id, message_id),
         )
-        return row is not None and row[0] == "COMPLETED"
+        return row[0] if row is not None else None
 
     async def record_source_decision(
         self,

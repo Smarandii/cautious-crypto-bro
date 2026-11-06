@@ -47,6 +47,7 @@ def reader(monkeypatch, client, store, handler, *, channels=(CHANNEL,)):
         load_history_cursor=store.get_source_history_cursor,
         save_history_cursor=store.save_source_history_cursor,
         source_completed=store.source_completed,
+        source_failed=store.source_failed,
         retry_message_ids=lambda channel: store.get_retryable_source_message_ids(
             channel, lease_seconds=300
         ),
@@ -87,7 +88,11 @@ def test_old_entry_recovers_after_model_failure_without_automatic_orders(
                 with patch.object(bot._bot, "send_message", new=sender):
                     first = reader(monkeypatch, client, store, service.on_message)
                     await first.start()
-                    assert await store.get_source_history_cursor(CHANNEL) == 1
+                    assert await store.get_source_history_cursor(CHANNEL) == 3
+                    assert await store.get_retryable_source_message_ids(
+                        CHANNEL, lease_seconds=300
+                    ) == (2,)
+                    assert await store.source_completed(CHANNEL, 3)
                     assert first.read_warnings()
                     restarted = reader(
                         monkeypatch, client, IntentStore(path), service.on_message
