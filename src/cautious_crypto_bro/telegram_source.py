@@ -623,6 +623,8 @@ class TelegramSource:
                 if self._save_history_cursor is not None:
                     await self._save_history_cursor(chat_id, watermark)
                 self._watermarks[chat_id] = watermark
+            except UnauthorizedError:
+                raise
             except Exception as exc:
                 self._read_errors[chat_id] = type(exc).__name__
                 logger.exception(
@@ -706,6 +708,8 @@ class TelegramSource:
             processed = True
             try:
                 await self._handle_messages(group, chat=entity)
+            except UnauthorizedError:
+                raise
             except Exception as exc:
                 processed = False
                 self._read_errors[chat_id] = type(exc).__name__

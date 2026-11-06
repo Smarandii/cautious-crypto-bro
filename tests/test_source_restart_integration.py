@@ -9,13 +9,16 @@ from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import pytest
+from telethon.errors import AuthKeyUnregisteredError
 from test_remaining_concerns import executor_for
+from test_source_recovery import RecoveringClient
 from test_telegram_source import FakeMessage, FakeTelegramClient
 from test_workflow_integration import ExchangeTransport, ModelTransport, workflow
 
 from cautious_crypto_bro import telegram_source
-from cautious_crypto_bro.domain import ApprovalMode, AutoApprovalMode
+from cautious_crypto_bro.domain import ApprovalMode, AutoApprovalMode, SourceMessage
 from cautious_crypto_bro.llm_provider import LLMResponse
+from cautious_crypto_bro.source_recovery import SourceRecovery
 from cautious_crypto_bro.storage import IntentStore
 
 pytestmark = pytest.mark.integration
@@ -62,6 +65,56 @@ def message(number, *, hours=0, text="Commentary", image=None, group=None):
         image=image,
         grouped_id=group,
     )
+
+
+@pytest.mark.parametrize("targeted_retry", [False, True])
+def test_media_authorization_failure_reaches_session_recovery(
+    tmp_path, monkeypatch, targeted_retry
+):
+    async def run():
+        store = IntentStore(tmp_path / "state.sqlite3")
+        await store.initialize()
+        await store.save_source_history_cursor(CHANNEL, 1)
+        media = message(2, image=b"chart")
+        client = RecoveringClient(authorized=True)
+        client.messages = [media, message(3)]
+        download = AsyncMock(side_effect=AuthKeyUnregisteredError(request=None))
+        monkeypatch.setattr(media, "download_media", download)
+        if targeted_retry:
+            source_message = SourceMessage(
+                channel_id=CHANNEL,
+                channel_title="Test",
+                message_id=2,
+                published_at=media.date,
+                received_at=media.date,
+                text="Fixture",
+            )
+            token = await store.claim_source(source_message, lease_seconds=300)
+            assert token is not None
+            assert await store.mark_source_failed(
+                source_message, token, "Temporary failure"
+            )
+        handler = AsyncMock()
+        source = reader(monkeypatch, client, store, handler)
+        alerts = asyncio.Queue()
+        bot = AsyncMock()
+        bot.send_source_notice.side_effect = alerts.put
+        recovery = SourceRecovery(source, bot, tmp_path / "identity.json", 1)
+        task = asyncio.create_task(recovery.run())
+        try:
+            assert "AUTH_REQUIRED" in await asyncio.wait_for(alerts.get(), timeout=1)
+            assert recovery.state == "AUTH_REQUIRED"
+            assert await store.get_source_history_cursor(CHANNEL) == 1
+            assert await store.get_retryable_source_message_ids(
+                CHANNEL, lease_seconds=300
+            ) == ((2,) if targeted_retry else ())
+            download.assert_awaited_once()
+            handler.assert_not_awaited()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("side", ["LONG", "SHORT"])
