@@ -700,11 +700,7 @@ class TelegramSource:
         ]
         missing = set(message_ids) - {message.id for message in available}
         if missing:
-            if self._defer_unavailable_messages is not None:
-                await self._defer_unavailable_messages(chat_id, tuple(sorted(missing)))
-            logger.warning(
-                "Retryable Telegram posts unavailable in %s: %s", chat_id, missing
-            )
+            await self._defer_missing_retries(chat_id, missing)
         results: dict[int, bool] = {}
         for group in _group_telegram_messages(available):
             processed = True
@@ -718,6 +714,22 @@ class TelegramSource:
                 )
             results.update((message.id, processed) for message in group)
         return results
+
+    async def _defer_missing_retries(self, chat_id: int, missing: set[int]) -> None:
+        if self._defer_unavailable_messages is not None:
+            try:
+                await self._defer_unavailable_messages(chat_id, tuple(sorted(missing)))
+            except UnauthorizedError:
+                raise
+            except Exception as exc:
+                self._read_errors[chat_id] = type(exc).__name__
+                logger.exception(
+                    "Failed to defer unavailable Telegram posts for %s", chat_id
+                )
+                return
+        logger.warning(
+            "Retryable Telegram posts unavailable in %s: %s", chat_id, missing
+        )
 
     async def _handle_messages(
         self,

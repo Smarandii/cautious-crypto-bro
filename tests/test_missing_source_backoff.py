@@ -66,8 +66,9 @@ def reader(monkeypatch, client, store, seen):
     )
 
 
+@pytest.mark.parametrize("write_failure", [False, True])
 def test_missing_retry_backoff_survives_restart_and_recovers_after_one_day(
-    monkeypatch, tmp_path, caplog
+    monkeypatch, tmp_path, caplog, write_failure
 ):
     async def run():
         database = tmp_path / "state.db"
@@ -85,6 +86,39 @@ def test_missing_retry_backoff_survives_restart_and_recovers_after_one_day(
         )
         seen = []
         source = reader(monkeypatch, client, store, seen)
+        if write_failure:
+            client.messages.append(
+                FakeMessage(message_id=4, published_at=datetime.now(UTC), text="new")
+            )
+            async with aiosqlite.connect(database) as db:
+                await db.execute(
+                    "CREATE TRIGGER reject_backoff BEFORE UPDATE ON source_messages "
+                    "WHEN NEW.status = 'UNAVAILABLE' "
+                    "BEGIN SELECT RAISE(ABORT, 'synthetic backoff failure'); END"
+                )
+                await db.commit()
+            await source.start()
+            assert seen == [2, 4]
+            assert source._watermarks[CHANNEL] == 4
+            assert source.read_warnings()
+            assert await store.get_retryable_source_message_ids(
+                CHANNEL, lease_seconds=300
+            ) == (1,)
+            async with aiosqlite.connect(database) as db:
+                await db.execute("DROP TRIGGER reject_backoff")
+                await db.commit()
+            await source.poll_once()
+            assert client.lookups == [(1, 2), (1,)]
+            assert not source.read_warnings()
+            reopened = IntentStore(database)
+            assert (
+                await reopened.get_retryable_source_message_ids(
+                    CHANNEL, lease_seconds=300
+                )
+                == ()
+            )
+            assert seen == [2, 4]
+            return
         await source.start()
         await source.poll_once()
         assert client.lookups == [(1, 2)]
