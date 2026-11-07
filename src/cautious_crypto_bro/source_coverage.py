@@ -104,6 +104,8 @@ def decision_disposition(
         decision is not None and source_status == "PROCESSING"
     ):
         return "UNRESOLVED"
+    if source_status == "UNAVAILABLE":
+        return "SOURCE_UNAVAILABLE"
     if decision is None:
         return (
             "SOURCE_REJECTED"
@@ -121,9 +123,11 @@ def decision_disposition(
             else "PROCESSED_NO_OP"
         )
     planning = decision.get("planning")
-    if planning_statuses and "PENDING" in planning_statuses:
-        return "UNRESOLVED"
-    if planning and planning.get("retryable_errors") and not planning_statuses:
+    pending_candidate = "PENDING" in (planning_statuses or ())
+    retry_without_candidate = (
+        planning and planning.get("retryable_errors") and not planning_statuses
+    )
+    if pending_candidate or retry_without_candidate:
         return "UNRESOLVED"
     if {"UNCERTAIN", "EXECUTING", "AUTO_PENDING"}.intersection(record_statuses):
         return "UNRESOLVED"
