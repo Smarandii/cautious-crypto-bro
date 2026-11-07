@@ -24,8 +24,10 @@ from .domain import (
     StrategyV2Policy,
     TradeExecutionError,
 )
-from .entry_ownership import recover_entry_bindings
-from .execution_history import HistoryQuery
+from .execution_history import (
+    ZONE_EXECUTION_RECORD_INTERVAL_S,
+    record_zone_executions,
+)
 from .ports import AccountGateway, PositionSupervisorStore
 from .position_management._helpers import _find_position
 from .position_management.exit_installer import (
@@ -35,12 +37,8 @@ from .position_management.exit_installer import (
 from .position_management.fill_detector import FillDetector
 from .position_management.trailing_stop_manager import TrailingStopManager
 from .supervision_health import publish_success
-from .zone_ledger import ZoneExecution
 
 logger = logging.getLogger(__name__)
-
-# Page work has both a process throttle and a durable per-query throttle.
-ZONE_EXECUTION_RECORD_INTERVAL_S = 60.0
 
 
 class _AccountStateUnavailable(TradeExecutionError):
@@ -136,103 +134,7 @@ class PositionSupervisor:
         if now < self._zone_execution_due_at:
             return
         self._zone_execution_due_at = now + ZONE_EXECUTION_RECORD_INTERVAL_S
-        try:
-            for _state, plan in await self._store.get_active_position_strategies():
-                if plan.entry_slices:
-                    await recover_entry_bindings(plan, self._store, self._executor)
-            groups_by_symbol = await self._store.zone_order_symbols()
-            queries = await self._store.prepare_zone_history_queries(
-                tuple(groups_by_symbol), int(datetime.now(UTC).timestamp() * 1000)
-            )
-            for query in queries:
-                try:
-                    await self._record_history_query(
-                        query, groups_by_symbol[query.symbol]
-                    )
-                except Exception as exc:
-                    await self._store.finish_zone_history_query(
-                        query,
-                        "",
-                        int(datetime.now(UTC).timestamp() * 1000),
-                        error=f"{type(exc).__name__}: {exc}",
-                    )
-                    logger.exception(
-                        "Zone execution query remains incomplete for %s/%s",
-                        query.symbol,
-                        query.lane,
-                    )
-        except Exception:
-            logger.exception("Zone execution recording pass failed")
-
-    async def _record_history_query(
-        self,
-        query: HistoryQuery,
-        group_ids: tuple[UUID, ...],
-    ) -> None:
-        page = await self._executor.execution_history_page(
-            query.symbol, query.start_ms, query.end_ms, query.cursor
-        )
-        if any(
-            not isinstance(row.get("execType"), str)
-            or (
-                row["execType"] == "Trade"
-                and (not row.get("orderId") or not row.get("execId"))
-            )
-            for row in page.rows
-        ):
-            raise StoreError("History page lacks execution identity/type evidence")
-        for group_id in group_ids:
-            bound = {
-                order.order_id
-                for order in await self._store.zone_bound_orders(group_id)
-            }
-            await self._record_group_executions(bound, query, page.rows)
-        await self._store.finish_zone_history_query(
-            query, page.next_cursor, int(datetime.now(UTC).timestamp() * 1000)
-        )
-
-    async def _record_group_executions(
-        self,
-        bound: set[str],
-        query: HistoryQuery,
-        rows: tuple[dict, ...],
-    ) -> None:
-        owned = [
-            row
-            for row in rows
-            if row.get("orderId") in bound and row.get("execType") == "Trade"
-        ]
-        executions = []
-        for row in owned:
-            if (
-                row.get("side") not in {"Buy", "Sell"}
-                or row.get("symbol") != query.symbol
-            ):
-                raise StoreError(
-                    "Bound execution has invalid symbol/direction evidence"
-                )
-            execution = ZoneExecution(
-                execution_id=row["execId"],
-                order_id=row["orderId"],
-                side=Side.LONG if row["side"] == "Buy" else Side.SHORT,
-                quantity=Decimal(str(row["execQty"])),
-                closed_quantity=Decimal(str(row.get("closedSize") or 0)),
-                price=Decimal(str(row["execPrice"])),
-                fee=Decimal(str(row["execFee"])),
-                executed_at_ms=int(row["execTime"]),
-            )
-            if not query.start_ms <= execution.executed_at_ms <= query.end_ms:
-                raise StoreError(
-                    "Bound execution lies outside its requested history window"
-                )
-            executions.append(execution)
-        # Zen of Python: "In the face of ambiguity, refuse the temptation to guess."
-        # An observed maximum is never a completeness checkpoint. Only consumed
-        # query pages advance, and retained execution IDs make replay idempotent.
-        for execution in sorted(
-            executions, key=lambda e: (e.executed_at_ms, e.execution_id)
-        ):
-            await self._store.record_zone_execution(execution)
+        await record_zone_executions(self._store, self._executor)
 
     async def reconcile_once(self) -> None:
         # The durable strategy snapshot must be loaded while holding the

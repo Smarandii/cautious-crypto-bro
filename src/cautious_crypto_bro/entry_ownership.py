@@ -1,8 +1,18 @@
 """Recover acknowledgements by durable request identity, without order replay."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from .domain import ExecutionPlan, TradeExecutionError
-from .ports import AccountGateway, ExecutionCoordinatorStore, PositionSupervisorStore
 from .zone_ledger import ZoneOrder, zone_group_id
+
+if TYPE_CHECKING:
+    from .ports import (
+        AccountGateway,
+        ExecutionCoordinatorStore,
+        PositionSupervisorStore,
+    )
 
 
 async def recover_entry_bindings(
