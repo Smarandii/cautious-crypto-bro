@@ -469,3 +469,42 @@ def test_entry_order_ttl_is_opt_in_and_serialized_into_new_plans() -> None:
         assert restored.policy.strategy_v2.entry_order_ttl_minutes == 240
 
     asyncio.run(run())
+
+
+def test_planning_results_and_supervisor_position_lookup_are_shared_and_immutable() -> (
+    None
+):
+    from cautious_crypto_bro.position_management._helpers import _find_position
+    from cautious_crypto_bro.position_supervisor import PositionSupervisor
+    from cautious_crypto_bro.service import _PlannedBatch
+    from cautious_crypto_bro.signals.planning import OpenPlanningResult
+
+    assert PositionSupervisor._position is _find_position
+
+    planned_list: list = []
+    errors_list = ["retryable"]
+    rejections_list = ["terminal"]
+    candidates_list: list = []
+    result = OpenPlanningResult(
+        planned_list, errors_list, rejections_list, candidates_list
+    )
+    batch = _PlannedBatch(
+        planned=planned_list,
+        position_actions=[],
+        planning_errors=errors_list,
+        planning_rejections=rejections_list,
+        retry_candidates=candidates_list,
+        account_state=None,
+        account_state_error=None,
+    )
+    errors_list.append("mutated")
+    rejections_list.append("mutated")
+    assert result.planned == ()
+    assert result.errors == ("retryable",)
+    assert result.rejections == ("terminal",)
+    assert result.retry_candidates == ()
+    assert batch.planned == ()
+    assert batch.position_actions == ()
+    assert batch.planning_errors == ("retryable",)
+    assert batch.planning_rejections == ("terminal",)
+    assert batch.retry_candidates == ()

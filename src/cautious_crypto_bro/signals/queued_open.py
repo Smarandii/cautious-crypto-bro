@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
@@ -137,7 +138,7 @@ class QueuedOpenExecution:
 
     async def dispatch(
         self,
-        planned: list[
+        planned: Sequence[
             tuple[
                 TradingIntent,
                 ExecutionPlan,
