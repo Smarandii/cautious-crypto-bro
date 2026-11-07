@@ -10,6 +10,20 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.90] - 2026-11-07
+
+### Changed
+
+- Move Bybit lifecycle position-action execution (`REDUCE`/`CLOSE`) and
+  symbol-wide CCB entry/exit cancellation into `bybit/position_actions.py`,
+  reducing `bybit/executor.py` below 1,000 lines.
+
+### Delivery and rollback
+
+- Schema 17 and configuration remain compatible with v2.2.89. Roll back
+  both local services together using the retained images and state.
+  Independent zones and profitability verification remain open.
+
 ## [2.2.89] - 2026-11-07
 
 ### Changed
