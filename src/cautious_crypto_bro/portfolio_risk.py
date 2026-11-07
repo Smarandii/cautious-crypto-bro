@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from decimal import Decimal
 
 from .domain import (
+    AccountPosition,
     AccountStateSummary,
     ExecutionPlan,
     ExecutionPolicy,
@@ -16,6 +17,43 @@ class PortfolioRiskUnavailable(ValueError):
     """The current account risk cannot be bounded safely."""
 
 
+def _verified_position_stop_loss(
+    position: AccountPosition,
+    account_state: AccountStateSummary,
+    plans: tuple[ExecutionPlan, ...],
+) -> Decimal | None:
+    if position.stop_loss is not None:
+        return position.stop_loss
+    matching = tuple(
+        plan
+        for plan in plans
+        if plan.symbol == position.symbol and plan.side is position.side
+    )
+    if len(matching) != 1:
+        return None
+    plan = matching[0]
+    expected_side = Side.SHORT if position.side is Side.LONG else Side.LONG
+    prefix = f"ccb-v2-{plan.intent_id.hex[:20]}-"
+    expected_parents = {prefix + order.name.lower() for order in plan.entry_orders}
+    covered = sum(
+        (
+            order.remaining_quantity
+            for order in account_state.open_orders
+            if (
+                order.symbol == position.symbol
+                and order.side is expected_side
+                and order.stop_order_type == "PartialStopLoss"
+                and order.trigger_price == plan.stop_loss
+                and order.parent_order_link_id in expected_parents
+                and bool(order.order_id)
+                and order.remaining_quantity > 0
+            )
+        ),
+        Decimal("0"),
+    )
+    return plan.stop_loss if covered == position.size else None
+
+
 def open_stop_risk_usdt(
     account_state: AccountStateSummary,
     active_strategies: Iterable[tuple[PositionStrategy, ExecutionPlan]],
@@ -25,19 +63,20 @@ def open_stop_risk_usdt(
     total = Decimal("0")
 
     for position in account_state.positions:
-        if position.stop_loss is None:
+        stop_loss = _verified_position_stop_loss(position, account_state, plans)
+        if stop_loss is None:
             raise PortfolioRiskUnavailable(
                 f"{position.symbol} position has no exchange stop price"
             )
         if position.side is Side.LONG:
             loss_per_unit = max(
                 Decimal("0"),
-                position.avg_price - position.stop_loss,
+                position.avg_price - stop_loss,
             )
         else:
             loss_per_unit = max(
                 Decimal("0"),
-                position.stop_loss - position.avg_price,
+                stop_loss - position.avg_price,
             )
         total += position.size * loss_per_unit
 

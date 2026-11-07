@@ -10,6 +10,21 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.84] - 2026-11-07
+
+### Fixed
+
+- Accept verified attached `PartialStopLoss` orders that cover a newly opened
+  position's full size at `plan.stop_loss` during `open_stop_risk_usdt`
+  preflight before `PositionSupervisor` hands off to a full-position stop,
+  while continuing to fail closed for unverified or partial stop coverage.
+
+### Delivery and rollback
+
+- Schema 17 and configuration remain compatible with v2.2.83. Roll back
+  both local services together using the retained images and state.
+  Independent zones and profitability verification remain open.
+
 ## [2.2.83] - 2026-11-07
 
 ### Fixed

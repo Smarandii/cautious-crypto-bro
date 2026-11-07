@@ -163,3 +163,77 @@ def test_portfolio_budget_can_only_reduce_per_trade_budget() -> None:
     assert unchanged is policy
     with pytest.raises(ValueError, match="No portfolio stop-risk capacity"):
         policy_with_remaining_portfolio_risk(policy, Decimal("0"))
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_open_stop_risk_accepts_verified_partial_stop_before_handoff(
+    side: Side,
+) -> None:
+    now = datetime.now(UTC)
+    plan = _plan().model_copy(
+        update={
+            "side": side,
+            "stop_loss": Decimal("90") if side is Side.LONG else Decimal("110"),
+        }
+    )
+    closing_side = Side.SHORT if side is Side.LONG else Side.LONG
+    parent_link = f"ccb-v2-{plan.intent_id.hex[:20]}-e1"
+
+    def make_state(
+        *,
+        qty: Decimal = Decimal("2"),
+        trigger: Decimal = plan.stop_loss,
+        parent: str = parent_link,
+    ) -> AccountStateSummary:
+        return AccountStateSummary(
+            as_of=now,
+            positions=(
+                AccountPosition(
+                    symbol="BTCUSDT",
+                    side=side,
+                    size=Decimal("2"),
+                    avg_price=Decimal("100"),
+                    mark_price=Decimal("100"),
+                    unrealised_pnl=Decimal("0"),
+                    status="Open",
+                    take_profit=None,
+                    stop_loss=None,
+                ),
+            ),
+            open_orders=(
+                AccountOrder(
+                    symbol="BTCUSDT",
+                    side=closing_side,
+                    order_type="Market",
+                    status="Untriggered",
+                    quantity=qty,
+                    remaining_quantity=qty,
+                    price=None,
+                    avg_price=None,
+                    order_id="partial-sl-1",
+                    order_link_id="",
+                    reduce_only=True,
+                    updated_at=now,
+                    stop_order_type="PartialStopLoss",
+                    trigger_price=trigger,
+                    close_on_trigger=True,
+                    parent_order_link_id=parent,
+                ),
+            ),
+        )
+
+    assert open_stop_risk_usdt(make_state(), ((SimpleNamespace(), plan),)) == Decimal(
+        "20"
+    )
+
+    for invalid_state, active in (
+        (make_state(qty=Decimal("1")), ((SimpleNamespace(), plan),)),
+        (make_state(trigger=Decimal("85")), ((SimpleNamespace(), plan),)),
+        (make_state(parent="other-parent"), ((SimpleNamespace(), plan),)),
+        (
+            make_state(),
+            ((SimpleNamespace(), plan), (SimpleNamespace(), plan)),
+        ),
+    ):
+        with pytest.raises(PortfolioRiskUnavailable, match="no exchange stop"):
+            open_stop_risk_usdt(invalid_state, active)
