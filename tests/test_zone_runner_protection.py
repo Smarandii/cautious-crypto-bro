@@ -10,6 +10,7 @@ import pytest
 
 from cautious_crypto_bro.domain import (
     AccountOrder,
+    AccountPosition,
     AccountStateSummary,
     Entry,
     EntryType,
@@ -22,11 +23,13 @@ from cautious_crypto_bro.domain import (
     TradingIntent,
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
+from cautious_crypto_bro.portfolio_risk import PortfolioRiskUnavailable
 from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.zone_ledger import ZoneExecution, ZoneOrder, zone_group_id
 from cautious_crypto_bro.zone_runner_protection import (
     cancel_zone_pending_entries,
     derive_zone_runner_state,
+    zone_group_open_stop_risk_usdt,
     zone_pending_entry_orders,
 )
 
@@ -501,3 +504,383 @@ def test_cancel_zone_pending_entries_preserves_sibling_and_recovers_lost_ack(
             zone_pending_entry_orders(plan_a, orders, (mismatched,))
 
     asyncio.run(run())
+
+
+def _child_stop_order(
+    order_id: str,
+    parent_link_id: str,
+    side: Side,
+    quantity: Decimal,
+    trigger_price: Decimal,
+) -> AccountOrder:
+    close_side = Side.SHORT if side is Side.LONG else Side.LONG
+    return AccountOrder(
+        symbol="BTCUSDT",
+        side=close_side,
+        order_type="Market",
+        status="Untriggered",
+        quantity=quantity,
+        remaining_quantity=quantity,
+        price=None,
+        avg_price=None,
+        order_id=order_id,
+        order_link_id="",
+        reduce_only=True,
+        updated_at=datetime.now(UTC),
+        stop_order_type="PartialStopLoss",
+        trigger_price=trigger_price,
+        parent_order_link_id=parent_link_id,
+    )
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_zone_group_open_stop_risk_floors_profit_locked_zone_and_fails_closed(
+    side: Side,
+) -> None:
+    assert zone_group_open_stop_risk_usdt(
+        (), (), (), AccountStateSummary(datetime.now(UTC), (), ())
+    ) == D("0")
+    if side is Side.LONG:
+        _, plan_a = _make_plan(side, "98", "100", "90")
+        _, plan_b = _make_plan(side, "92", "94", "84")
+        fill_a, fill_b = D("100"), D("93")
+        locked_stop_a = D("101")
+        expected_filled_b = D("4") * (D("93") - plan_b.stop_loss)
+    else:
+        _, plan_a = _make_plan(side, "100", "102", "110")
+        _, plan_b = _make_plan(side, "106", "108", "116")
+        fill_a, fill_b = D("100"), D("107")
+        locked_stop_a = D("99")
+        expected_filled_b = D("4") * (plan_b.stop_loss - D("107"))
+
+    link_a_e1 = f"ccb-v2-{plan_a.intent_id.hex[:20]}-e1"
+    link_b_e1 = f"ccb-v2-{plan_b.intent_id.hex[:20]}-e1"
+    link_b_e2 = f"ccb-v2-{plan_b.intent_id.hex[:20]}-e2"
+
+    orders = (
+        ZoneOrder(
+            zone_id=plan_a.intent_id,
+            order_id="a-e1",
+            order_link_id=link_a_e1,
+            role="ENTRY",
+            quantity=D("2"),
+        ),
+        ZoneOrder(
+            zone_id=plan_a.intent_id,
+            order_id="a-sl",
+            order_link_id="",
+            parent_order_link_id=link_a_e1,
+            role="STOP",
+            quantity=D("2"),
+        ),
+        ZoneOrder(
+            zone_id=plan_a.intent_id,
+            order_id="a-tp",
+            order_link_id="",
+            parent_order_link_id=link_a_e1,
+            role="EXIT",
+            quantity=D("0.5"),
+        ),
+        ZoneOrder(
+            zone_id=plan_b.intent_id,
+            order_id="b-e1",
+            order_link_id=link_b_e1,
+            role="ENTRY",
+            quantity=D("4"),
+        ),
+        ZoneOrder(
+            zone_id=plan_b.intent_id,
+            order_id="b-sl",
+            order_link_id="",
+            parent_order_link_id=link_b_e1,
+            role="STOP",
+            quantity=D("4"),
+        ),
+        ZoneOrder(
+            zone_id=plan_b.intent_id,
+            order_id="b-e2",
+            order_link_id=link_b_e2,
+            role="ENTRY",
+            quantity=plan_b.entry_orders[1].quantity,
+        ),
+    )
+    close_side = Side.SHORT if side is Side.LONG else Side.LONG
+    executions = (
+        ZoneExecution(
+            execution_id="ex-a-1",
+            order_id="a-e1",
+            side=side,
+            quantity=D("2"),
+            closed_quantity=D("0"),
+            price=fill_a,
+            executed_at_ms=10,
+        ),
+        ZoneExecution(
+            execution_id="ex-a-tp",
+            order_id="a-tp",
+            side=close_side,
+            quantity=D("0.5"),
+            closed_quantity=D("0.5"),
+            price=fill_a,
+            executed_at_ms=15,
+        ),
+        ZoneExecution(
+            execution_id="ex-b-1",
+            order_id="b-e1",
+            side=side,
+            quantity=D("4"),
+            closed_quantity=D("0"),
+            price=fill_b,
+            executed_at_ms=20,
+        ),
+    )
+    sl_a = _child_stop_order("a-sl", link_a_e1, side, D("1.5"), locked_stop_a)
+    sl_b = _child_stop_order("b-sl", link_b_e1, side, D("4"), plan_b.stop_loss)
+    pending_b_e2 = AccountOrder(
+        symbol="BTCUSDT",
+        side=side,
+        order_type="Limit",
+        status="New",
+        quantity=plan_b.entry_orders[1].quantity,
+        remaining_quantity=plan_b.entry_orders[1].quantity,
+        price=None,
+        avg_price=None,
+        order_id="b-e2",
+        order_link_id=link_b_e2,
+        reduce_only=False,
+        updated_at=datetime.now(UTC),
+    )
+    pos = AccountPosition(
+        symbol="BTCUSDT",
+        side=side,
+        size=D("5.5"),
+        avg_price=D("95"),
+        mark_price=D("100"),
+        unrealised_pnl=D("0"),
+        status="Open",
+        take_profit=None,
+        stop_loss=None,
+    )
+    account = AccountStateSummary(
+        as_of=datetime.now(UTC),
+        positions=(pos,),
+        open_orders=(sl_a, sl_b, pending_b_e2),
+    )
+    expected_pending_b = plan_b.entry_orders[1].quantity * abs(
+        plan_b.entry_orders[1].reference_price - plan_b.stop_loss
+    )
+    risk = zone_group_open_stop_risk_usdt(
+        (plan_a, plan_b),
+        orders,
+        executions,
+        account,
+        protected_stops={plan_a.intent_id: locked_stop_a},
+    )
+    # Zone A's stop is locked in profit past its entry average, so its open stop
+    # risk is 0 (never negative) and does not offset Zone B's risk.
+    assert risk == expected_filled_b + expected_pending_b
+
+    # Fail-closed error checks
+    with pytest.raises(
+        PortfolioRiskUnavailable, match="covered by verified child stop"
+    ):
+        zone_group_open_stop_risk_usdt(
+            (plan_a, plan_b),
+            orders,
+            executions,
+            AccountStateSummary(
+                as_of=datetime.now(UTC),
+                positions=(pos,),
+                open_orders=(sl_b, pending_b_e2),
+            ),
+            protected_stops={plan_a.intent_id: locked_stop_a},
+        )
+    with pytest.raises(PortfolioRiskUnavailable, match="position quantity mismatch"):
+        zone_group_open_stop_risk_usdt(
+            (plan_a, plan_b),
+            orders,
+            executions,
+            AccountStateSummary(
+                as_of=datetime.now(UTC),
+                positions=(replace(pos, size=D("5")),),
+                open_orders=(sl_a, sl_b, pending_b_e2),
+            ),
+            protected_stops={plan_a.intent_id: locked_stop_a},
+        )
+    with pytest.raises(PortfolioRiskUnavailable, match="Unscoped whole-position"):
+        zone_group_open_stop_risk_usdt(
+            (plan_a, plan_b),
+            orders,
+            executions,
+            AccountStateSummary(
+                as_of=datetime.now(UTC),
+                positions=(replace(pos, stop_loss=plan_a.stop_loss),),
+                open_orders=(sl_a, sl_b, pending_b_e2),
+            ),
+            protected_stops={plan_a.intent_id: locked_stop_a},
+        )
+    with pytest.raises(PortfolioRiskUnavailable, match="Unattributed open order"):
+        zone_group_open_stop_risk_usdt(
+            (plan_a, plan_b),
+            orders,
+            executions,
+            AccountStateSummary(
+                as_of=datetime.now(UTC),
+                positions=(pos,),
+                open_orders=(
+                    sl_a,
+                    sl_b,
+                    pending_b_e2,
+                    _open_order("rogue", "rogue-link", side, D("1")),
+                ),
+            ),
+            protected_stops={plan_a.intent_id: locked_stop_a},
+        )
+
+
+def test_zone_group_open_stop_risk_rejects_corrupt_ledger_or_order_states() -> None:
+    _, plan_a = _make_plan(Side.LONG, "98", "100", "90")
+    _, plan_short = _make_plan(Side.SHORT, "100", "102", "110")
+    empty_account = AccountStateSummary(datetime.now(UTC), (), ())
+
+    with pytest.raises(PortfolioRiskUnavailable, match="share symbol and side"):
+        zone_group_open_stop_risk_usdt((plan_a, plan_short), (), (), empty_account)
+
+    link_a = f"ccb-v2-{plan_a.intent_id.hex[:20]}-e1"
+    entry_a = ZoneOrder(
+        zone_id=plan_a.intent_id,
+        order_id="a-e1",
+        order_link_id=link_a,
+        role="ENTRY",
+        quantity=D("1"),
+    )
+    stop_a = ZoneOrder(
+        zone_id=plan_a.intent_id,
+        order_id="a-sl",
+        order_link_id="",
+        parent_order_link_id=link_a,
+        role="STOP",
+        quantity=D("1"),
+    )
+    orphan_exec = ZoneExecution(
+        execution_id="orphan",
+        order_id="missing",
+        side=Side.LONG,
+        quantity=D("1"),
+        closed_quantity=D("0"),
+        price=D("100"),
+        executed_at_ms=10,
+    )
+    with pytest.raises(PortfolioRiskUnavailable, match="no bound zone order"):
+        zone_group_open_stop_risk_usdt(
+            (plan_a,), (entry_a,), (orphan_exec,), empty_account
+        )
+
+    overfill = orphan_exec.model_copy(update={"order_id": "a-e1", "quantity": D("2")})
+    with pytest.raises(PortfolioRiskUnavailable, match="overfilled"):
+        zone_group_open_stop_risk_usdt(
+            (plan_a,), (entry_a,), (overfill,), empty_account
+        )
+
+    overclose = ZoneExecution(
+        execution_id="oc",
+        order_id="a-sl",
+        side=Side.SHORT,
+        quantity=D("1"),
+        closed_quantity=D("1"),
+        price=D("90"),
+        executed_at_ms=20,
+    )
+    with pytest.raises(PortfolioRiskUnavailable, match="overclosed"):
+        zone_group_open_stop_risk_usdt(
+            (plan_a,), (entry_a, stop_a), (overclose,), empty_account
+        )
+
+    unscoped_exit = ZoneOrder(
+        zone_id=plan_a.intent_id,
+        order_id="a-exit-unscoped",
+        order_link_id="custom-exit",
+        role="EXIT",
+        quantity=D("1"),
+    )
+    with pytest.raises(PortfolioRiskUnavailable, match="lacks a same-zone parent"):
+        zone_group_open_stop_risk_usdt(
+            (plan_a,),
+            (entry_a, unscoped_exit),
+            (overclose.model_copy(update={"order_id": "a-exit-unscoped"}),),
+            empty_account,
+        )
+
+    valid_fill = orphan_exec.model_copy(update={"order_id": "a-e1"})
+    bad_sl = replace(
+        _child_stop_order("a-sl", link_a, Side.LONG, D("1"), D("89")),
+    )
+    with pytest.raises(PortfolioRiskUnavailable, match="Invalid native child stop"):
+        zone_group_open_stop_risk_usdt(
+            (plan_a,),
+            (entry_a, stop_a),
+            (valid_fill,),
+            AccountStateSummary(datetime.now(UTC), (), (bad_sl,)),
+        )
+
+    # Flat group with a bad pending entry order binding or missing price
+    bad_open_entry = _open_order("a-e1", "wrong-link", Side.LONG, D("1"))
+    with pytest.raises(PortfolioRiskUnavailable, match="conflicts with zone binding"):
+        zone_group_open_stop_risk_usdt(
+            (plan_a,),
+            (entry_a,),
+            (),
+            AccountStateSummary(datetime.now(UTC), (), (bad_open_entry,)),
+        )
+    unknown_name_entry = ZoneOrder(
+        zone_id=plan_a.intent_id,
+        order_id="a-e9",
+        order_link_id=f"ccb-v2-{plan_a.intent_id.hex[:20]}-e9",
+        role="ENTRY",
+        quantity=D("1"),
+    )
+    priceless_open = replace(
+        _open_order("a-e9", unknown_name_entry.order_link_id, Side.LONG, D("1")),
+        price=None,
+    )
+    with pytest.raises(PortfolioRiskUnavailable, match="no measurable price"):
+        zone_group_open_stop_risk_usdt(
+            (plan_a,),
+            (unknown_name_entry,),
+            (),
+            AccountStateSummary(datetime.now(UTC), (), (priceless_open,)),
+        )
+    with pytest.raises(PortfolioRiskUnavailable, match="unknown zone plan"):
+        zone_group_open_stop_risk_usdt(
+            (plan_short.model_copy(update={"side": Side.LONG}),),
+            (entry_a,),
+            (),
+            AccountStateSummary(
+                datetime.now(UTC),
+                (),
+                (_open_order("a-e1", link_a, Side.LONG, D("1")),),
+            ),
+        )
+    with pytest.raises(PortfolioRiskUnavailable, match="side or count mismatch"):
+        zone_group_open_stop_risk_usdt(
+            (plan_a,),
+            (entry_a,),
+            (),
+            AccountStateSummary(
+                datetime.now(UTC),
+                (
+                    AccountPosition(
+                        symbol="BTCUSDT",
+                        side=Side.SHORT,
+                        size=D("1"),
+                        avg_price=D("100"),
+                        mark_price=D("100"),
+                        unrealised_pnl=D("0"),
+                        status="Open",
+                        take_profit=None,
+                        stop_loss=None,
+                    ),
+                ),
+                (),
+            ),
+        )

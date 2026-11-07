@@ -10,6 +10,24 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.95] - 2026-11-08
+
+### Added
+
+- Extend `zone_runner_protection.py` with `zone_group_open_stop_risk_usdt` to
+  bound combined filled and pending stop risk across a multi-zone group,
+  require verified `PartialStopLoss` child coverage for every parent fill,
+  floor profit-protected zone stop risk at zero so locked profits never
+  subsidize sibling risk, and fail closed with `PortfolioRiskUnavailable` on
+  any quantity or order mismatch (#419, #312, #123).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.94. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) and architecture
+  audit items (#262) remain open.
+
 ## [2.2.94] - 2026-11-08
 
 ### Added
