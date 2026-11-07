@@ -10,6 +10,22 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.98] - 2026-11-08
+
+### Changed
+
+- Extract Strategy V2 take-profit rule capping/derivation, initial
+  exit-capacity validation, entry/target geometry checks, and tick/step
+  rounding from `ExecutionPlanner` into
+  `src/cautious_crypto_bro/execution_geometry.py` (#425, #262).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.97. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) and architecture
+  audit items (#262) remain open.
+
 ## [2.2.97] - 2026-11-08
 
 ### Changed
