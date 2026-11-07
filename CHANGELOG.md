@@ -10,6 +10,22 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.94] - 2026-11-08
+
+### Added
+
+- Extend `zone_runner_protection.py` with `zone_pending_entry_orders` and
+  `cancel_zone_pending_entries` to recover lost entry acknowledgements, cancel
+  only open entry orders bound to the target zone, and confirm cancellation
+  across two snapshots while leaving sibling zone entries untouched (#417, #312).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.93. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) and architecture
+  audit items (#262) remain open.
+
 ## [2.2.93] - 2026-11-08
 
 ### Changed

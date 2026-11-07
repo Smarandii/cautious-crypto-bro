@@ -9,6 +9,8 @@ from uuid import uuid4
 import pytest
 
 from cautious_crypto_bro.domain import (
+    AccountOrder,
+    AccountStateSummary,
     Entry,
     EntryType,
     ExecutionPolicy,
@@ -16,12 +18,17 @@ from cautious_crypto_bro.domain import (
     Side,
     SourceMessage,
     StrategyV2Policy,
+    TradeExecutionError,
     TradingIntent,
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.zone_ledger import ZoneExecution, ZoneOrder, zone_group_id
-from cautious_crypto_bro.zone_runner_protection import derive_zone_runner_state
+from cautious_crypto_bro.zone_runner_protection import (
+    cancel_zone_pending_entries,
+    derive_zone_runner_state,
+    zone_pending_entry_orders,
+)
 
 D = Decimal
 CONTEXT = InstrumentContext(
@@ -332,3 +339,165 @@ def test_zone_runner_state_handles_unfilled_flat_and_invalid_states() -> None:
         derive_zone_runner_state(
             plan, (order,), (bad_fill,), mark_price=D("100"), context=CONTEXT
         )
+
+
+def _open_order(
+    order_id: str,
+    link_id: str,
+    side: Side,
+    quantity: Decimal,
+    *,
+    symbol: str = "BTCUSDT",
+    reduce_only: bool = False,
+) -> AccountOrder:
+    now = datetime.now(UTC)
+    return AccountOrder(
+        symbol=symbol,
+        side=side,
+        order_type="Limit",
+        status="New",
+        quantity=quantity,
+        remaining_quantity=quantity,
+        price=D("95"),
+        avg_price=None,
+        order_id=order_id,
+        order_link_id=link_id,
+        reduce_only=reduce_only,
+        updated_at=now,
+    )
+
+
+class _ZoneCancelGateway:
+    def __init__(
+        self,
+        open_orders: list[AccountOrder],
+        recovered_by_link: dict[str, AccountOrder] | None = None,
+        *,
+        ignore_cancel: bool = False,
+    ) -> None:
+        self.open_orders = list(open_orders)
+        self.recovered_by_link = dict(recovered_by_link or {})
+        self.ignore_cancel = ignore_cancel
+        self.cancelled_ids: list[str] = []
+
+    async def strategy_order(self, symbol: str, order_link_id: str):
+        assert symbol == "BTCUSDT"
+        return self.recovered_by_link.get(order_link_id)
+
+    async def account_state(self) -> AccountStateSummary:
+        return AccountStateSummary(
+            as_of=datetime.now(UTC),
+            positions=(),
+            open_orders=tuple(self.open_orders),
+        )
+
+    async def cancel_order(self, symbol: str, order_id: str) -> None:
+        assert symbol == "BTCUSDT"
+        self.cancelled_ids.append(order_id)
+        if not self.ignore_cancel:
+            self.open_orders = [o for o in self.open_orders if o.order_id != order_id]
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_cancel_zone_pending_entries_preserves_sibling_and_recovers_lost_ack(
+    tmp_path, side: Side
+) -> None:
+    async def run() -> None:
+        store = IntentStore(tmp_path / "zone-cancel.db")
+        await store.initialize()
+        if side is Side.LONG:
+            intent_a, plan_a = _make_plan(side, "98", "100", "90")
+            intent_b, plan_b = _make_plan(side, "92", "94", "84")
+        else:
+            intent_a, plan_a = _make_plan(side, "100", "102", "110")
+            intent_b, plan_b = _make_plan(side, "106", "108", "116")
+
+        claim = await store.claim_source(intent_a.source, lease_seconds=300)
+        assert claim is not None
+        assert await store.create_signal_batch_and_complete_source(
+            ((intent_a, plan_a), (intent_b, plan_b)), (), claim
+        )
+        group = zone_group_id("BTCUSDT", side)
+        await store.register_zone(group, plan_a.intent_id)
+        await store.register_zone(group, plan_b.intent_id)
+
+        prefix_a = f"ccb-v2-{plan_a.intent_id.hex[:20]}-"
+        prefix_b = f"ccb-v2-{plan_b.intent_id.hex[:20]}-"
+        link_a_e2 = prefix_a + "e2"
+        link_a_e3 = prefix_a + "e3"
+        link_b_e1 = prefix_b + "e1"
+
+        # Bind E2 for zone A and E1 for sibling zone B; leave zone A's E3 unbound
+        # to simulate a lost submission acknowledgement that must be recovered first.
+        await store.bind_zone_order(
+            ZoneOrder(
+                zone_id=plan_a.intent_id,
+                order_id="ord-a-e2",
+                order_link_id=link_a_e2,
+                role="ENTRY",
+                quantity=plan_a.entry_orders[1].quantity,
+            )
+        )
+        await store.bind_zone_order(
+            ZoneOrder(
+                zone_id=plan_b.intent_id,
+                order_id="ord-b-e1",
+                order_link_id=link_b_e1,
+                role="ENTRY",
+                quantity=plan_b.entry_orders[0].quantity,
+            )
+        )
+
+        open_a_e2 = _open_order(
+            "ord-a-e2", link_a_e2, side, plan_a.entry_orders[1].quantity
+        )
+        open_a_e3 = _open_order(
+            "ord-a-e3", link_a_e3, side, plan_a.entry_orders[2].quantity
+        )
+        open_b_e1 = _open_order(
+            "ord-b-e1", link_b_e1, side, plan_b.entry_orders[0].quantity
+        )
+        other_sym = _open_order("ord-eth", "eth-link", side, D("1"), symbol="ETHUSDT")
+        gateway = _ZoneCancelGateway(
+            [open_a_e2, open_a_e3, open_b_e1, other_sym],
+            recovered_by_link={link_a_e3: open_a_e3},
+        )
+
+        account, cancelled = await cancel_zone_pending_entries(
+            plan_a,
+            store,
+            gateway,  # type: ignore[arg-type]
+        )
+        assert cancelled == ("ord-a-e2", "ord-a-e3")
+        assert [o.order_id for o in account.open_orders] == ["ord-b-e1", "ord-eth"]
+
+        # Unconfirmed cancellation fails closed.
+        stuck_gateway = _ZoneCancelGateway([open_a_e2, open_b_e1], ignore_cancel=True)
+        with pytest.raises(TradeExecutionError, match="not confirmed"):
+            await cancel_zone_pending_entries(
+                plan_a,
+                store,
+                stuck_gateway,  # type: ignore[arg-type]
+            )
+
+        # Unbound prefix order or mismatched binding fails closed.
+        orders = await store.zone_bound_orders(group)
+        unbound_e1 = _open_order(
+            "ord-a-e1-unbound",
+            prefix_a + "e1",
+            side,
+            plan_a.entry_orders[0].quantity,
+        )
+        with pytest.raises(TradeExecutionError, match="Unbound or mismatched"):
+            zone_pending_entry_orders(plan_a, orders, (unbound_e1,))
+
+        mismatched = _open_order(
+            "ord-a-e2",
+            "wrong-link",
+            side,
+            plan_a.entry_orders[1].quantity,
+        )
+        with pytest.raises(TradeExecutionError, match="conflicts with zone binding"):
+            zone_pending_entry_orders(plan_a, orders, (mismatched,))
+
+    asyncio.run(run())
