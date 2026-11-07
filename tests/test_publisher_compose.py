@@ -61,3 +61,4 @@ def test_publisher_compose_has_read_only_inputs_without_host_control(tmp_path):
         if key.startswith("DEMO_")
     )
     assert publisher["healthcheck"]["test"][-1] == "--health"
+    assert publisher["depends_on"]["app"]["condition"] == "service_healthy"

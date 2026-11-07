@@ -10,6 +10,22 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.93] - 2026-11-08
+
+### Changed
+
+- Pin `.github/workflows/release.yml` wheel verification to Python 3.12 via
+  `uv venv --python 3.12`, add `.github/workflows/deploy.yml` for automated
+  SSH VPS cutover after `master` CI passes, and gate Compose `publisher`
+  startup on `app` `service_healthy` (#415).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.92. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) and architecture
+  audit items (#262) remain open.
+
 ## [2.2.92] - 2026-11-07
 
 ### Added

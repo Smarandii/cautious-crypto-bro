@@ -1,0 +1,54 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit SHA on master to deploy"
+        required: false
+        default: "origin/master"
+
+concurrency:
+  group: deploy-vps-master
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: VPS / cutover
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Deploy verified master revision over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.VPS_SSH_HOST }}
+          DEPLOY_USER: ${{ secrets.VPS_SSH_USER }}
+          DEPLOY_IDENTITY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          DEPLOY_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref || github.sha) || github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          ssh_dir="$RUNNER_TEMP/vps-ssh"
+          mkdir -p "$ssh_dir"
+          printf '%s\n' "$DEPLOY_HOSTS" > "$ssh_dir/hosts"
+          eval "$(ssh-agent -s)" > /dev/null
+          trap 'ssh-agent -k > /dev/null' EXIT
+          printf '%s\n' "$DEPLOY_IDENTITY" | ssh-add - 2>/dev/null
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$ssh_dir/hosts" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "$TARGET_SHA"
