@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections import Counter
 from collections.abc import Sequence
@@ -45,6 +44,11 @@ from ..momentum import classify as classify_momentum
 from ..portfolio_risk import (
     open_stop_risk_usdt,
     policy_with_remaining_portfolio_risk,
+)
+from .policy_assignment import (
+    assign_participation_arm,
+    freeze_capital_policy,
+    policy_for_intent_side,
 )
 
 logger = logging.getLogger(__name__)
@@ -387,87 +391,148 @@ class SignalPlanning:
         batch_reserved_risk = Decimal("0")
 
         for extracted_intent in signals.open_intents:
-            intent = self._routed_intent(
+            batch_reserved_risk = await self._plan_batch_candidate(
                 extracted_intent,
-                position_context,
-                account_state,
-                open_counts,
+                original_intents=original_intents,
+                position_context=position_context,
+                account_state=account_state,
+                open_counts=open_counts,
+                retry_counts=retry_counts,
                 original_manual=original_manual,
+                policy=policy,
+                existing_portfolio_risk=existing_portfolio_risk,
+                batch_reserved_risk=batch_reserved_risk,
+                resolved_contexts=resolved_contexts,
+                planned=planned,
+                planning_errors=planning_errors,
+                planning_rejections=planning_rejections,
+                retry_candidates=retry_candidates,
             )
-            retry_intent = original_intents[intent.intent_id].model_copy(
-                update={"approval_mode": intent.approval_mode}
-            )
-
-            momentum_stratum = await self._gate_momentum_stratum(intent)
-
-            intent_policy = self._policy_for_intent_side(
-                policy,
-                intent.side,
-                intent.intent_id,
-                participation_eligible=(intent.approval_mode is ApprovalMode.AUTO),
-                momentum_stratum=momentum_stratum,
-            )
-
-            if self._demo_portfolio_stop_risk_cap_usdt is not None:
-                remaining_portfolio_risk = (
-                    self._demo_portfolio_stop_risk_cap_usdt
-                    - existing_portfolio_risk
-                    - batch_reserved_risk
-                )
-                if remaining_portfolio_risk <= 0:
-                    planning_rejections.append(
-                        f"{intent.symbol}: portfolio stop-risk cap is full"
-                    )
-                    logger.info(
-                        "Skipping %s because portfolio stop-risk cap is full",
-                        intent.symbol,
-                    )
-                    continue
-                try:
-                    intent_policy = policy_with_remaining_portfolio_risk(
-                        intent_policy,
-                        remaining_portfolio_risk,
-                    )
-                except ValueError as exc:
-                    planning_errors.append(
-                        f"{intent.symbol}: portfolio stop-risk cap: {exc}"
-                    )
-                    self._remember_retry_candidates(
-                        (retry_intent,),
-                        retry_counts,
-                        retry_candidates,
-                    )
-                    continue
-
-            previous_error_count = len(planning_errors)
-            plan = await self._plan_single_intent(
-                intent,
-                intent_policy,
-                planning_errors,
-                planning_rejections,
-                market_context=resolved_contexts.get(intent.intent_id),
-            )
-            self._remember_retry_candidates(
-                (retry_intent,) if len(planning_errors) > previous_error_count else (),
-                retry_counts,
-                retry_candidates,
-            )
-
-            if plan is not None:
-                if intent_policy.strategy_v2.long_participation_arm == "skip":
-                    intent = intent.model_copy(
-                        update={
-                            "approval_mode": ApprovalMode.SKIPPED,
-                            "status": IntentStatus.SKIPPED,
-                        }
-                    )
-                else:
-                    batch_reserved_risk += plan.planned_max_loss_usdt
-                planned.append((intent, plan))
 
         return OpenPlanningResult(
             planned, planning_errors, planning_rejections, retry_candidates or []
         )
+
+    def _admit_intent_portfolio_risk(
+        self,
+        intent: TradingIntent,
+        retry_intent: TradingIntent,
+        intent_policy: ExecutionPolicy,
+        *,
+        existing_portfolio_risk: Decimal,
+        batch_reserved_risk: Decimal,
+        retry_counts: Counter[tuple[str, Side]],
+        planning_errors: list[str],
+        planning_rejections: list[str],
+        retry_candidates: list[PlanningCandidate] | None,
+    ) -> ExecutionPolicy | None:
+        if self._demo_portfolio_stop_risk_cap_usdt is None:
+            return intent_policy
+        remaining_portfolio_risk = (
+            self._demo_portfolio_stop_risk_cap_usdt
+            - existing_portfolio_risk
+            - batch_reserved_risk
+        )
+        if remaining_portfolio_risk <= 0:
+            planning_rejections.append(
+                f"{intent.symbol}: portfolio stop-risk cap is full"
+            )
+            logger.info(
+                "Skipping %s because portfolio stop-risk cap is full",
+                intent.symbol,
+            )
+            return None
+        try:
+            return policy_with_remaining_portfolio_risk(
+                intent_policy,
+                remaining_portfolio_risk,
+            )
+        except ValueError as exc:
+            planning_errors.append(f"{intent.symbol}: portfolio stop-risk cap: {exc}")
+            self._remember_retry_candidates(
+                (retry_intent,),
+                retry_counts,
+                retry_candidates,
+            )
+            return None
+
+    async def _plan_batch_candidate(
+        self,
+        extracted_intent: TradingIntent,
+        *,
+        original_intents: dict[UUID, TradingIntent],
+        position_context: SignalPositionContext,
+        account_state: AccountStateSummary | None,
+        open_counts: Counter[tuple[str, Side]],
+        retry_counts: Counter[tuple[str, Side]],
+        original_manual: bool,
+        policy: ExecutionPolicy,
+        existing_portfolio_risk: Decimal,
+        batch_reserved_risk: Decimal,
+        resolved_contexts: dict[UUID, InstrumentContext],
+        planned: list[tuple[TradingIntent, ExecutionPlan]],
+        planning_errors: list[str],
+        planning_rejections: list[str],
+        retry_candidates: list[PlanningCandidate] | None,
+    ) -> Decimal:
+        intent = self._routed_intent(
+            extracted_intent,
+            position_context,
+            account_state,
+            open_counts,
+            original_manual=original_manual,
+        )
+        retry_intent = original_intents[intent.intent_id].model_copy(
+            update={"approval_mode": intent.approval_mode}
+        )
+        momentum_stratum = await self._gate_momentum_stratum(intent)
+        intent_policy = self._policy_for_intent_side(
+            policy,
+            intent.side,
+            intent.intent_id,
+            participation_eligible=(intent.approval_mode is ApprovalMode.AUTO),
+            momentum_stratum=momentum_stratum,
+        )
+        admitted_policy = self._admit_intent_portfolio_risk(
+            intent,
+            retry_intent,
+            intent_policy,
+            existing_portfolio_risk=existing_portfolio_risk,
+            batch_reserved_risk=batch_reserved_risk,
+            retry_counts=retry_counts,
+            planning_errors=planning_errors,
+            planning_rejections=planning_rejections,
+            retry_candidates=retry_candidates,
+        )
+        if admitted_policy is None:
+            return batch_reserved_risk
+
+        previous_error_count = len(planning_errors)
+        plan = await self._plan_single_intent(
+            intent,
+            admitted_policy,
+            planning_errors,
+            planning_rejections,
+            market_context=resolved_contexts.get(intent.intent_id),
+        )
+        self._remember_retry_candidates(
+            (retry_intent,) if len(planning_errors) > previous_error_count else (),
+            retry_counts,
+            retry_candidates,
+        )
+        if plan is None:
+            return batch_reserved_risk
+        if admitted_policy.strategy_v2.long_participation_arm == "skip":
+            intent = intent.model_copy(
+                update={
+                    "approval_mode": ApprovalMode.SKIPPED,
+                    "status": IntentStatus.SKIPPED,
+                }
+            )
+        else:
+            batch_reserved_risk += plan.planned_max_loss_usdt
+        planned.append((intent, plan))
+        return batch_reserved_risk
 
     async def _resolve_open_contracts(
         self,
@@ -616,67 +681,20 @@ class SignalPlanning:
         participation_eligible: bool = True,
         momentum_stratum: str | None = None,
     ) -> ExecutionPolicy:
-        strategy = policy.strategy_v2
-        updates = {}
-        if side is Side.LONG:
-            updates["risk_per_trade_pct"] = (
-                policy.risk_per_trade_pct * self._demo_long_risk_multiplier
-            )
-
-        if (
-            self._demo_long_exit_control_fraction > 0
-            and self._demo_exit_profile == "payoff_early_tight_trail_long_015"
-        ):
-            if side is Side.SHORT:
-                strategy = strategy.model_copy(
-                    update={"exit_profile": "payoff_early_tight_trail"}
-                )
-            else:
-                if intent_id is None:
-                    raise ValueError(
-                        "Randomized LONG exit assignment requires an intent ID"
-                    )
-                control_bucket = int.from_bytes(
-                    hashlib.sha256(intent_id.bytes).digest()[:8],
-                    "big",
-                )
-                control_threshold = int(
-                    self._demo_long_exit_control_fraction * (1 << 64)
-                )
-                is_control = control_bucket < control_threshold
-                strategy = strategy.model_copy(
-                    update={
-                        "exit_profile": (
-                            "payoff_early_tight_trail_long_ab_020_control"
-                            if is_control
-                            else "payoff_early_tight_trail_long_ab_015"
-                        ),
-                        "trailing_activation_r": (
-                            Decimal("0.20") if is_control else Decimal("0.15")
-                        ),
-                    }
-                )
-        elif (
-            side is Side.LONG
-            and self._demo_exit_profile == "payoff_early_tight_trail_long_015"
-        ):
-            strategy = strategy.model_copy(
-                update={"trailing_activation_r": Decimal("0.15")}
-            )
-        if (
-            side is Side.LONG
-            and participation_eligible
-            and (
-                self._demo_long_momentum_gate
-                or self._demo_long_participation_skip_fraction > 0
-            )
-        ):
-            strategy = self._assign_participation_arm(
-                strategy, side, intent_id, momentum_stratum
-            )
-        if strategy != policy.strategy_v2:
-            updates["strategy_v2"] = strategy
-        return policy.model_copy(update=updates) if updates else policy
+        return policy_for_intent_side(
+            policy,
+            side,
+            intent_id,
+            demo_long_risk_multiplier=self._demo_long_risk_multiplier,
+            demo_exit_profile=self._demo_exit_profile,
+            demo_long_exit_control_fraction=self._demo_long_exit_control_fraction,
+            demo_long_momentum_gate=self._demo_long_momentum_gate,
+            demo_long_participation_skip_fraction=(
+                self._demo_long_participation_skip_fraction
+            ),
+            participation_eligible=participation_eligible,
+            momentum_stratum=momentum_stratum,
+        )
 
     def _assign_participation_arm(
         self,
@@ -685,89 +703,26 @@ class SignalPlanning:
         intent_id: UUID | None,
         momentum_stratum: str | None,
     ):
-        """Assign the Demo LONG take/skip arm; the gate beats the coin flip."""
-        if intent_id is None:
-            raise ValueError(
-                "Randomized LONG participation assignment requires an intent ID"
-            )
-        participation_updates: dict[str, object] = {}
-        gated = self._demo_long_momentum_gate and momentum_stratum is not None
-        if gated:
-            participation_updates["long_participation_momentum"] = (
-                "positive" if momentum_stratum == "skip_positive" else "nonpositive"
-            )
-            participation_updates["long_participation_arm"] = (
-                "take" if momentum_stratum == "skip_positive" else "skip"
-            )
-            return strategy.model_copy(update=participation_updates)
-
-        if self._demo_long_momentum_gate:
-            participation_updates["long_participation_momentum"] = "unavailable"
-        participation_bucket = int.from_bytes(
-            hashlib.sha256(b"long-participation-v1:" + intent_id.bytes).digest()[:8],
-            "big",
+        return assign_participation_arm(
+            strategy,
+            side,
+            intent_id,
+            momentum_stratum,
+            demo_long_momentum_gate=self._demo_long_momentum_gate,
+            demo_long_participation_skip_fraction=(
+                self._demo_long_participation_skip_fraction
+            ),
         )
-        skip_threshold = int(self._demo_long_participation_skip_fraction * (1 << 64))
-        participation_updates["long_participation_arm"] = (
-            "skip" if participation_bucket < skip_threshold else "take"
-        )
-        return strategy.model_copy(update=participation_updates)
 
     async def _capital_frozen_policy(self) -> ExecutionPolicy:
         policy = await self._store.get_execution_policy()
         trading_capital_usdt = await self._executor.wallet_balance_usdt()
-        updates: dict[str, object] = {"trading_capital_usdt": trading_capital_usdt}
-        strategy = policy.strategy_v2
-        strategy_changed = False
-        if self._demo_exit_profile in {
-            "payoff_challenger",
-            "payoff_early_trail",
-            "payoff_early_tight_trail",
-            "payoff_early_tight_trail_long_015",
-        }:
-            trailing_activation_r = (
-                Decimal("0.2")
-                if self._demo_exit_profile
-                in {
-                    "payoff_early_trail",
-                    "payoff_early_tight_trail",
-                    "payoff_early_tight_trail_long_015",
-                }
-                else Decimal("0.4")
-            )
-            strategy = strategy.model_copy(
-                update={
-                    "exit_profile": self._demo_exit_profile,
-                    "first_take_profit_r": Decimal("1"),
-                    "second_take_profit_r": Decimal("2"),
-                    "third_take_profit_r": Decimal("4"),
-                    "first_take_profit_pct": Decimal("15"),
-                    "second_take_profit_pct": Decimal("20"),
-                    "third_take_profit_pct": Decimal("25"),
-                    "runner_pct": Decimal("40"),
-                    "trailing_activation_r": trailing_activation_r,
-                    "trailing_distance_r": (
-                        Decimal("0.05")
-                        if self._demo_exit_profile
-                        in {
-                            "payoff_early_tight_trail",
-                            "payoff_early_tight_trail_long_015",
-                        }
-                        else Decimal("0.1")
-                    ),
-                }
-            )
-            strategy_changed = True
-        if self._demo_entry_order_ttl_minutes:
-            strategy = strategy.model_copy(
-                update={
-                    "entry_order_ttl_minutes": self._demo_entry_order_ttl_minutes,
-                }
-            )
-            strategy_changed = True
-        if strategy_changed:
-            updates["strategy_v2"] = strategy
-        return policy.model_copy(update=updates)
+        return freeze_capital_policy(
+            policy,
+            trading_capital_usdt,
+            demo_exit_profile=self._demo_exit_profile,
+            demo_entry_order_ttl_minutes=self._demo_entry_order_ttl_minutes,
+        )
 
     def _routed_intent(
         self,
