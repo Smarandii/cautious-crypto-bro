@@ -76,6 +76,8 @@ async def has_uncertain_entry_strategy(
 def planning_rejection_kind(error: str) -> str:
     """Classify a terminal planning rejection without retaining source text."""
     text = error.lower()
+    if "deadline exceeded" in text or text == "expired":
+        return "candidate_deadline_exceeded"
     if (
         "too small to support any fixed partial exit" in text
         or "below bybit minimum quantity" in text
@@ -89,6 +91,36 @@ def planning_rejection_kind(error: str) -> str:
     if "bybit rejected request" in text or "symbol invalid" in text:
         return "exchange_rejected_request"
     return "other"
+
+
+async def _terminal_candidate_errors(
+    db: aiosqlite.Connection, channel_id: int, message_id: int
+) -> list[str]:
+    cursor = await db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='planning_candidates'"
+    )
+    if await cursor.fetchone() is None:
+        return []
+    cursor = await db.execute(
+        "SELECT COALESCE(last_error, status) FROM planning_candidates "
+        "WHERE channel_id=? AND message_id=? AND status IN ('EXPIRED', 'REJECTED') "
+        "ORDER BY intent_id",
+        (channel_id, message_id),
+    )
+    return [str(row[0]) for row in await cursor.fetchall()]
+
+
+def _planning_rejection_errors(
+    decision: dict | None, disposition: str, candidate_errors: list[str]
+) -> list[str]:
+    planning = (decision or {}).get("planning") or {}
+    errors = planning.get("rejections")
+    if "rejections" not in planning and disposition in {
+        "PLANNING_REJECTED",
+        "PARTIAL_PLANNING_FAILURE",
+    }:
+        errors = planning.get("errors")
+    return [*(str(item) for item in (errors or [])), *candidate_errors]
 
 
 def decision_disposition(
@@ -236,15 +268,13 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
             )
             missing += decision is None and (status != "COMPLETED" or not reason)
             dispositions[disposition] += 1
-            planning = (decision or {}).get("planning") or {}
-            errors = planning.get("rejections")
-            if "rejections" not in planning and disposition in {
-                "PLANNING_REJECTED",
-                "PARTIAL_PLANNING_FAILURE",
-            }:
-                errors = planning.get("errors")
-            for error in errors or []:
-                rejection_reasons[planning_rejection_kind(str(error))] += 1
+            candidate_errors = await _terminal_candidate_errors(
+                db, channel_id, message_id
+            )
+            for error in _planning_rejection_errors(
+                decision, disposition, candidate_errors
+            ):
+                rejection_reasons[planning_rejection_kind(error)] += 1
         return {
             "window_basis": "source processing updated_at (not publication time)",
             "sources": len(sources),

@@ -79,6 +79,9 @@ def test_source_completion_records_expired_candidate_without_claim(
             database, since=datetime.now(UTC) - timedelta(days=1)
         )
         assert report["dispositions"] == {expected: 1}
+        assert report["planning_rejection_reasons"] == {
+            "candidate_deadline_exceeded": 1
+        }
         spec = importlib.util.spec_from_file_location(
             "audit_recent_signals_test",
             Path(__file__).resolve().parents[1] / "scripts/audit_recent_signals.py",
