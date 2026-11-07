@@ -83,6 +83,14 @@ def test_testing_guide_codeql_query_suite_matches_workflow() -> None:
     )
 
 
+def test_release_workflow_verifies_wheel_with_python_312() -> None:
+    release = (REPO / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "uv venv --python 3.12 /tmp/verify" in release
+    assert "uv pip install --python /tmp/verify/bin/python dist/*.whl" in release
+
+
 @pytest.mark.parametrize(
     "needle",
     [
