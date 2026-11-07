@@ -10,6 +10,21 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.89] - 2026-11-07
+
+### Changed
+
+- Move Bybit order/exposure queries (`strategy_order`, `symbol_exposure`) into
+  `bybit/account_reads.py` and public market-data/risk-tier reads into
+  `bybit/market_reads.py`, keeping `BybitDemoExecutor` sync methods as thin
+  delegates.
+
+### Delivery and rollback
+
+- Schema 17 and configuration remain compatible with v2.2.88. Roll back
+  both local services together using the retained images and state.
+  Independent zones and profitability verification remain open.
+
 ## [2.2.88] - 2026-11-07
 
 ### Changed

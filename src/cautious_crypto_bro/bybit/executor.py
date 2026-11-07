@@ -29,22 +29,19 @@ from ..domain import (
 )
 from ..execution import ExecutionPlanner
 from ..execution_history import HISTORY_WINDOW_MS, ExecutionHistoryPage
-from . import account_reads
+from . import account_reads, market_reads
 from .client import DEMO_BASE_URL, BybitClient
 from .entry_limits import allocate_entry_slices
 from .leverage import (
     RiskTier,
     flat_position_risk_tier,
     instrument_leverage_filter,
-    risk_tiers,
     tier_leverage,
 )
 from .normalize import (
     account_order_from_item,
     format_decimal,
     parse_decimal,
-    pending_entry_order_from_item,
-    position_exposure_from_item,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,29 +128,7 @@ class BybitDemoExecutor:
         symbol: str,
         limit: int,
     ) -> list[tuple[int, Decimal]]:
-        if not 1 <= limit <= 200:
-            raise TradeExecutionError("Minute-close limit must be between 1 and 200")
-        response = self._client.public_get(
-            "/v5/market/kline",
-            {
-                "category": "linear",
-                "symbol": symbol,
-                "interval": "1",
-                "limit": limit + 1,
-            },
-        )
-        rows = response.get("result", {}).get("list") or []
-        closes: list[tuple[int, Decimal]] = []
-        for row in rows:
-            try:
-                start = int(row[0])
-                close = parse_decimal(row[4])
-            except (IndexError, TypeError, ValueError, ArithmeticError):
-                continue
-            if start > 0 and close is not None and close > 0:
-                closes.append((start, close))
-        closes.sort()
-        return closes
+        return market_reads.one_minute_closes(self._client, symbol, limit)
 
     async def account_state(
         self,
@@ -399,53 +374,13 @@ class BybitDemoExecutor:
         return await _run_sync(self._strategy_order_sync, symbol, link_id)
 
     def _strategy_order_sync(self, symbol: str, link_id: str) -> AccountOrder | None:
-        for endpoint in ("/v5/order/realtime", "/v5/order/history"):
-            items = self._client.paginate_private_list(
-                endpoint,
-                {"category": "linear", "symbol": symbol, "orderLinkId": link_id},
-            )
-            for item in items:
-                if item.get("orderLinkId") == link_id and item.get("symbol") == symbol:
-                    return account_order_from_item(item)
-        return None
+        return account_reads.strategy_order(self._client, symbol, link_id)
 
     def _exposure_sync(
         self,
         symbol: str,
     ) -> SymbolExposure:
-        self._sync_clock()
-
-        position_items = self._client.paginate_private_list(
-            "/v5/position/list",
-            {"category": "linear", "symbol": symbol},
-        )
-        positions = [
-            exposure
-            for exposure in map(position_exposure_from_item, position_items)
-            if exposure is not None
-        ]
-
-        order_items = self._client.paginate_private_list(
-            "/v5/order/realtime",
-            {
-                "category": "linear",
-                "symbol": symbol,
-                "openOnly": 0,
-                "orderFilter": "Order",
-                "limit": 50,
-            },
-        )
-        pending_orders = [
-            order
-            for order in map(pending_entry_order_from_item, order_items)
-            if order is not None
-        ]
-
-        return SymbolExposure(
-            symbol=symbol,
-            positions=tuple(positions),
-            pending_entry_orders=tuple(pending_orders),
-        )
+        return account_reads.symbol_exposure(self._client, symbol)
 
     def _execute_position_action_sync(
         self,
@@ -596,23 +531,7 @@ class BybitDemoExecutor:
         self,
         symbol: str,
     ) -> dict:
-        response = self._client.public_get(
-            "/v5/market/instruments-info",
-            {
-                "category": "linear",
-                "symbol": symbol,
-            },
-        )
-
-        items = response.get("result", {}).get(
-            "list",
-            [],
-        )
-
-        if not items:
-            raise TradeExecutionError(f"No Bybit instrument found for {symbol}")
-
-        return items[0]
+        return market_reads.instrument_info(self._client, symbol)
 
     def _partial_reduce_quantity(
         self,
@@ -761,26 +680,9 @@ class BybitDemoExecutor:
         self,
         symbol: str,
     ) -> InstrumentContext:
-        instrument = self._instrument_info(symbol)
-        market_price = self._last_price(symbol)
-
-        lot = instrument["lotSizeFilter"]
-        price_filter = instrument["priceFilter"]
-
-        leverage_filter = instrument_leverage_filter(instrument)
-
-        return InstrumentContext(
-            leverage_filter=leverage_filter,
-            market_price=market_price,
-            tick_size=Decimal(price_filter["tickSize"]),
-            qty_step=Decimal(lot["qtyStep"]),
-            min_qty=Decimal(lot["minOrderQty"]),
-            min_notional=Decimal(
-                lot.get(
-                    "minNotionalValue",
-                    "0",
-                )
-            ),
+        return market_reads.build_market_context(
+            self._instrument_info(symbol),
+            self._last_price(symbol),
         )
 
     @staticmethod
@@ -983,30 +885,7 @@ class BybitDemoExecutor:
         return prepared
 
     def _risk_tiers_sync(self, symbol: str) -> tuple[RiskTier, ...]:
-        items: list[dict] = []
-        cursor = ""
-        seen_cursors: set[str] = set()
-        for _ in range(10):
-            params = {"category": "linear", "symbol": symbol}
-            if cursor:
-                params["cursor"] = cursor
-            response = self._client.public_get("/v5/market/risk-limit", params)
-            result = response.get("result")
-            if not isinstance(result, dict) or not isinstance(result.get("list"), list):
-                raise TradeExecutionError("Bybit risk-limit page is malformed")
-            items.extend(result["list"])
-            next_cursor = result.get("nextPageCursor", "")
-            if not isinstance(next_cursor, str):
-                raise TradeExecutionError("Bybit risk-limit cursor is malformed")
-            if not next_cursor:
-                break
-            if next_cursor in seen_cursors:
-                raise TradeExecutionError("Bybit risk-limit cursor repeated")
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
-        else:
-            raise TradeExecutionError("Bybit risk-limit pagination did not complete")
-        return risk_tiers(items, symbol)
+        return market_reads.risk_tiers_for_symbol(self._client, symbol)
 
     def _set_leverage_sync(self, plan: ExecutionPlan) -> None:
         prepared = self._prepare_entry_plan_sync(plan)
@@ -1382,44 +1261,13 @@ class BybitDemoExecutor:
             )
 
     def _mark_price(self, symbol: str) -> Decimal:
-        response = self._client.public_get(
-            "/v5/market/tickers", {"category": "linear", "symbol": symbol}
-        )
-        result = response.get("result")
-        items = result.get("list") if isinstance(result, dict) else None
-        if (
-            not isinstance(items, list)
-            or len(items) != 1
-            or not isinstance(items[0], dict)
-            or items[0].get("symbol") != symbol
-        ):
-            raise TradeExecutionError("Bybit ticker mark evidence is incomplete")
-        try:
-            mark = parse_decimal(items[0].get("markPrice"))
-        except (ArithmeticError, ValueError) as exc:
-            raise TradeExecutionError("Bybit ticker mark is invalid") from exc
-        if mark <= 0:
-            raise TradeExecutionError("Bybit ticker mark must be positive")
-        return mark
+        return market_reads.mark_price(self._client, symbol)
 
     def _last_price(
         self,
         symbol: str,
     ) -> Decimal:
-        response = self._client.public_get(
-            "/v5/market/tickers",
-            {
-                "category": "linear",
-                "symbol": symbol,
-            },
-        )
-
-        items = response.get("result", {}).get("list", [])
-
-        if not items:
-            raise TradeExecutionError(f"No Bybit ticker found for {symbol}")
-
-        return Decimal(items[0]["lastPrice"])
+        return market_reads.last_price(self._client, symbol)
 
     def _sync_clock(
         self,

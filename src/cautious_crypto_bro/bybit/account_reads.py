@@ -5,7 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from ..domain import AccountStateSummary, ClosedPnlRecord, TradeExecutionError
+from ..domain import (
+    AccountOrder,
+    AccountStateSummary,
+    ClosedPnlRecord,
+    SymbolExposure,
+    TradeExecutionError,
+)
 from ..execution_history import ExecutionHistoryPage
 from .client import BybitClient
 from .normalize import (
@@ -14,6 +20,8 @@ from .normalize import (
     closed_pnl_record_from_item,
     is_live_open_order,
     parse_decimal,
+    pending_entry_order_from_item,
+    position_exposure_from_item,
 )
 
 
@@ -141,3 +149,50 @@ def closed_pnl_history(
             records[record.record_id] = record
         window_start = window_end
     return tuple(sorted(records.values(), key=lambda item: item.updated_at))
+
+
+def strategy_order(
+    client: BybitClient, symbol: str, link_id: str
+) -> AccountOrder | None:
+    for endpoint in ("/v5/order/realtime", "/v5/order/history"):
+        items = client.paginate_private_list(
+            endpoint,
+            {"category": "linear", "symbol": symbol, "orderLinkId": link_id},
+        )
+        for item in items:
+            if item.get("orderLinkId") == link_id and item.get("symbol") == symbol:
+                return account_order_from_item(item)
+    return None
+
+
+def symbol_exposure(client: BybitClient, symbol: str) -> SymbolExposure:
+    client.sync_clock(force=False)
+    position_items = client.paginate_private_list(
+        "/v5/position/list",
+        {"category": "linear", "symbol": symbol},
+    )
+    positions = [
+        exposure
+        for exposure in map(position_exposure_from_item, position_items)
+        if exposure is not None
+    ]
+    order_items = client.paginate_private_list(
+        "/v5/order/realtime",
+        {
+            "category": "linear",
+            "symbol": symbol,
+            "openOnly": 0,
+            "orderFilter": "Order",
+            "limit": 50,
+        },
+    )
+    pending_orders = [
+        order
+        for order in map(pending_entry_order_from_item, order_items)
+        if order is not None
+    ]
+    return SymbolExposure(
+        symbol=symbol,
+        positions=tuple(positions),
+        pending_entry_orders=tuple(pending_orders),
+    )
