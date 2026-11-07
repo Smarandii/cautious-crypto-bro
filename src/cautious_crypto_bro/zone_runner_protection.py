@@ -5,16 +5,28 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from .domain import (
+    AccountOrder,
     AccountPosition,
+    AccountStateSummary,
     ExecutionPlan,
     InstrumentContext,
     Side,
+    TradeExecutionError,
 )
+from .entry_ownership import recover_entry_bindings
 from .position_management.trailing_stop_manager import TrailingStopManager
-from .zone_ledger import ZoneExecution, ZoneOrder
+from .zone_ledger import ZoneExecution, ZoneOrder, zone_group_id
+
+if TYPE_CHECKING:
+    from .ports import (
+        AccountGateway,
+        ExecutionCoordinatorStore,
+        PositionSupervisorStore,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,3 +164,67 @@ def derive_zone_runner_state(
         protected_stop_loss=protected_stop,
         trailing_distance=trailing_distance,
     )
+
+
+def _matches_zone_entry(
+    plan: ExecutionPlan,
+    order: AccountOrder,
+    by_order_id: dict[str, ZoneOrder],
+    bound_links: set[str],
+    prefix: str,
+) -> bool:
+    if order.symbol != plan.symbol or order.kind != "ENTRY":
+        return False
+    bound = by_order_id.get(order.order_id)
+    if bound is None:
+        if order.order_link_id in bound_links or order.order_link_id.startswith(prefix):
+            raise TradeExecutionError("Unbound or mismatched open entry order for zone")
+        return False
+    if order.order_link_id != bound.order_link_id or order.side is not plan.side:
+        raise TradeExecutionError("Open entry order conflicts with zone binding")
+    return True
+
+
+def zone_pending_entry_orders(
+    plan: ExecutionPlan,
+    orders: Sequence[ZoneOrder],
+    open_orders: Sequence[AccountOrder],
+) -> tuple[AccountOrder, ...]:
+    """Return open entry orders bound to one zone, rejecting unbound prefix matches."""
+    zone_entries = [
+        order
+        for order in orders
+        if order.zone_id == plan.intent_id and order.role == "ENTRY"
+    ]
+    by_order_id = {order.order_id: order for order in zone_entries}
+    bound_links = {order.order_link_id for order in zone_entries}
+    prefix = f"ccb-v2-{plan.intent_id.hex[:20]}-e"
+    return tuple(
+        order
+        for order in open_orders
+        if _matches_zone_entry(plan, order, by_order_id, bound_links, prefix)
+    )
+
+
+async def cancel_zone_pending_entries(
+    plan: ExecutionPlan,
+    store: ExecutionCoordinatorStore | PositionSupervisorStore,
+    executor: AccountGateway,
+) -> tuple[AccountStateSummary, tuple[str, ...]]:
+    """Cancel one zone's pending entries and confirm across two account snapshots."""
+    await recover_entry_bindings(plan, store, executor)
+    group = zone_group_id(plan.symbol, plan.side)
+    orders = await store.zone_bound_orders(group)
+    account = await executor.account_state()
+    pending = zone_pending_entry_orders(plan, orders, account.open_orders)
+    cancelled: list[str] = []
+    for order in pending:
+        await executor.cancel_order(plan.symbol, order.order_id)
+        cancelled.append(order.order_id)
+    for _ in range(2):
+        account = await executor.account_state()
+        if zone_pending_entry_orders(plan, orders, account.open_orders):
+            raise TradeExecutionError(
+                "Bybit zone entry cancellation is not confirmed; refusing to freeze zone"
+            )
+    return account, tuple(cancelled)
