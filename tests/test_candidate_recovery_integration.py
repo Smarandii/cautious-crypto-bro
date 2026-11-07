@@ -282,7 +282,10 @@ def test_partial_batch_recovers_after_restart_without_reextracting(tmp_path, rec
                     assert summary["dispositions"] == {"UNRESOLVED": 1}
                     assert database.read_bytes() == before
                     with sqlite3.connect(database) as db:
-                        db.execute("UPDATE planning_candidates SET status='REJECTED'")
+                        db.execute(
+                            "UPDATE planning_candidates SET status='REJECTED', "
+                            "last_error='BTCUSDT: portfolio stop-risk cap is full'"
+                        )
                         db.execute("UPDATE intents SET status='EXECUTED'")
                     summary = await coverage_summary(
                         database, since=datetime.now(UTC) - timedelta(days=1)
@@ -291,6 +294,9 @@ def test_partial_batch_recovers_after_restart_without_reextracting(tmp_path, rec
                         database, source.channel_id, source.message_id
                     )
                     assert summary["dispositions"] == {"PARTIAL_PLANNING_FAILURE": 1}
+                    assert summary["planning_rejection_reasons"] == {
+                        "portfolio_risk_cap": 1
+                    }
                     assert state["production_disposition"] == "PARTIAL_PLANNING_FAILURE"
                     assert state["planning_candidate_statuses"] == ["REJECTED"]
                 if recovery == "available":
