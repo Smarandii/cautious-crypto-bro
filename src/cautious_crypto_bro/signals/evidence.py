@@ -579,8 +579,12 @@ def _caption_is_market_update(text: str) -> bool:
         text,
     )
     new_entry = re.search(
-        r"\b(?:открываю|открываем|вхожу|входим|беру|берем|подобрал|"
-        r"перезахожу|перезаходим|open|opening|enter|entering|buy|sell|reenter|"
+        r"(?<!\bвчера\s)(?<!\bранее\s)(?<!\bраньше\s)(?<!\bуже\s)"
+        r"(?<!\byesterday\s)(?<!\bpreviously\s)(?<!\bearlier\s)(?<!\balready\s)"
+        r"\b(?:открываю|открываем|открыл(?:а|и)?|вхожу|входим|вош(?:ел|ёл|ла|ли)|"
+        r"захожу|заходим|заш(?:ел|ёл|ла|ли)|беру|берем|взял(?:а|и)?|"
+        r"подобрал(?:а|и)?|перезахожу|перезаходим|перезаш(?:ел|ёл|ла|ли)|"
+        r"open|opening|opened|enter|entering|entered|buy|sell|reenter|reentered|"
         r"(?:long|short|лонг|шорт)\s+(?:at\s+)?(?:market|маркетом))\b",
         text,
     )
