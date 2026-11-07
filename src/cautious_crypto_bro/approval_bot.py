@@ -34,13 +34,22 @@ from aiogram.utils.backoff import (
     BackoffConfig,
 )
 
+from .approval_notices import (
+    render_auto_action_outcome,
+    render_auto_intent_outcome,
+    render_entry_review,
+    render_expired_position_action,
+    render_manual_intent_outcome,
+    render_recovery_warning,
+    render_strategy_pause_alert,
+    render_unverified_position_action,
+)
 from .approval_presenter import (
     render,
     render_account_state,
     render_action_outcome,
     render_operator_attention,
     render_position_action,
-    source_line,
 )
 from .bybit import UNMATCHED_IP_REASON
 from .cancellation import finish_before_cancellation
@@ -52,7 +61,6 @@ from .domain import (
     EntryReview,
     ExecutionPlan,
     IntentExecutionOutcome,
-    IntentStatus,
     PositionActionExecutionOutcome,
     PositionActionIntent,
     PositionActionType,
@@ -75,10 +83,6 @@ BYBIT_IP_BINDING_HELP = (
     "to the Demo API key allowed IPs at "
     "https://www.bybit.com/en/app/user/api-management . "
     "Mobile IPs can change. Keep IP binding enabled; never send API keys or secrets here."
-)
-RECOVERED_OUTCOME_NOTICE = (
-    "<b>RECOVERED EXECUTION RECORD</b>\n"
-    "Stored outcome only; this is not a new trade or live confirmation.\n\n"
 )
 
 POLLING_BACKOFF = BackoffConfig(
@@ -437,14 +441,7 @@ class ApprovalBot:
         for state in await self._store.get_pending_strategy_alerts():
             assert state.pause_reason is not None
             try:
-                await self._send_html(
-                    "⚠️ <b>STRATEGY AUTOMATION PAUSED</b>\n"
-                    f"<b>{html.escape(state.symbol)}</b>\n"
-                    f"<code>{state.strategy_id}</code>\n"
-                    f"{html.escape(state.pause_reason)}\n\n"
-                    "Orders and protection were left untouched. "
-                    "Review the position and its exits on Bybit before resuming automation."
-                )
+                await self._send_html(render_strategy_pause_alert(state))
                 await self._store.mark_strategy_alert_delivered(
                     state.strategy_id, state.pause_reason
                 )
@@ -565,21 +562,9 @@ class ApprovalBot:
         )
 
     async def send_entry_review(self, review: EntryReview) -> None:
-        ownership = (
-            "Copied-position ownership could not be verified."
-            if review.ownership_unknown
-            else "No matching active copied/in-flight source position was found."
-        )
         await self._bot.send_message(
             chat_id=self._approval_chat_id,
-            text="<b>FILLED ENTRY — HUMAN REVIEW REQUIRED</b>\n"
-            f"<b>{html.escape(review.symbol)}</b> · direction unavailable\n"
-            "The source reports a filled entry; no new trade was authorized from "
-            "this incomplete declaration. Review the original source manually.\n"
-            f"{ownership}\n"
-            f"Published: {review.source.published_at.isoformat()}\n"
-            f"Trader: {html.escape(review.source.channel_title)}\n"
-            f"{source_line(review.source.telegram_url)}",
+            text=render_entry_review(review),
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
@@ -587,26 +572,10 @@ class ApprovalBot:
     async def send_unverified_position_action(
         self, action: PositionActionIntent
     ) -> None:
-        await self._send_html(
-            "<b>LIFECYCLE CONTRACT NEEDS REVIEW — HUMAN REVIEW REQUIRED</b>\n\n"
-            f"{html.escape(action.action.value)} {html.escape(action.symbol)}\n"
-            f"{html.escape(action.contract_review_reason or '')}\n"
-            "This instruction was recorded without execution. "
-            "No exchange action was sent.\n\n"
-            f"Trader: <b>{html.escape(action.source.channel_title)}</b>\n"
-            f"{source_line(action.source.telegram_url)}"
-        )
+        await self._send_html(render_unverified_position_action(action))
 
     async def send_expired_position_action(self, action: PositionActionIntent) -> None:
-        await self._send_html(
-            "<b>EXPIRED LIFECYCLE INSTRUCTION — RECORDED ONLY</b>\n\n"
-            f"{html.escape(action.action.value)} {html.escape(action.symbol)}\n"
-            f"Published: {html.escape(action.source.published_at.isoformat())}\n"
-            "The lifecycle approval deadline passed before delivery. "
-            "No exchange action was sent.\n\n"
-            f"Trader: <b>{html.escape(action.source.channel_title)}</b>\n"
-            f"{source_line(action.source.telegram_url)}"
-        )
+        await self._send_html(render_expired_position_action(action))
 
     async def send_position_action(
         self,
@@ -692,25 +661,9 @@ class ApprovalBot:
             )
             return
 
-        if outcome.status is IntentStatus.EXECUTED:
-            ids_text = "\n".join(
-                (f"<code>{html.escape(order_id)}</code>")
-                for order_id in outcome.order_ids
-            )
-
-            suffix = f"\n\n<b>EXECUTED ON BYBIT DEMO</b>\n{ids_text}"
-        else:
-            suffix = (
-                "\n\n"
-                f"<b>{html.escape(outcome.status.value)}</b>"
-                "\n<code>"
-                f"{html.escape(outcome.message)}"
-                "</code>"
-            )
-
         await self._edit_message(
             callback,
-            render(outcome.intent, outcome.plan) + suffix,
+            render_manual_intent_outcome(outcome.intent, outcome.plan, outcome),
         )
 
     async def _execute_position_action(
@@ -832,72 +785,29 @@ class ApprovalBot:
         self,
         outcome: IntentExecutionOutcome,
     ) -> None:
-        notice = RECOVERED_OUTCOME_NOTICE if outcome.recovered else ""
+        text = render_auto_intent_outcome(outcome)
         if outcome.intent is None or outcome.plan is None:
             await self._bot.send_message(
                 chat_id=self._approval_chat_id,
-                text=(
-                    f"{notice}<b>AUTO EXECUTION ERROR</b>\n"
-                    f"<code>"
-                    f"{html.escape(outcome.message)}"
-                    f"</code>"
-                ),
+                text=text,
                 parse_mode="HTML",
             )
             return
-
-        if outcome.status is IntentStatus.EXECUTED:
-            ids_text = "\n".join(
-                (f"<code>{html.escape(order_id)}</code>")
-                for order_id in outcome.order_ids
-            )
-
-            suffix = f"\n\n<b>AUTO-EXECUTED ON BYBIT DEMO</b>\n{ids_text}"
-        else:
-            suffix = (
-                "\n\n"
-                "<b>AUTO EXECUTION "
-                f"{html.escape(outcome.status.value)}"
-                "</b>\n<code>"
-                f"{html.escape(outcome.message)}"
-                "</code>"
-            )
-
-        await self._send_html(
-            notice
-            + render(
-                outcome.intent,
-                outcome.plan,
-            )
-            + suffix
-        )
+        await self._send_html(text)
 
     async def send_auto_action_outcome(
         self,
         outcome: PositionActionExecutionOutcome,
     ) -> None:
-        notice = RECOVERED_OUTCOME_NOTICE if outcome.recovered else ""
+        text = render_auto_action_outcome(outcome)
         if outcome.action is None:
             await self._bot.send_message(
                 chat_id=self._approval_chat_id,
-                text=(
-                    f"{notice}<b>AUTO EXECUTION ERROR</b>\n"
-                    f"<code>"
-                    f"{html.escape(outcome.message)}"
-                    f"</code>"
-                ),
+                text=text,
                 parse_mode="HTML",
             )
             return
-
-        await self._send_html(
-            notice
-            + render_position_action(outcome.action)
-            + render_action_outcome(
-                outcome,
-                auto=True,
-            )
-        )
+        await self._send_html(text)
 
     async def send_recovery_warning(
         self,
@@ -907,20 +817,11 @@ class ApprovalBot:
     ) -> None:
         if uncertain_intents == 0 and uncertain_actions == 0:
             return
-
         await self._bot.send_message(
             chat_id=self._approval_chat_id,
-            text=(
-                "⚠️ <b>INTERRUPTED EXECUTION "
-                "RECOVERY WARNING</b>\n\n"
-                "Previous process stopped while "
-                "execution was in progress. "
-                "These records were quarantined "
-                "instead of retried automatically."
-                "\nOPEN intents: "
-                f"<b>{uncertain_intents}</b>"
-                "\nPosition actions: "
-                f"<b>{uncertain_actions}</b>"
+            text=render_recovery_warning(
+                uncertain_intents=uncertain_intents,
+                uncertain_actions=uncertain_actions,
             ),
             parse_mode="HTML",
         )
