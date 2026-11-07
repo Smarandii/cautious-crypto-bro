@@ -9,6 +9,7 @@ from test_telegram_source import FakeMessage, FakeTelegramClient
 
 from cautious_crypto_bro import telegram_source
 from cautious_crypto_bro.domain import SourceMessage
+from cautious_crypto_bro.source_coverage import coverage_summary
 from cautious_crypto_bro.storage import IntentStore
 
 pytestmark = pytest.mark.integration
@@ -25,6 +26,28 @@ def post(message_id):
         received_at=now,
         text="Post",
     )
+
+
+def test_coverage_distinguishes_deferred_post_from_unknown(tmp_path):
+    async def run():
+        database = tmp_path / "state.db"
+        store = IntentStore(database)
+        await store.initialize()
+        deferred, unknown = post(1), post(2)
+        token = await store.claim_source(deferred, lease_seconds=300)
+        assert await store.mark_source_failed(deferred, token, "Temporary failure")
+        await store.defer_unavailable_source_messages(CHANNEL, (1,), lease_seconds=300)
+        token = await store.claim_source(unknown, lease_seconds=300)
+        assert await store.mark_source_completed(unknown, token)
+
+        result = await coverage_summary(
+            database, since=datetime.now(UTC) - timedelta(days=1)
+        )
+        assert result["dispositions"] == {"SOURCE_UNAVAILABLE": 1, "UNKNOWN": 1}
+        assert result["missing_original_decisions"] == 2
+        assert result["source_statuses"] == {"COMPLETED": 1, "UNAVAILABLE": 1}
+
+    asyncio.run(run())
 
 
 class RecordingClient(FakeTelegramClient):
