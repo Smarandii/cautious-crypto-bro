@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import (
     UTC,
@@ -73,12 +74,24 @@ class OpenApprovalSafety(Protocol):
     ) -> str | None: ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class OpenPlanningResult:
-    planned: list[tuple[TradingIntent, ExecutionPlan]]
-    errors: list[str]
-    rejections: list[str]
-    retry_candidates: list[PlanningCandidate]
+    planned: tuple[tuple[TradingIntent, ExecutionPlan], ...]
+    errors: tuple[str, ...]
+    rejections: tuple[str, ...]
+    retry_candidates: tuple[PlanningCandidate, ...]
+
+    def __init__(
+        self,
+        planned: Sequence[tuple[TradingIntent, ExecutionPlan]],
+        errors: Sequence[str],
+        rejections: Sequence[str],
+        retry_candidates: Sequence[PlanningCandidate],
+    ) -> None:
+        object.__setattr__(self, "planned", tuple(planned))
+        object.__setattr__(self, "errors", tuple(errors))
+        object.__setattr__(self, "rejections", tuple(rejections))
+        object.__setattr__(self, "retry_candidates", tuple(retry_candidates))
 
 
 class SignalPlanning:

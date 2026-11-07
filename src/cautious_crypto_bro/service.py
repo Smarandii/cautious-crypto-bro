@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import (
     UTC,
@@ -43,20 +44,40 @@ logger = logging.getLogger(__name__)
 ACCOUNT_PNL_SYNC_INTERVAL_SECONDS = 15 * 60
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _PlannedBatch:
-    planned: list[
+    planned: tuple[
         tuple[
             TradingIntent,
             ExecutionPlan,
-        ]
+        ],
+        ...,
     ]
     position_actions: tuple[PositionActionIntent, ...]
-    planning_errors: list[str]
-    planning_rejections: list[str]
-    retry_candidates: list[PlanningCandidate]
+    planning_errors: tuple[str, ...]
+    planning_rejections: tuple[str, ...]
+    retry_candidates: tuple[PlanningCandidate, ...]
     account_state: AccountStateSummary | None
     account_state_error: str | None
+
+    def __init__(
+        self,
+        *,
+        planned: Sequence[tuple[TradingIntent, ExecutionPlan]],
+        position_actions: Sequence[PositionActionIntent],
+        planning_errors: Sequence[str],
+        planning_rejections: Sequence[str],
+        retry_candidates: Sequence[PlanningCandidate],
+        account_state: AccountStateSummary | None,
+        account_state_error: str | None,
+    ) -> None:
+        object.__setattr__(self, "planned", tuple(planned))
+        object.__setattr__(self, "position_actions", tuple(position_actions))
+        object.__setattr__(self, "planning_errors", tuple(planning_errors))
+        object.__setattr__(self, "planning_rejections", tuple(planning_rejections))
+        object.__setattr__(self, "retry_candidates", tuple(retry_candidates))
+        object.__setattr__(self, "account_state", account_state)
+        object.__setattr__(self, "account_state_error", account_state_error)
 
 
 class SignalService:
@@ -365,9 +386,9 @@ class SignalService:
                     for action in position_actions
                     if action.contract_review_reason is not None
                 },
-                "errors": planning_errors + planning_rejections,
-                "retryable_errors": planning_errors,
-                "rejections": planning_rejections,
+                "errors": list(planning_errors + planning_rejections),
+                "retryable_errors": list(planning_errors),
+                "rejections": list(planning_rejections),
                 "contract_resolutions": [
                     {
                         "intent_id": str(intent.intent_id),
@@ -445,8 +466,8 @@ class SignalService:
         self,
         source: SourceMessage,
         claim_token: str,
-        planning_errors: list[str],
-        planning_rejections: list[str],
+        planning_errors: Sequence[str],
+        planning_rejections: Sequence[str],
     ) -> None:
         if planning_errors:
             await self._store.mark_source_failed(
@@ -475,14 +496,14 @@ class SignalService:
         self,
         source: SourceMessage,
         claim_token: str,
-        planned: list[
+        planned: Sequence[
             tuple[
                 TradingIntent,
                 ExecutionPlan,
             ]
         ],
         position_actions: tuple[PositionActionIntent, ...],
-        retry_candidates: list[PlanningCandidate],
+        retry_candidates: Sequence[PlanningCandidate],
     ) -> bool:
         try:
             finalized = await self._store.create_signal_batch_and_complete_source(

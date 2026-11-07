@@ -279,7 +279,7 @@ def test_participation_skip_is_persistable_and_does_not_reserve_cap() -> None:
     )
     planned, errors = planning.planned, planning.errors
 
-    assert errors == []
+    assert errors == ()
     assert len(planned) == 2
     skipped, skip_plan = planned[0]
     taken, take_plan = planned[1]

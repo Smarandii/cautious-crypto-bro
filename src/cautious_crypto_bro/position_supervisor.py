@@ -27,6 +27,7 @@ from .domain import (
 from .entry_ownership import recover_entry_bindings
 from .execution_history import HistoryQuery
 from .ports import AccountGateway, PositionSupervisorStore
+from .position_management._helpers import _find_position
 from .position_management.exit_installer import (
     ExitInstaller,
     ExitReplacementPositionChanged,
@@ -1221,24 +1222,7 @@ class PositionSupervisor:
 
         return None
 
-    @staticmethod
-    def _position(
-        state: PositionStrategy,
-        account: AccountStateSummary,
-    ) -> AccountPosition | None:
-        positions = tuple(
-            position
-            for position in account.positions
-            if position.symbol == state.symbol
-        )
-
-        if not positions:
-            return None
-
-        if len(positions) != 1:
-            raise RuntimeError(f"Expected one live position for {state.symbol}")
-
-        return positions[0]
+    _position = staticmethod(_find_position)
 
     @staticmethod
     def _pending_entries(
