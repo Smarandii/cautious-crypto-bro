@@ -5,7 +5,7 @@ import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
@@ -29,6 +29,11 @@ from .execution_history import (
 from .ports import AccountGateway, PositionSupervisorStore
 from .position_management._helpers import _find_position
 from .position_management.drift_detector import manual_override_reason
+from .position_management.entry_expiry import (
+    expire_stale_entries,
+    pending_entry_link_ids,
+    planned_entry_link_ids,
+)
 from .position_management.exit_installer import (
     ExitInstaller,
     ExitReplacementPositionChanged,
@@ -935,33 +940,8 @@ class PositionSupervisor:
         )
 
     _position = staticmethod(_find_position)
-
-    @staticmethod
-    def _pending_entries(
-        state: PositionStrategy,
-        account: AccountStateSummary,
-    ) -> tuple[str, ...]:
-        return tuple(
-            order.order_link_id
-            for order in account.open_orders
-            if (
-                order.symbol == state.symbol
-                and order.kind == "ENTRY"
-                and order.order_link_id.startswith(
-                    f"ccb-v2-{state.strategy_id.hex[:20]}-e"
-                )
-            )
-        )
-
-    @staticmethod
-    def _planned_entry_link_ids(
-        state: PositionStrategy,
-        plan: ExecutionPlan,
-    ) -> set[str]:
-        return {
-            f"ccb-v2-{state.strategy_id.hex[:20]}-{planned.name.lower()}"
-            for planned in plan.entry_orders
-        }
+    _pending_entries = staticmethod(pending_entry_link_ids)
+    _planned_entry_link_ids = staticmethod(planned_entry_link_ids)
 
     async def _handle_expired_entries(
         self,
@@ -1001,51 +981,14 @@ class PositionSupervisor:
         account: AccountStateSummary,
         position: AccountPosition | None,
     ) -> tuple[AccountStateSummary, bool]:
-        if state.status in {
-            StrategyStatus.CLOSING,
-            StrategyStatus.MANUAL_OVERRIDE,
-            StrategyStatus.UNCERTAIN,
-        }:
-            return account, False
-        ttl_minutes = plan.policy.strategy_v2.entry_order_ttl_minutes
-        if ttl_minutes == 0:
-            # Plans persisted before the entry-order TTL existed have no stored
-            # value and load as zero. Adopt the configured TTL so a legacy
-            # ladder cannot own a symbol forever. A configured value of zero
-            # still disables expiry.
-            ttl_minutes = self._legacy_entry_ttl_minutes
-        expires_at = plan.created_at + timedelta(minutes=ttl_minutes)
-        if ttl_minutes == 0 or datetime.now(UTC) < expires_at:
-            return account, False
-
-        expected_link_ids = self._planned_entry_link_ids(state, plan)
-        stale_entries = tuple(
-            order
-            for order in account.open_orders
-            if (
-                order.symbol == state.symbol
-                and not order.reduce_only
-                and order.order_link_id in expected_link_ids
-            )
+        return await expire_stale_entries(
+            state,
+            plan,
+            account,
+            position,
+            executor=self._executor,
+            legacy_entry_ttl_minutes=self._legacy_entry_ttl_minutes,
         )
-        if stale_entries:
-            logger.info(
-                "Expiring %d Strategy V2 entry leg(s) for %s after %d minutes",
-                len(stale_entries),
-                state.symbol,
-                ttl_minutes,
-            )
-            for order in stale_entries:
-                await self._executor.cancel_order(state.symbol, order.order_id)
-            account = await self._executor.account_state()
-        elif position is None:
-            logger.info(
-                "Closing expired unfilled Strategy V2 plan for %s after %d minutes",
-                state.symbol,
-                ttl_minutes,
-            )
-
-        return account, True
 
     @staticmethod
     def _live_r(
