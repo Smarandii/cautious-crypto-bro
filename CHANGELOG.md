@@ -10,6 +10,20 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.91] - 2026-11-07
+
+### Changed
+
+- Move pure position, owned-entry, partial-stop, and trailing-stop drift
+  inspection from `PositionSupervisor` into
+  `position_management/drift_detector.py`.
+
+### Delivery and rollback
+
+- Schema 17 and configuration remain compatible with v2.2.90. Roll back
+  both local services together using the retained images and state.
+  Independent zones and profitability verification remain open.
+
 ## [2.2.90] - 2026-11-07
 
 ### Changed
