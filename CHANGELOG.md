@@ -10,6 +10,22 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.97] - 2026-11-08
+
+### Changed
+
+- Extract Strategy V2 entry order parameter construction, staged/live market
+  plan validation, primary fill parsing, and batch acknowledgement validation
+  from `BybitDemoExecutor` into `src/cautious_crypto_bro/bybit/entry_orders.py`
+  (#423, #262).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.96. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) and architecture
+  audit items (#262) remain open.
+
 ## [2.2.96] - 2026-11-08
 
 ### Changed
