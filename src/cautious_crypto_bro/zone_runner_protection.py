@@ -1,0 +1,154 @@
+"""Derive per-zone runner activation, locked-profit stop, and trailing distance."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from decimal import Decimal
+from uuid import UUID
+
+from .domain import (
+    AccountPosition,
+    ExecutionPlan,
+    InstrumentContext,
+    Side,
+)
+from .position_management.trailing_stop_manager import TrailingStopManager
+from .zone_ledger import ZoneExecution, ZoneOrder
+
+
+@dataclass(frozen=True, slots=True)
+class ZoneRunnerState:
+    zone_id: UUID
+    entered_quantity: Decimal
+    closed_quantity: Decimal
+    remaining_quantity: Decimal
+    entry_average_price: Decimal | None
+    entry_break_even_price: Decimal | None
+    live_r: Decimal | None
+    trailing_active: bool
+    protected_stop_loss: Decimal | None
+    trailing_distance: Decimal | None
+
+
+def _zone_entry_economics(
+    side: Side,
+    stop_loss: Decimal,
+    entry_fills: Sequence[ZoneExecution],
+    entered_quantity: Decimal,
+) -> tuple[Decimal, Decimal]:
+    notional = sum((fill.quantity * fill.price for fill in entry_fills), Decimal("0"))
+    average = notional / entered_quantity
+    fees = max(Decimal("0"), sum((fill.fee for fill in entry_fills), Decimal("0")))
+    break_even = (
+        (notional + fees) / entered_quantity
+        if side is Side.LONG
+        else (notional - fees) / entered_quantity
+    )
+    valid_stop = stop_loss < average if side is Side.LONG else average < stop_loss
+    if not valid_stop or break_even <= 0:
+        raise ValueError("Zone entry average conflicts with frozen stop geometry")
+    return average, break_even
+
+
+def derive_zone_runner_state(
+    plan: ExecutionPlan,
+    orders: Sequence[ZoneOrder],
+    executions: Sequence[ZoneExecution],
+    *,
+    mark_price: Decimal,
+    context: InstrumentContext,
+    previous_protected_stop: Decimal | None = None,
+    already_trailing: bool = False,
+) -> ZoneRunnerState:
+    """Compute one zone's runner protection state without reading net-position averages."""
+    if mark_price <= 0:
+        raise ValueError("Zone runner evaluation requires a positive mark price")
+    owned = {
+        order.order_id: order for order in orders if order.zone_id == plan.intent_id
+    }
+    fills = [fill for fill in executions if fill.order_id in owned]
+    entry_fills = [fill for fill in fills if owned[fill.order_id].role == "ENTRY"]
+    close_fills = [fill for fill in fills if owned[fill.order_id].role != "ENTRY"]
+    entered = sum((fill.quantity for fill in entry_fills), Decimal("0"))
+    closed = sum((fill.quantity for fill in close_fills), Decimal("0"))
+    if closed > entered:
+        raise ValueError("Zone closed quantity exceeds entered quantity")
+    remaining = entered - closed
+    if entered == 0:
+        return ZoneRunnerState(
+            zone_id=plan.intent_id,
+            entered_quantity=Decimal("0"),
+            closed_quantity=Decimal("0"),
+            remaining_quantity=Decimal("0"),
+            entry_average_price=None,
+            entry_break_even_price=None,
+            live_r=None,
+            trailing_active=False,
+            protected_stop_loss=None,
+            trailing_distance=None,
+        )
+    average, break_even = _zone_entry_economics(
+        plan.side, plan.stop_loss, entry_fills, entered
+    )
+    if remaining == 0:
+        return ZoneRunnerState(
+            zone_id=plan.intent_id,
+            entered_quantity=entered,
+            closed_quantity=closed,
+            remaining_quantity=Decimal("0"),
+            entry_average_price=average,
+            entry_break_even_price=break_even,
+            live_r=None,
+            trailing_active=False,
+            protected_stop_loss=None,
+            trailing_distance=None,
+        )
+    risk_distance = abs(average - plan.stop_loss)
+    favorable = mark_price - average if plan.side is Side.LONG else average - mark_price
+    live_r = favorable / risk_distance
+    strategy = plan.policy.strategy_v2
+    trailing_active = already_trailing or (live_r >= strategy.trailing_activation_r)
+    if not trailing_active:
+        return ZoneRunnerState(
+            zone_id=plan.intent_id,
+            entered_quantity=entered,
+            closed_quantity=closed,
+            remaining_quantity=remaining,
+            entry_average_price=average,
+            entry_break_even_price=break_even,
+            live_r=live_r,
+            trailing_active=False,
+            protected_stop_loss=previous_protected_stop or plan.stop_loss,
+            trailing_distance=None,
+        )
+    zone_position = AccountPosition(
+        symbol=plan.symbol,
+        side=plan.side,
+        size=remaining,
+        avg_price=average,
+        mark_price=mark_price,
+        unrealised_pnl=remaining * favorable,
+        status="Open",
+        take_profit=None,
+        stop_loss=previous_protected_stop or plan.stop_loss,
+        break_even_price=break_even,
+    )
+    protected_stop = TrailingStopManager.protected_stop(
+        plan, zone_position, context, previous=previous_protected_stop
+    )
+    trailing_distance = TrailingStopManager.trailing_distance(
+        plan, zone_position, context
+    )
+    return ZoneRunnerState(
+        zone_id=plan.intent_id,
+        entered_quantity=entered,
+        closed_quantity=closed,
+        remaining_quantity=remaining,
+        entry_average_price=average,
+        entry_break_even_price=break_even,
+        live_r=live_r,
+        trailing_active=True,
+        protected_stop_loss=protected_stop,
+        trailing_distance=trailing_distance,
+    )
