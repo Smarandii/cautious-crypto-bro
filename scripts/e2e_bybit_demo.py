@@ -14,6 +14,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
@@ -49,6 +50,8 @@ D = Decimal
 SYMBOL = "DOGEUSDT"
 VERIFY_READ_ATTEMPTS = 3
 VERIFY_READ_DELAY_SECONDS = 1.0
+JOURNAL_REPLACE_ATTEMPTS = 5
+JOURNAL_REPLACE_DELAY_SECONDS = 0.02
 
 
 class ProbeOwnership:
@@ -82,9 +85,19 @@ class ProbeOwnership:
                     json.dump(data, stream, sort_keys=True)
                     stream.flush()
                     os.fsync(stream.fileno())
-                os.replace(temporary, self.journal_path)
+                self._replace_journal(temporary)
             finally:
                 temporary.unlink(missing_ok=True)
+
+    def _replace_journal(self, temporary: Path) -> None:
+        for attempt in range(1, JOURNAL_REPLACE_ATTEMPTS + 1):
+            try:
+                os.replace(temporary, self.journal_path)
+                return
+            except PermissionError:
+                if attempt >= JOURNAL_REPLACE_ATTEMPTS:
+                    raise
+                time.sleep(JOURNAL_REPLACE_DELAY_SECONDS * attempt)
 
     def submit(self, path, params):
         if path == "/v5/order/create" and params.get("symbol") == SYMBOL:
@@ -92,8 +105,14 @@ class ProbeOwnership:
             require(bool(link), "Probe submission requires an exact order link")
             # Retain the submitted identity even when its acknowledgment is lost.
             with self.journal_lock:
+                had_link = link in self.links
                 self.links.add(link)
-                self.save()
+                try:
+                    self.save()
+                except Exception:
+                    if not had_link:
+                        self.links.discard(link)
+                    raise
             response = self.original_post(path, params)
             order_id = response.get("result", {}).get("orderId")
             if order_id:

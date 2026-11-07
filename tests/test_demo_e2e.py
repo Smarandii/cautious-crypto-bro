@@ -437,6 +437,68 @@ def test_journal_write_failure_prevents_submission(tmp_path, monkeypatch):
                     "/v5/order/create", {"symbol": demo.SYMBOL, "orderLinkId": "owned"}
                 )
             post.assert_not_called()
+            assert owner.links == set()
+        finally:
+            owner.restore()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failures", [2, demo.JOURNAL_REPLACE_ATTEMPTS])
+def test_journal_replace_retries_transient_permission_error_and_fails_closed(
+    tmp_path, monkeypatch, failures
+):
+    async def run():
+        def post(*_):
+            return {"result": {"orderId": "ord-1"}}
+
+        exchange = SimpleNamespace(
+            account_state=AsyncMock(
+                return_value=SimpleNamespace(positions=[], open_orders=[])
+            ),
+            _client=SimpleNamespace(private_post=post),
+        )
+        journal = tmp_path / "owner.json"
+        owner = await demo.ProbeOwnership.start(exchange, journal_path=journal)
+        real_replace = demo.os.replace
+        sleeps = []
+        remaining = failures
+
+        def flaky_replace(src, dst):
+            nonlocal remaining
+            if remaining > 0:
+                remaining -= 1
+                raise PermissionError(5, "Access is denied", str(src), 5, str(dst))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(demo.os, "replace", flaky_replace)
+        monkeypatch.setattr(demo.time, "sleep", sleeps.append)
+        try:
+            if failures >= demo.JOURNAL_REPLACE_ATTEMPTS:
+                with pytest.raises(PermissionError, match="Access is denied"):
+                    owner.submit(
+                        "/v5/order/create",
+                        {"symbol": demo.SYMBOL, "orderLinkId": "owned"},
+                    )
+                assert owner.links == set()
+                assert (
+                    json.loads(journal.read_text(encoding="utf-8"))["submitted_links"]
+                    == []
+                )
+                assert list(tmp_path.glob("*.tmp")) == []
+                assert len(sleeps) == demo.JOURNAL_REPLACE_ATTEMPTS - 1
+                return
+            owner.submit(
+                "/v5/order/create", {"symbol": demo.SYMBOL, "orderLinkId": "owned"}
+            )
+            saved = json.loads(journal.read_text(encoding="utf-8"))
+            assert saved["submitted_links"] == ["owned"]
+            assert saved["order_ids"] == ["ord-1"]
+            assert list(tmp_path.glob("*.tmp")) == []
+            assert sleeps == [
+                demo.JOURNAL_REPLACE_DELAY_SECONDS * 1,
+                demo.JOURNAL_REPLACE_DELAY_SECONDS * 2,
+            ]
         finally:
             owner.restore()
 
