@@ -444,7 +444,7 @@ def _active_risk_per_trade_pct(
 def _side_metrics(
     positions: list[Mapping[str, object]], side: str
 ) -> dict[str, object]:
-    subset = [p for p in positions if p.get("side") == side]
+    subset = [{**p, "complete": True} for p in positions if p.get("side") == side]
     perf = summarize_reconciled_positions(subset)
     count = int(perf["position_count"])  # type: ignore[arg-type]
     prefix = side.lower()
@@ -513,8 +513,8 @@ def _channel_summary(
         "expectancy_usdt": perf["expectancy_usdt"],
         "expectancy_r": perf["expectancy_r"],
         "profit_factor": perf["profit_factor"],
-        **_side_metrics(positions, "LONG"),
-        **_side_metrics(positions, "SHORT"),
+        **_side_metrics(size_reconciled_positions, "LONG"),
+        **_side_metrics(size_reconciled_positions, "SHORT"),
         **_cohort_metrics(size_reconciled_positions, "size_reconciled"),
         **_cohort_metrics(current_risk_positions, "current_risk"),
     }

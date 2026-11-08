@@ -331,8 +331,8 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
     assert ch2["win_rate_pct"] == 50.0
     assert ch2["net_pnl_usdt"] == 30.0
     assert ch2["net_r"] == 0.6
-    assert ch2["long_trades"] == 1 and ch2["long_win_rate_pct"] == 100.0
-    assert ch2["long_net_pnl_usdt"] == 45.5 and ch2["long_net_r"] == 0.91
+    assert ch2["long_trades"] == 2 and ch2["long_win_rate_pct"] == 100.0
+    assert ch2["long_net_pnl_usdt"] == 65.5 and ch2["long_net_r"] == 1.31
     assert ch2["short_trades"] == 1 and ch2["short_win_rate_pct"] == 0.0
     assert ch2["short_net_pnl_usdt"] == -15.5 and ch2["short_net_r"] == -0.31
     assert ch2["size_reconciled_trades"] == 3

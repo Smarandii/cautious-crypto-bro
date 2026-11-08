@@ -10,6 +10,24 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.113] - 2026-11-08
+
+### Fixed
+
+- Compute per-channel `LONG` and `SHORT` directional metrics in
+  `src/cautious_crypto_bro/dashboard_metrics.py` from `size_reconciled_positions`
+  so `long_trades + short_trades == size_reconciled_trades` and pre-cache
+  shallow-fill winners (including `source_1`'s 9 SHORT winners and `source_4`'s
+  54 LONG trades) are included in directional breakdowns (#453, #248).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.112. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.112] - 2026-11-08
 
 ### Added
