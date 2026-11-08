@@ -5,6 +5,8 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import time
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -19,6 +21,12 @@ from .dashboard_balance import (
 from .demo_balance import fetch_daily_wallet_history
 
 BALANCE_CACHE_FILENAME = "demo-balance-v2.json"
+_TRANSIENT_LEDGER_LAG_ERRORS = frozenset(
+    {
+        "Demo wallet changed while reading its ledger",
+        "Demo ledger does not reconcile to its wallet anchor",
+    }
+)
 
 
 def retained_balance_history(
@@ -167,8 +175,31 @@ def _public_window(history: dict | None) -> dict | None:
     }
 
 
+def _fetch_reconciled_wallet_history(
+    client: BybitClient,
+    retry_delays: Sequence[float],
+    sleep: Callable[[float], None],
+) -> dict:
+    for index in range(len(retry_delays) + 1):
+        try:
+            return fetch_daily_wallet_history(client)
+        except ValueError as exc:
+            if str(exc) not in _TRANSIENT_LEDGER_LAG_ERRORS or index >= len(
+                retry_delays
+            ):
+                raise
+            sleep(retry_delays[index])
+    raise AssertionError("Unreachable")
+
+
 def collect_balance_feed(
-    client: BybitClient, path: Path, *, api_key: str, database_path: Path
+    client: BybitClient,
+    path: Path,
+    *,
+    api_key: str,
+    database_path: Path,
+    retry_delays: Sequence[float] = (2.0, 5.0),
+    sleep: Callable[[float], None] = time.sleep,
 ) -> dict:
     """Never refresh stale evidence's timestamp or truncate a day to fit dispatch.
 
@@ -185,7 +216,7 @@ def collect_balance_feed(
     ).hex()
     previous = _retained(path, scope)
     try:
-        current = fetch_daily_wallet_history(client)
+        current = _fetch_reconciled_wallet_history(client, retry_delays, sleep)
         history = _merge(previous, current)
         feed = {
             "schema_version": 1,
