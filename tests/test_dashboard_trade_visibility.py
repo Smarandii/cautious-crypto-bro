@@ -240,3 +240,92 @@ def test_both_public_boundaries_reject_malformed_symbols(symbol):
                 "trade_history": history,
             }
         )
+
+
+def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
+    positions = [
+        {
+            "complete": True,
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "source_channel_id": -100111,
+            "entry_qty": 1.0,
+            "net_pnl": 45.5,
+            "net_r": 0.91,
+            "gross_pnl": 47.0,
+            "fees": 1.5,
+            "funding": 0.0,
+            "risk_usdt": 50.0,
+            "closed_at": 2000,
+            "risk_per_trade_pct": 3.0,
+        },
+        {
+            "complete": True,
+            "symbol": "ETHUSDT",
+            "side": "SHORT",
+            "source_channel_id": -100111,
+            "entry_qty": 2.0,
+            "net_pnl": -15.5,
+            "net_r": -0.31,
+            "gross_pnl": -14.0,
+            "fees": 1.5,
+            "funding": 0.0,
+            "risk_usdt": 50.0,
+            "closed_at": 3000,
+            "risk_per_trade_pct": 3.0,
+        },
+    ]
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.executescript(
+            """
+            CREATE TABLE source_messages(channel_id INTEGER, message_id INTEGER, status TEXT);
+            CREATE TABLE intents(intent_id TEXT, status TEXT, payload_json TEXT);
+            CREATE TABLE position_actions(action_id TEXT, status TEXT, payload_json TEXT);
+            INSERT INTO source_messages VALUES (-100111, 1, 'COMPLETED'), (-100111, 2, 'COMPLETED'), (-100111, 3, 'COMPLETED'), (-100222, 10, 'COMPLETED');
+            INSERT INTO intents VALUES
+              ('i1', 'EXECUTED', '{"source":{"channel_id":-100111,"message_id":1,"channel_title":"SECRET_ALPHA"}}'),
+              ('i2', 'SKIPPED', '{"source":{"channel_id":-100111,"message_id":2,"channel_title":"SECRET_ALPHA"}}'),
+              ('i3', 'FAILED', '{"source":{"channel_id":-100222,"message_id":10,"channel_title":"SECRET_BETA"}}');
+            INSERT INTO position_actions VALUES
+              ('a1', 'EXECUTED', '{"source":{"channel_id":-100111,"message_id":1,"channel_title":"SECRET_ALPHA"}}');
+            """
+        )
+        from cautious_crypto_bro.dashboard_metrics import build_channel_analytics
+
+        analytics = build_channel_analytics(db, positions)
+
+    assert analytics is not None
+    assert analytics["available"] is True
+    serialized = json.dumps(analytics)
+    assert "-100111" not in serialized and "SECRET_ALPHA" not in serialized
+    rows_by_ch = {r["channel"]: r for r in analytics["rows"]}
+    # Ordered by channel_id ASC: -100222 is source_1, -100111 is source_2
+    ch2 = rows_by_ch["source_2"]
+    assert ch2["total_posts"] == 3
+    assert ch2["signal_posts"] == 2
+    assert ch2["signal_post_ratio_pct"] == 66.67
+    assert ch2["open_intents"] == 2
+    assert ch2["executed_intents"] == 1
+    assert ch2["pickup_rate_pct"] == 50.0
+    assert ch2["completed_trades"] == 2
+    assert ch2["winning_trades"] == 1 and ch2["losing_trades"] == 1
+    assert ch2["win_rate_pct"] == 50.0
+    assert ch2["net_pnl_usdt"] == 30.0
+    assert ch2["net_r"] == 0.6
+
+    history = public_trade_history(positions, available=True)
+    history["as_of"] = "2026-11-08T00:00:00+00:00"
+    feed = public_feed_from_snapshot(
+        {
+            "generated_at": "2026-11-08T00:00:00+00:00",
+            "risk": {},
+            "trade_history": history,
+            "channel_analytics": analytics,
+        }
+    )
+    assert validate_public_feed(feed)["channel_analytics"] == analytics
+
+    bad = json.loads(json.dumps(feed))
+    bad["channel_analytics"]["rows"][0]["channel"] = "-100111"
+    with pytest.raises(ValueError, match="channel identifier"):
+        validate_public_feed(bad)

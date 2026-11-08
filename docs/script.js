@@ -170,6 +170,80 @@ function renderTradeHistory(data, refreshFailed = false) {
     "p",
     "Historical rows retain their frozen risk policy. Partial exits count as one whole trade only after complete reconciliation. PnL includes reconciled fees and funding.",
   );
+  const channelAnalytics = data?.channel_analytics;
+  if (channelAnalytics?.available && Array.isArray(channelAnalytics.rows)) {
+    const channelSection = add("section", "", section);
+    channelSection.setAttribute("aria-label", "Channel signal and profitability meta-analysis");
+    add("h3", "Channel signal & profitability meta-analysis", channelSection);
+    add(
+      "p",
+      "Privacy-safe source cohorts ordered by completed trades. Shows total posts ingested, post-to-signal ratio, OPEN signals picked up vs skipped/rejected, reconciled whole-trade win rate, net PnL, and expectancy per channel.",
+      channelSection,
+    );
+    const scroll = add("div", "", channelSection);
+    scroll.className = "trade-table-scroll";
+    scroll.tabIndex = 0;
+    scroll.setAttribute("role", "region");
+    scroll.setAttribute(
+      "aria-label",
+      "Channel signal pickup and profitability table",
+    );
+    const table = add("table", "", scroll);
+    add(
+      "caption",
+      "Per-channel signal funnel and reconciled strategy performance",
+      table,
+    );
+    const headRow = add("tr", "", add("thead", "", table));
+    for (const col of [
+      "Channel",
+      "Posts",
+      "Signal posts (%)",
+      "Signals picked up (exec / open)",
+      "Skipped / Failed",
+      "Actions (exec / total)",
+      "Completed trades (W / L)",
+      "Win rate",
+      "Net PnL · USDT",
+      "Net R",
+      "Expectancy · R",
+      "Profit factor",
+    ]) {
+      add("th", col, headRow).scope = "col";
+    }
+    const tbody = add("tbody", "", table);
+    const signed = (value, digits = 2) =>
+      Number.isFinite(value)
+        ? `${value > 0 ? "+" : ""}${number(value, digits)}`
+        : "—";
+    const pct = (value) =>
+      Number.isFinite(value) ? `${number(value, 2)}%` : "—";
+    const allRows = channelAnalytics.totals
+      ? [
+          ...channelAnalytics.rows,
+          { channel: "All sources", ...channelAnalytics.totals },
+        ]
+      : channelAnalytics.rows;
+    for (const ch of allRows) {
+      const tr = add("tr", "", tbody);
+      for (const cell of [
+        ch.channel,
+        `${ch.total_posts ?? 0}`,
+        `${ch.signal_posts ?? 0} (${pct(ch.signal_post_ratio_pct)})`,
+        `${ch.executed_intents ?? 0} / ${ch.open_intents ?? 0} (${pct(ch.pickup_rate_pct)})`,
+        `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0}`,
+        `${ch.executed_actions ?? 0} / ${ch.lifecycle_actions ?? 0}`,
+        `${ch.completed_trades ?? 0} (${ch.winning_trades ?? 0}W / ${ch.losing_trades ?? 0}L)`,
+        pct(ch.win_rate_pct),
+        signed(ch.net_pnl_usdt, 2),
+        signed(ch.net_r, 3),
+        signed(ch.expectancy_r, 3),
+        Number.isFinite(ch.profit_factor) ? `${number(ch.profit_factor, 2)}×` : "—",
+      ]) {
+        add("td", cell, tr);
+      }
+    }
+  }
   if (!history?.available) {
     add("p", "Trade evidence unavailable. No outcomes inferred.");
     return;
