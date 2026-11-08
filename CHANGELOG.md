@@ -10,6 +10,24 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.118] - 2026-11-08
+
+### Fixed
+
+- Refresh `account_state` in `PositionSupervisor._confirm_exit_drift_or_close`
+  before transitioning to `MANUAL_OVERRIDE` on `FillDetector.drift_reason` so
+  a multi-chunk exchange stop or trailing-stop close that temporarily clamps
+  reduce-only TP quantities before flattening the position resolves cleanly to
+  `CLOSED` (#463, #248).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.117. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.117] - 2026-11-08
 
 ### Added
