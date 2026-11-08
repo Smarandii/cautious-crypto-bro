@@ -10,6 +10,24 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.116] - 2026-11-08
+
+### Added
+
+- Add `measure_multi_zone_coverage` in
+  `src/cautious_crypto_bro/zone_portfolio_admission.py` and include
+  `multi_zone_coverage` in `scripts/report_zone_ledger.py` to report
+  single-zone vs multi-zone OPEN candidate groups, ownership-blocked sibling
+  zones, and explicit attribution/broker limits (#459, #123).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.115. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.115] - 2026-11-08
 
 ### Added
