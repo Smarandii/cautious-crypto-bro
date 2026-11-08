@@ -279,13 +279,13 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
         db.executescript(
             """
             CREATE TABLE source_messages(channel_id INTEGER, message_id INTEGER, status TEXT);
-            CREATE TABLE intents(intent_id TEXT, status TEXT, payload_json TEXT);
+            CREATE TABLE intents(intent_id TEXT, status TEXT, error TEXT, payload_json TEXT);
             CREATE TABLE position_actions(action_id TEXT, status TEXT, payload_json TEXT);
             INSERT INTO source_messages VALUES (-100111, 1, 'COMPLETED'), (-100111, 2, 'COMPLETED'), (-100111, 3, 'COMPLETED'), (-100222, 10, 'COMPLETED');
             INSERT INTO intents VALUES
-              ('i1', 'EXECUTED', '{"source":{"channel_id":-100111,"message_id":1,"channel_title":"SECRET_ALPHA"}}'),
-              ('i2', 'SKIPPED', '{"source":{"channel_id":-100111,"message_id":2,"channel_title":"SECRET_ALPHA"}}'),
-              ('i3', 'FAILED', '{"source":{"channel_id":-100222,"message_id":10,"channel_title":"SECRET_BETA"}}');
+              ('i1', 'EXECUTED', NULL, '{"source":{"channel_id":-100111,"message_id":1,"channel_title":"SECRET_ALPHA"}}'),
+              ('i2', 'SKIPPED', NULL, '{"source":{"channel_id":-100111,"message_id":2,"channel_title":"SECRET_ALPHA"}}'),
+              ('i3', 'FAILED', 'Existing strategy owns BTCUSDT', '{"source":{"channel_id":-100222,"message_id":10,"channel_title":"SECRET_BETA"}}');
             INSERT INTO position_actions VALUES
               ('a1', 'EXECUTED', '{"source":{"channel_id":-100111,"message_id":1,"channel_title":"SECRET_ALPHA"}}');
             """
@@ -312,6 +312,11 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
     assert ch2["win_rate_pct"] == 50.0
     assert ch2["net_pnl_usdt"] == 30.0
     assert ch2["net_r"] == 0.6
+    assert ch2["long_trades"] == 1 and ch2["long_win_rate_pct"] == 100.0
+    assert ch2["long_net_pnl_usdt"] == 45.5 and ch2["long_net_r"] == 0.91
+    assert ch2["short_trades"] == 1 and ch2["short_win_rate_pct"] == 0.0
+    assert ch2["short_net_pnl_usdt"] == -15.5 and ch2["short_net_r"] == -0.31
+    assert rows_by_ch["source_1"]["failed_ownership_guard"] == 1
 
     history = public_trade_history(positions, available=True)
     history["as_of"] = "2026-11-08T00:00:00+00:00"
