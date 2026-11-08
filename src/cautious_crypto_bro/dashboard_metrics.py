@@ -476,6 +476,7 @@ def _channel_summary(
     failed_other: int,
     lifecycle_actions: int,
     executed_actions: int,
+    active_open_strategies: int,
     positions: list[Mapping[str, object]],
     size_reconciled_positions: list[Mapping[str, object]],
     current_risk_positions: list[Mapping[str, object]],
@@ -508,6 +509,7 @@ def _channel_summary(
         "failed_other": failed_other,
         "lifecycle_actions": lifecycle_actions,
         "executed_actions": executed_actions,
+        "active_open_strategies": active_open_strategies,
         "completed_trades": completed_trades,
         "winning_trades": int(perf["positive_count"]),  # type: ignore[arg-type]
         "losing_trades": int(perf["negative_count"]),  # type: ignore[arg-type]
@@ -580,7 +582,24 @@ def _accumulate_channel_actions(
             bucket["executed_actions"] = int(bucket["executed_actions"]) + 1  # type: ignore[arg-type]
 
 
-def _channel_funnel_buckets(database) -> dict[str, dict[str, object]]:
+def _accumulate_channel_open_strategies(
+    database, tables: set[str], buckets: dict[str, dict[str, object]]
+) -> None:
+    if "position_strategies" not in tables:
+        return
+    for cid, count in database.execute(
+        "SELECT CAST(json_extract(i.payload_json, '$.source.channel_id') AS TEXT), "
+        "COUNT(*) FROM position_strategies ps JOIN intents i "
+        "ON ps.strategy_id = i.intent_id "
+        "WHERE ps.status IN ('ENTERING', 'OPEN_RISK', 'PROFIT_PROTECTED', 'CLOSING') "
+        "GROUP BY 1"
+    ):
+        bucket = buckets.get(str(cid))
+        if bucket is not None:
+            bucket["active_open_strategies"] = int(count or 0)
+
+
+def _channel_funnel_buckets(database, tables: set[str]) -> dict[str, dict[str, object]]:
     buckets: dict[str, dict[str, object]] = {}
     for cid, total, completed in database.execute(
         "SELECT CAST(channel_id AS TEXT), COUNT(*), "
@@ -600,9 +619,11 @@ def _channel_funnel_buckets(database) -> dict[str, dict[str, object]]:
             "failed_other": 0,
             "lifecycle_actions": 0,
             "executed_actions": 0,
+            "active_open_strategies": 0,
         }
     _accumulate_channel_intents(database, buckets)
     _accumulate_channel_actions(database, buckets)
+    _accumulate_channel_open_strategies(database, tables, buckets)
     return buckets
 
 
@@ -625,6 +646,7 @@ def _bucket_summary(
         failed_other=int(bucket["failed_other"]),  # type: ignore[arg-type]
         lifecycle_actions=int(bucket["lifecycle_actions"]),  # type: ignore[arg-type]
         executed_actions=int(bucket["executed_actions"]),  # type: ignore[arg-type]
+        active_open_strategies=int(bucket["active_open_strategies"]),  # type: ignore[arg-type]
         positions=positions,
         size_reconciled_positions=size_reconciled,
         current_risk_positions=current_risk,
@@ -642,7 +664,7 @@ def build_channel_analytics(
     }
     if not {"source_messages", "intents", "position_actions"} <= tables:
         return None
-    buckets = _channel_funnel_buckets(database)
+    buckets = _channel_funnel_buckets(database, tables)
     all_positions = list(positions)
     complete = [p for p in all_positions if p.get("complete") is True]
     size_reconciled = [p for p in all_positions if _is_size_reconciled_closed(p)]
@@ -700,6 +722,7 @@ def build_channel_analytics(
             "failed_other",
             "lifecycle_actions",
             "executed_actions",
+            "active_open_strategies",
         )
     }
     total_bucket["signal_msgs"] = range(

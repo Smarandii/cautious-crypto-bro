@@ -233,6 +233,21 @@ per-zone runner and risk primitives required by #312:
     each conflicting zone owns an isolated `tpslMode="Full"` position, or (b)
     approving a ratcheted `PartialStopLoss`-floor policy without continuous
     exchange-side retracement trailing when two zones overlap.
+- `expire_zone_stale_entries` (#445): expires one zone's pending `ENTRY` orders
+  after its TTL while leaving younger sibling zones' resting ladders open.
+- `cancel_source_zone_entries` (#447), `derive_zone_fixed_exits` (#451), and
+  `allocate_source_zone_reduction` (#451): scope `CANCEL_ENTRIES` and
+  `CLOSE`/`REDUCE` instructions to earlier zones owned by the originating
+  Telegram source and compute per-zone `TP1`/`TP2`/`TP3` exits from each zone's
+  own fills.
+- `evaluate_zone_portfolio_admission` (#455), `detect_zone_group_manual_drift`
+  (#457), and `measure_multi_zone_coverage` (#459, in
+  `src/cautious_crypto_bro/zone_portfolio_admission.py` and
+  `scripts/report_zone_ledger.py`): enforce the account-wide portfolio stop-risk
+  cap across full-budget zone admissions without splitting budgets, detect
+  net-position/child-stop/post-freeze/exit drift across a zone group, and report
+  single-zone vs multi-zone OPEN candidate coverage alongside explicit
+  attribution limits.
 
 ## Rationale
 
