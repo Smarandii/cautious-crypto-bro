@@ -10,6 +10,23 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.115] - 2026-11-08
+
+### Added
+
+- Add `ZoneGroupDriftStatus` and `detect_zone_group_manual_drift` in
+  `src/cautious_crypto_bro/zone_portfolio_admission.py` to detect net-position,
+  native child-stop, post-freeze entry, and fixed-exit drift across a
+  multi-zone group (#457, #123).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.114. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.114] - 2026-11-08
 
 ### Added
