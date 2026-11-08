@@ -196,6 +196,44 @@ enrollment, risk-admission and source-action contract before changing exposure.
 Dynamic stop revisions require durable expected-trigger evidence; they cannot
 silently overwrite the frozen stop to match external drift.
 
+## Runner trailing contract and same-account broker boundary (#312)
+
+`src/cautious_crypto_bro/zone_runner_protection.py` implements the logical
+per-zone runner and risk primitives required by #312:
+
+- `derive_zone_runner_state` (#413): computes each zone's `entered_quantity`,
+  `closed_quantity`, `remaining_quantity`, `entry_average_price`, fee-adjusted
+  `entry_break_even_price`, `live_r`, `trailing_active`, directional
+  `protected_stop_loss` ratchet, and `trailing_distance` solely from that zone's
+  confirmed `ZoneOrder`/`ZoneExecution` records and frozen `ExecutionPlan`.
+- `zone_pending_entry_orders` and `cancel_zone_pending_entries` (#417): recovers
+  lost entry acknowledgements via `recover_entry_bindings`, cancels only the
+  target zone's bound `ENTRY` orders, and confirms cancellation across two
+  snapshots while preserving sibling zone entries.
+- `zone_group_open_stop_risk_usdt` (#419): bounds combined filled and pending
+  stop risk across a multi-zone group, requiring verified `PartialStopLoss`
+  child coverage for every parent fill and flooring profit-locked zone risk at
+  zero so a profitable sibling never subsidizes another zone's open risk.
+- `evaluate_zone_group_runner_contract` (#443): evaluates group runner states
+  across partial closes, late fills after entry cancellation, and restart, and
+  classifies native Bybit `/v5/position/trading-stop` compatibility:
+  - Bybit's `/v5/position/trading-stop` supports quantity-scoped `PartialStopLoss`
+    (`tpslMode="Partial"`, `slSize`) for each zone's fixed or ratcheted
+    `protected_stop_loss` floor, which survives offline disconnects.
+  - However, Bybit's `trailingStop` parameter has no `slSize` or
+    `parentOrderLinkId` selector (`tpslMode="Full"`, `positionIdx=0` only). When
+    two or more same-symbol, same-side zones simultaneously hold positive
+    remaining quantity and at least one activates `trailing_active`,
+    `evaluate_zone_group_runner_contract` returns
+    `native_trailing_status="UNSUPPORTED_SAME_ACCOUNT_PARTIAL_TRAILING"`,
+    `operator_tradeoff_required=True`, `protection_verified=False`, and
+    `trading_enabled=False`.
+  - Enabling live multi-zone execution under #123 therefore requires an explicit
+    operator choice between: (a) provisioning separate Demo subaccount UIDs so
+    each conflicting zone owns an isolated `tpslMode="Full"` position, or (b)
+    approving a ratcheted `PartialStopLoss`-floor policy without continuous
+    exchange-side retracement trailing when two zones overlap.
+
 ## Rationale
 
 [Zen of Python](https://peps.python.org/pep-0020/): "Explicit is better than implicit."

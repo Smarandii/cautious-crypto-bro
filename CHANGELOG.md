@@ -10,6 +10,23 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.108] - 2026-11-08
+
+### Added
+
+- Add `ZoneGroupRunnerContract` and `evaluate_zone_group_runner_contract` in
+  `src/cautious_crypto_bro/zone_runner_protection.py` and document the #312
+  same-account partial-trailing boundary and operator tradeoff in
+  `docs/independent-zone-execution.md` (#443, #312, #123).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.107. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.107] - 2026-11-08
 
 ### Changed
