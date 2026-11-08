@@ -28,7 +28,10 @@ from .execution_history import (
 )
 from .ports import AccountGateway, PositionSupervisorStore
 from .position_management._helpers import _find_position
-from .position_management.drift_detector import manual_override_reason
+from .position_management.drift_detector import (
+    manual_override_reason,
+    pre_install_position_drift_reason,
+)
 from .position_management.entry_expiry import (
     expire_stale_entries,
     pending_entry_link_ids,
@@ -182,53 +185,17 @@ class PositionSupervisor:
 
     @staticmethod
     def _strategies_by_symbol(
-        records: Sequence[
-            tuple[
-                PositionStrategy,
-                ExecutionPlan,
-            ]
-        ],
-    ) -> dict[
-        str,
-        list[
-            tuple[
-                PositionStrategy,
-                ExecutionPlan,
-            ]
-        ],
-    ]:
-        by_symbol: dict[
-            str,
-            list[
-                tuple[
-                    PositionStrategy,
-                    ExecutionPlan,
-                ]
-            ],
-        ] = {}
-
+        records: Sequence[tuple[PositionStrategy, ExecutionPlan]],
+    ) -> dict[str, list[tuple[PositionStrategy, ExecutionPlan]]]:
+        by_symbol: dict[str, list[tuple[PositionStrategy, ExecutionPlan]]] = {}
         for state, plan in records:
-            by_symbol.setdefault(
-                state.symbol,
-                [],
-            ).append(
-                (
-                    state,
-                    plan,
-                )
-            )
-
+            by_symbol.setdefault(state.symbol, []).append((state, plan))
         return by_symbol
 
     async def _reconcile_symbol_locked(
         self,
         symbol: str,
-        strategies: list[
-            tuple[
-                PositionStrategy,
-                ExecutionPlan,
-            ]
-        ],
+        strategies: list[tuple[PositionStrategy, ExecutionPlan]],
         account: AccountStateSummary | None,
     ) -> tuple[AccountStateSummary | None, Exception | None]:
         if len(strategies) != 1:
@@ -311,33 +278,9 @@ class PositionSupervisor:
                 account,
             )
 
-        if position.side is not state.side:
-            return await self._manual_override(
-                state,
-                account,
-                "position side mismatch",
-            )
-
-        if position.take_profit is not None:
-            return await self._manual_override(
-                state,
-                account,
-                "position take profit enabled outside Strategy V2; manual review required",
-            )
-
-        if not state.trailing_active and position.trailing_stop is not None:
-            return await self._manual_override(
-                state,
-                account,
-                "position trailing stop enabled outside Strategy V2; manual review required",
-            )
-
-        if abs(position.avg_price - plan.stop_loss) <= 0:
-            return await self._manual_override(
-                state,
-                account,
-                "invalid stop loss",
-            )
+        drift = pre_install_position_drift_reason(state, plan, position)
+        if drift is not None:
+            return await self._manual_override(state, account, drift)
 
         return None
 
