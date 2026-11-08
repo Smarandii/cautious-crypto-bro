@@ -30,6 +30,7 @@ from cautious_crypto_bro.zone_runner_protection import (
     cancel_zone_pending_entries,
     derive_zone_runner_state,
     evaluate_zone_group_runner_contract,
+    expire_zone_stale_entries,
     zone_group_open_stop_risk_usdt,
     zone_pending_entry_orders,
 )
@@ -1033,3 +1034,136 @@ def test_zone_group_runner_contract_handles_late_fills_and_flags_same_account_pa
             mark_price=mark_trail_a,
             context=CONTEXT,
         )
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_expire_zone_stale_entries_isolates_older_zone_from_younger_sibling(
+    tmp_path, side: Side
+) -> None:
+    from datetime import timedelta
+
+    async def run() -> None:
+        store = IntentStore(tmp_path / "zone-ttl.db")
+        await store.initialize()
+        if side is Side.LONG:
+            intent_a, plan_a = _make_plan(side, "98", "100", "90")
+            intent_b, plan_b = _make_plan(side, "92", "94", "84")
+        else:
+            intent_a, plan_a = _make_plan(side, "100", "102", "110")
+            intent_b, plan_b = _make_plan(side, "106", "108", "116")
+
+        now = datetime.now(UTC)
+        plan_a = plan_a.model_copy(update={"created_at": now - timedelta(minutes=250)})
+        plan_b = plan_b.model_copy(update={"created_at": now - timedelta(minutes=60)})
+
+        claim = await store.claim_source(intent_a.source, lease_seconds=300)
+        assert claim is not None
+        assert await store.create_signal_batch_and_complete_source(
+            ((intent_a, plan_a), (intent_b, plan_b)), (), claim
+        )
+        group = zone_group_id("BTCUSDT", side)
+        await store.register_zone(group, plan_a.intent_id)
+        await store.register_zone(group, plan_b.intent_id)
+
+        link_a_e1 = f"ccb-v2-{plan_a.intent_id.hex[:20]}-e1"
+        link_a_e2 = f"ccb-v2-{plan_a.intent_id.hex[:20]}-e2"
+        link_b_e1 = f"ccb-v2-{plan_b.intent_id.hex[:20]}-e1"
+
+        for z_order in (
+            ZoneOrder(
+                zone_id=plan_a.intent_id,
+                order_id="a-e1",
+                order_link_id=link_a_e1,
+                role="ENTRY",
+                quantity=plan_a.entry_orders[0].quantity,
+            ),
+            ZoneOrder(
+                zone_id=plan_a.intent_id,
+                order_id="a-e2",
+                order_link_id=link_a_e2,
+                role="ENTRY",
+                quantity=plan_a.entry_orders[1].quantity,
+            ),
+            ZoneOrder(
+                zone_id=plan_b.intent_id,
+                order_id="b-e1",
+                order_link_id=link_b_e1,
+                role="ENTRY",
+                quantity=plan_b.entry_orders[0].quantity,
+            ),
+        ):
+            await store.bind_zone_order(z_order)
+
+        open_a_e2 = _open_order(
+            "a-e2", link_a_e2, side, plan_a.entry_orders[1].quantity
+        )
+        open_b_e1 = _open_order(
+            "b-e1", link_b_e1, side, plan_b.entry_orders[0].quantity
+        )
+
+        # Younger Zone B has not reached its 240m TTL: no cancellation occurs.
+        gw = _ZoneCancelGateway([open_a_e2, open_b_e1])
+        not_due = await expire_zone_stale_entries(
+            plan_b,
+            (),
+            store,
+            gw,  # type: ignore[arg-type]
+            legacy_entry_ttl_minutes=240,
+            now=now,
+        )
+        assert not_due.expired is False
+        assert not_due.cancelled_order_ids == ()
+        assert len(gw.open_orders) == 2
+
+        # Older Zone A with zero fills expires and closes (zone_closed=True)
+        # while Zone B's resting E1 remains open.
+        unfilled_exp = await expire_zone_stale_entries(
+            plan_a,
+            (),
+            store,
+            gw,  # type: ignore[arg-type]
+            legacy_entry_ttl_minutes=240,
+            now=now,
+        )
+        assert unfilled_exp.expired is True
+        assert unfilled_exp.cancelled_order_ids == ("a-e2",)
+        assert unfilled_exp.entry_frozen is True
+        assert unfilled_exp.zone_closed is True
+        assert [o.order_id for o in gw.open_orders] == ["b-e1"]
+
+        # Older Zone A with a partial fill on E1 freezes entries without closing
+        # its filled allocation (zone_closed=False).
+        gw_partial = _ZoneCancelGateway([open_a_e2, open_b_e1])
+        fill_a_e1 = ZoneExecution(
+            execution_id="ex-a-e1",
+            order_id="a-e1",
+            side=side,
+            quantity=plan_a.entry_orders[0].quantity,
+            closed_quantity=D("0"),
+            price=D("100"),
+            executed_at_ms=10,
+        )
+        partial_exp = await expire_zone_stale_entries(
+            plan_a,
+            (fill_a_e1,),
+            store,
+            gw_partial,  # type: ignore[arg-type]
+            legacy_entry_ttl_minutes=240,
+            now=now,
+        )
+        assert partial_exp.expired is True
+        assert partial_exp.entry_frozen is True
+        assert partial_exp.zone_closed is False
+        assert [o.order_id for o in gw_partial.open_orders] == ["b-e1"]
+
+        with pytest.raises(ValueError, match="must not be negative"):
+            await expire_zone_stale_entries(
+                plan_a,
+                (),
+                store,
+                gw_partial,  # type: ignore[arg-type]
+                legacy_entry_ttl_minutes=-1,
+                now=now,
+            )
+
+    asyncio.run(run())
