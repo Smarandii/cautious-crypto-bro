@@ -10,6 +10,24 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.119] - 2026-11-08
+
+### Added
+
+- Add `active_open_strategies` to `channel_analytics` in `dashboard_metrics.py`
+  and `dashboard_feed.py`, display `completed_posts / total_posts` and active
+  open strategies per channel in `docs/script.js`, and document the #445–#459
+  independent-zone primitives in `docs/independent-zone-execution.md`
+  (#465, #248, #123).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.118. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.118] - 2026-11-08
 
 ### Fixed

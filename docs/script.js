@@ -197,11 +197,12 @@ function renderTradeHistory(data, refreshFailed = false) {
     const headRow = add("tr", "", add("thead", "", table));
     for (const col of [
       "Channel",
-      "Posts",
+      "Posts (done / total)",
       "Signal posts (%)",
       "Signals picked up (exec / open)",
       "Skipped / Failed (owned · risk · other)",
       "Actions (exec / total)",
+      "Open positions",
       "Current policy (W / L · WR)",
       "Current policy Net PnL · R · PF",
       "Current policy Avg Win / Loss · USDT",
@@ -255,11 +256,12 @@ function renderTradeHistory(data, refreshFailed = false) {
         : "—";
       for (const cell of [
         ch.channel,
-        `${ch.total_posts ?? 0}`,
+        `${ch.completed_posts ?? ch.total_posts ?? 0} / ${ch.total_posts ?? 0}`,
         `${ch.signal_posts ?? 0} (${pct(ch.signal_post_ratio_pct)})`,
         `${ch.executed_intents ?? 0} / ${ch.open_intents ?? 0} (${pct(ch.pickup_rate_pct)})`,
         failedDetail,
         `${ch.executed_actions ?? 0} / ${ch.lifecycle_actions ?? 0}`,
+        `${ch.active_open_strategies ?? 0}`,
         curWl,
         curPnl,
         curAvgMag,
