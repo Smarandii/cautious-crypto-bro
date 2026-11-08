@@ -202,8 +202,10 @@ function renderTradeHistory(data, refreshFailed = false) {
       "Signals picked up (exec / open)",
       "Skipped / Failed (owned · risk · other)",
       "Actions (exec / total)",
-      "Size-reconciled closed (W / L · WR)",
-      "Size-reconciled Net PnL · R · PF",
+      "Current policy (W / L · WR)",
+      "Current policy Net PnL · R · PF",
+      "All-time size-reconciled (W / L · WR)",
+      "All-time size-reconciled Net PnL · R · PF",
       "Terminal-certified (W / L · WR)",
       "LONG (trades · WR · PnL)",
       "SHORT (trades · WR · PnL)",
@@ -237,6 +239,11 @@ function renderTradeHistory(data, refreshFailed = false) {
         ch.failed_ownership_guard != null
           ? `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0} (${ch.failed_ownership_guard}·${ch.failed_risk_budget_guard ?? 0}·${ch.failed_other ?? 0})`
           : `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0}`;
+      const curCount = ch.current_risk_trades ?? 0;
+      const curWl = `${curCount} (${ch.current_risk_winning_trades ?? 0}W / ${ch.current_risk_losing_trades ?? 0}L · ${pct(ch.current_risk_win_rate_pct)})`;
+      const curPnl = curCount
+        ? `${signed(ch.current_risk_net_pnl_usdt, 2)} USDT · ${signed(ch.current_risk_net_r, 2)}R · ${Number.isFinite(ch.current_risk_profit_factor) ? `${number(ch.current_risk_profit_factor, 2)}×` : "—"}`
+        : "—";
       const sizeRecCount = ch.size_reconciled_trades ?? ch.completed_trades ?? 0;
       const sizeRecWl = `${sizeRecCount} (${ch.size_reconciled_winning_trades ?? ch.winning_trades ?? 0}W / ${ch.size_reconciled_losing_trades ?? ch.losing_trades ?? 0}L · ${pct(ch.size_reconciled_win_rate_pct ?? ch.win_rate_pct)})`;
       const sizeRecPnl = sizeRecCount
@@ -249,6 +256,8 @@ function renderTradeHistory(data, refreshFailed = false) {
         `${ch.executed_intents ?? 0} / ${ch.open_intents ?? 0} (${pct(ch.pickup_rate_pct)})`,
         failedDetail,
         `${ch.executed_actions ?? 0} / ${ch.lifecycle_actions ?? 0}`,
+        curWl,
+        curPnl,
         sizeRecWl,
         sizeRecPnl,
         `${ch.completed_trades ?? 0} (${ch.winning_trades ?? 0}W / ${ch.losing_trades ?? 0}L · ${pct(ch.win_rate_pct)})`,
