@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -707,6 +708,88 @@ def _build_exit_cohorts(
     return cohorts
 
 
+_LADDER_DEPTH_ORDER = ("E1_only", "E1_E2", "E1_E2_E3_full")
+
+
+def _plan_leg_thresholds(database, tables: set[str]) -> dict[str, tuple[float, float]]:
+    if "execution_plans" not in tables:
+        return {}
+    thresholds: dict[str, tuple[float, float]] = {}
+    for intent_id, payload_str in database.execute(
+        "SELECT CAST(intent_id AS TEXT), payload_json FROM execution_plans"
+    ):
+        try:
+            orders = json.loads(payload_str).get("orders") or []
+            q1 = float(orders[0]["quantity"])
+            q12 = q1 + (float(orders[1]["quantity"]) if len(orders) > 1 else 0.0)
+            thresholds[str(intent_id)] = (q1, q12)
+        except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+    return thresholds
+
+
+def _classify_ladder_depth(
+    position: Mapping[str, object],
+    thresholds: dict[str, tuple[float, float]],
+) -> str:
+    explicit = position.get("ladder_depth")
+    if explicit in _LADDER_DEPTH_ORDER:
+        return str(explicit)
+    pair = thresholds.get(str(position.get("intent_id") or ""))
+    entry_qty = _optional_number(position.get("entry_qty")) or 0.0
+    if pair is None or entry_qty <= 0:
+        return "E1_only"
+    q1, q12 = pair
+    if abs(entry_qty - q1) <= max(1e-6, q1 * 0.01):
+        return "E1_only"
+    if abs(entry_qty - q12) <= max(1e-6, q12 * 0.01):
+        return "E1_E2"
+    return "E1_E2_E3_full"
+
+
+def _build_ladder_cohorts(
+    database,
+    tables: set[str],
+    complete: list[Mapping[str, object]],
+    size_reconciled: list[Mapping[str, object]],
+    current_risk: list[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    thresholds = _plan_leg_thresholds(database, tables)
+    cohorts: list[dict[str, object]] = []
+    for depth in _LADDER_DEPTH_ORDER:
+        p_comp = [p for p in complete if _classify_ladder_depth(p, thresholds) == depth]
+        p_size = [
+            p for p in size_reconciled if _classify_ladder_depth(p, thresholds) == depth
+        ]
+        p_cur = [
+            p for p in current_risk if _classify_ladder_depth(p, thresholds) == depth
+        ]
+        if not p_size:
+            continue
+        perf = summarize_reconciled_positions(p_comp)
+        comp_count = int(perf["position_count"])  # type: ignore[arg-type]
+        cohorts.append(
+            {
+                "ladder_depth": depth,
+                "completed_trades": comp_count,
+                "winning_trades": int(perf["positive_count"]),  # type: ignore[arg-type]
+                "losing_trades": int(perf["negative_count"]),  # type: ignore[arg-type]
+                "win_rate_pct": perf["win_rate_pct"],
+                "net_pnl_usdt": perf["net_pnl_usdt"] if comp_count else 0.0,
+                "net_r": (
+                    _rounded(sum(_number(p, "net_r") for p in p_comp), 6)
+                    if comp_count
+                    else 0.0
+                ),
+                "expectancy_r": perf["expectancy_r"],
+                "profit_factor": perf["profit_factor"],
+                **_cohort_metrics(p_size, "size_reconciled"),
+                **_cohort_metrics(p_cur, "current_risk"),
+            }
+        )
+    return cohorts
+
+
 def build_channel_analytics(
     database,
     positions: Iterable[Mapping[str, object]],
@@ -790,6 +873,9 @@ def build_channel_analytics(
         ),
         "exit_cohorts": _build_exit_cohorts(
             known_positions, known_size_rec, known_cur_risk
+        ),
+        "ladder_cohorts": _build_ladder_cohorts(
+            database, tables, known_positions, known_size_rec, known_cur_risk
         ),
     }
 

@@ -169,6 +169,16 @@ EXIT_COHORT_FIELDS = (
     "size_reconciled_profit_factor",
     "current_risk_profit_factor",
 )
+LADDER_COHORT_FIELDS = (
+    "ladder_depth",
+    *EXIT_COHORT_INT_FIELDS,
+    *EXIT_COHORT_PCT_FIELDS,
+    *EXIT_COHORT_SIGNED_FIELDS,
+    "profit_factor",
+    "size_reconciled_profit_factor",
+    "current_risk_profit_factor",
+)
+LADDER_DEPTHS = {"E1_only", "E1_E2", "E1_E2_E3_full"}
 CHANNEL_ANALYTICS_FIELDS = ("available", "rows", "totals")
 EXIT_PROFILES = {
     "baseline",
@@ -292,6 +302,24 @@ def _expected_channel_fields(item: object, *, with_channel: bool) -> tuple[str, 
     return CHANNEL_ROW_FIELDS if with_channel else CHANNEL_SUMMARY_FIELDS
 
 
+def _validate_cohort_numbers(row: dict) -> None:
+    for field in EXIT_COHORT_INT_FIELDS:
+        if type(row[field]) is not int or row[field] < 0:
+            raise ValueError("Invalid public exit cohort integer count")
+    for field in EXIT_COHORT_PCT_FIELDS:
+        _number(row[field], nonnegative=True)
+        if row[field] is not None and row[field] > 100:
+            raise ValueError("Public exit cohort percentage exceeds 100")
+    for pf in (
+        "profit_factor",
+        "size_reconciled_profit_factor",
+        "current_risk_profit_factor",
+    ):
+        _number(row[pf], nonnegative=True)
+    for field in EXIT_COHORT_SIGNED_FIELDS:
+        _number(row[field])
+
+
 def _validate_exit_cohorts(cohorts: object) -> None:
     if not isinstance(cohorts, list) or len(cohorts) > 20:
         raise ValueError("Invalid public exit cohorts")
@@ -306,29 +334,33 @@ def _validate_exit_cohorts(cohorts: object) -> None:
         ):
             raise ValueError("Invalid or duplicate public exit profile cohort")
         seen.add(profile)
-        for field in EXIT_COHORT_INT_FIELDS:
-            if type(row[field]) is not int or row[field] < 0:
-                raise ValueError("Invalid public exit cohort integer count")
-        for field in EXIT_COHORT_PCT_FIELDS:
-            _number(row[field], nonnegative=True)
-            if row[field] is not None and row[field] > 100:
-                raise ValueError("Public exit cohort percentage exceeds 100")
-        for pf in (
-            "profit_factor",
-            "size_reconciled_profit_factor",
-            "current_risk_profit_factor",
-        ):
-            _number(row[pf], nonnegative=True)
-        for field in EXIT_COHORT_SIGNED_FIELDS:
-            _number(row[field])
+        _validate_cohort_numbers(row)
+
+
+def _validate_ladder_cohorts(cohorts: object) -> None:
+    if not isinstance(cohorts, list) or len(cohorts) > 10:
+        raise ValueError("Invalid public ladder cohorts")
+    seen: set[str] = set()
+    for item in cohorts:
+        row = _fields(item, LADDER_COHORT_FIELDS)
+        depth = row["ladder_depth"]
+        if not isinstance(depth, str) or depth not in LADDER_DEPTHS or depth in seen:
+            raise ValueError("Invalid or duplicate public ladder depth cohort")
+        seen.add(depth)
+        _validate_cohort_numbers(row)
 
 
 def _validate_channel_analytics(value: object) -> None:
+    extra_fields: list[str] = []
     if isinstance(value, dict) and "exit_cohorts" in value:
-        analytics = _fields(value, (*CHANNEL_ANALYTICS_FIELDS, "exit_cohorts"))
+        extra_fields.append("exit_cohorts")
+    if isinstance(value, dict) and "ladder_cohorts" in value:
+        extra_fields.append("ladder_cohorts")
+    analytics = _fields(value, (*CHANNEL_ANALYTICS_FIELDS, *extra_fields))
+    if "exit_cohorts" in analytics:
         _validate_exit_cohorts(analytics["exit_cohorts"])
-    else:
-        analytics = _fields(value, CHANNEL_ANALYTICS_FIELDS)
+    if "ladder_cohorts" in analytics:
+        _validate_ladder_cohorts(analytics["ladder_cohorts"])
     if type(analytics["available"]) is not bool:
         raise ValueError("Invalid channel analytics availability")
     rows = analytics["rows"]

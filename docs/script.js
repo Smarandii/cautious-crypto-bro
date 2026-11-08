@@ -330,6 +330,58 @@ function renderTradeHistory(data, refreshFailed = false) {
         }
       }
     }
+    if (Array.isArray(channelAnalytics.ladder_cohorts) && channelAnalytics.ladder_cohorts.length) {
+      add("h3", "Entry-ladder fill-depth meta-analysis", channelSection);
+      add(
+        "p",
+        "Partitions closed positions by filled entry-ladder depth: E1_only (primary entry only), E1_E2 (first two legs), and E1_E2_E3_full (all three legs filled after 0.60R adverse excursion).",
+        channelSection,
+      );
+      const ladderScroll = add("div", "", channelSection);
+      ladderScroll.className = "trade-table-scroll";
+      ladderScroll.tabIndex = 0;
+      ladderScroll.setAttribute("role", "region");
+      ladderScroll.setAttribute("aria-label", "Entry-ladder fill-depth table");
+      const ladderTable = add("table", "", ladderScroll);
+      add("caption", "Performance by filled entry-ladder depth", ladderTable);
+      const ladderHead = add("tr", "", add("thead", "", ladderTable));
+      for (const col of [
+        "Filled ladder depth",
+        "Current policy (W / L · WR)",
+        "Current policy Net PnL · R · PF",
+        "Current policy Avg Win / Loss · USDT",
+        "All-time size-reconciled (W / L · WR)",
+        "All-time size-reconciled Net PnL · R · PF",
+        "Terminal-certified (W / L · WR)",
+        "Terminal Net PnL · USDT",
+      ]) {
+        add("th", col, ladderHead).scope = "col";
+      }
+      const ladderBody = add("tbody", "", ladderTable);
+      for (const ld of channelAnalytics.ladder_cohorts) {
+        const tr = add("tr", "", ladderBody);
+        const curN = ld.current_risk_trades ?? 0;
+        const sizeN = ld.size_reconciled_trades ?? 0;
+        for (const cell of [
+          ld.ladder_depth,
+          `${curN} (${ld.current_risk_winning_trades ?? 0}W / ${ld.current_risk_losing_trades ?? 0}L · ${pct(ld.current_risk_win_rate_pct)})`,
+          curN
+            ? `${signed(ld.current_risk_net_pnl_usdt, 2)} USDT · ${signed(ld.current_risk_net_r, 2)}R · ${Number.isFinite(ld.current_risk_profit_factor) ? `${number(ld.current_risk_profit_factor, 2)}×` : "—"}`
+            : "—",
+          curN
+            ? `${signed(ld.current_risk_avg_win_usdt, 2)} / ${signed(ld.current_risk_avg_loss_usdt, 2)} USDT`
+            : "—",
+          `${sizeN} (${ld.size_reconciled_winning_trades ?? 0}W / ${ld.size_reconciled_losing_trades ?? 0}L · ${pct(ld.size_reconciled_win_rate_pct)})`,
+          sizeN
+            ? `${signed(ld.size_reconciled_net_pnl_usdt, 2)} USDT · ${signed(ld.size_reconciled_net_r, 2)}R · ${Number.isFinite(ld.size_reconciled_profit_factor) ? `${number(ld.size_reconciled_profit_factor, 2)}×` : "—"}`
+            : "—",
+          `${ld.completed_trades ?? 0} (${ld.winning_trades ?? 0}W / ${ld.losing_trades ?? 0}L · ${pct(ld.win_rate_pct)})`,
+          signed(ld.net_pnl_usdt, 2),
+        ]) {
+          add("td", cell, tr);
+        }
+      }
+    }
   }
   if (!history?.available) {
     add("p", "Trade evidence unavailable. No outcomes inferred.");
