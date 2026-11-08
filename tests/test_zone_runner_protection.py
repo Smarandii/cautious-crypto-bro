@@ -16,6 +16,8 @@ from cautious_crypto_bro.domain import (
     EntryType,
     ExecutionPolicy,
     InstrumentContext,
+    PositionActionIntent,
+    PositionActionType,
     Side,
     SourceMessage,
     StrategyV2Policy,
@@ -27,6 +29,7 @@ from cautious_crypto_bro.portfolio_risk import PortfolioRiskUnavailable
 from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.zone_ledger import ZoneExecution, ZoneOrder, zone_group_id
 from cautious_crypto_bro.zone_runner_protection import (
+    cancel_source_zone_entries,
     cancel_zone_pending_entries,
     derive_zone_runner_state,
     evaluate_zone_group_runner_contract,
@@ -1164,6 +1167,191 @@ def test_expire_zone_stale_entries_isolates_older_zone_from_younger_sibling(
                 gw_partial,  # type: ignore[arg-type]
                 legacy_entry_ttl_minutes=-1,
                 now=now,
+            )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_cancel_source_zone_entries_preserves_other_sources_newer_zones_and_stops(
+    tmp_path, side: Side
+) -> None:
+    from datetime import timedelta
+
+    async def run() -> None:
+        store = IntentStore(tmp_path / "source-zone-cancel.db")
+        await store.initialize()
+        t0 = datetime.now(UTC) - timedelta(minutes=30)
+        t1 = t0 + timedelta(minutes=10)
+        t2 = t0 + timedelta(minutes=20)
+
+        if side is Side.LONG:
+            intent_a1, plan_a1 = _make_plan(side, "98", "100", "90")
+            intent_a2, plan_a2 = _make_plan(side, "94", "96", "86")
+            intent_b1, plan_b1 = _make_plan(side, "92", "93", "84")
+            intent_a_new, plan_a_new = _make_plan(side, "90", "91", "82")
+        else:
+            intent_a1, plan_a1 = _make_plan(side, "100", "102", "110")
+            intent_a2, plan_a2 = _make_plan(side, "104", "106", "114")
+            intent_b1, plan_b1 = _make_plan(side, "107", "108", "116")
+            intent_a_new, plan_a_new = _make_plan(side, "109", "110", "118")
+
+        src_a_old = SourceMessage(
+            channel_id=-1001,
+            channel_title="Source A",
+            message_id=10,
+            published_at=t0,
+            received_at=t0,
+            text="Two zones",
+        )
+        src_b = SourceMessage(
+            channel_id=-1002,
+            channel_title="Source B",
+            message_id=5,
+            published_at=t0,
+            received_at=t0,
+            text="Other source zone",
+        )
+        src_a_cancel = SourceMessage(
+            channel_id=-1001,
+            channel_title="Source A",
+            message_id=20,
+            published_at=t1,
+            received_at=t1,
+            text="Cancel pending entries",
+        )
+        src_a_new = SourceMessage(
+            channel_id=-1001,
+            channel_title="Source A",
+            message_id=30,
+            published_at=t2,
+            received_at=t2,
+            text="Newer zone",
+        )
+
+        intent_a1 = intent_a1.model_copy(update={"source": src_a_old})
+        intent_a2 = intent_a2.model_copy(update={"source": src_a_old})
+        intent_b1 = intent_b1.model_copy(update={"source": src_b})
+        intent_a_new = intent_a_new.model_copy(update={"source": src_a_new})
+
+        for src, pairs in (
+            (src_a_old, ((intent_a1, plan_a1), (intent_a2, plan_a2))),
+            (src_b, ((intent_b1, plan_b1),)),
+            (src_a_new, ((intent_a_new, plan_a_new),)),
+        ):
+            claim = await store.claim_source(src, lease_seconds=300)
+            assert claim is not None
+            assert await store.create_signal_batch_and_complete_source(pairs, (), claim)
+
+        group = zone_group_id("BTCUSDT", side)
+        for p in (plan_a1, plan_a2, plan_b1, plan_a_new):
+            await store.register_zone(group, p.intent_id)
+
+        link_a1 = f"ccb-v2-{plan_a1.intent_id.hex[:20]}-e1"
+        link_a2 = f"ccb-v2-{plan_a2.intent_id.hex[:20]}-e1"
+        link_b1 = f"ccb-v2-{plan_b1.intent_id.hex[:20]}-e1"
+        link_a_new = f"ccb-v2-{plan_a_new.intent_id.hex[:20]}-e1"
+
+        for z_order in (
+            ZoneOrder(
+                zone_id=plan_a1.intent_id,
+                order_id="ord-a1",
+                order_link_id=link_a1,
+                role="ENTRY",
+                quantity=plan_a1.entry_orders[0].quantity,
+            ),
+            ZoneOrder(
+                zone_id=plan_a1.intent_id,
+                order_id="ord-a1-sl",
+                order_link_id="",
+                parent_order_link_id=link_a1,
+                role="STOP",
+                quantity=plan_a1.entry_orders[0].quantity,
+            ),
+            ZoneOrder(
+                zone_id=plan_a2.intent_id,
+                order_id="ord-a2",
+                order_link_id=link_a2,
+                role="ENTRY",
+                quantity=plan_a2.entry_orders[0].quantity,
+            ),
+            ZoneOrder(
+                zone_id=plan_b1.intent_id,
+                order_id="ord-b1",
+                order_link_id=link_b1,
+                role="ENTRY",
+                quantity=plan_b1.entry_orders[0].quantity,
+            ),
+            ZoneOrder(
+                zone_id=plan_a_new.intent_id,
+                order_id="ord-a-new",
+                order_link_id=link_a_new,
+                role="ENTRY",
+                quantity=plan_a_new.entry_orders[0].quantity,
+            ),
+        ):
+            await store.bind_zone_order(z_order)
+
+        gw = _ZoneCancelGateway(
+            [
+                _open_order("ord-a1", link_a1, side, plan_a1.entry_orders[0].quantity),
+                _child_stop_order(
+                    "ord-a1-sl",
+                    link_a1,
+                    side,
+                    plan_a1.entry_orders[0].quantity,
+                    plan_a1.stop_loss,
+                ),
+                _open_order("ord-a2", link_a2, side, plan_a2.entry_orders[0].quantity),
+                _open_order("ord-b1", link_b1, side, plan_b1.entry_orders[0].quantity),
+                _open_order(
+                    "ord-a-new",
+                    link_a_new,
+                    side,
+                    plan_a_new.entry_orders[0].quantity,
+                ),
+            ]
+        )
+        action = PositionActionIntent(
+            source=src_a_cancel,
+            symbol="BTCUSDT",
+            action=PositionActionType.CANCEL_ENTRIES,
+            summary="Cancel earlier entries",
+            confidence=1.0,
+        )
+        zones = (
+            (plan_a1, src_a_old),
+            (plan_a2, src_a_old),
+            (plan_b1, src_b),
+            (plan_a_new, src_a_new),
+        )
+        result = await cancel_source_zone_entries(
+            action,
+            zones,
+            store,
+            gw,  # type: ignore[arg-type]
+        )
+        assert result.target_zone_ids == (plan_a1.intent_id, plan_a2.intent_id)
+        assert result.cancelled_order_ids == ("ord-a1", "ord-a2")
+        assert [o.order_id for o in result.account_state.open_orders] == [
+            "ord-a1-sl",
+            "ord-b1",
+            "ord-a-new",
+        ]
+
+        with pytest.raises(ValueError, match="requires a CANCEL_ENTRIES"):
+            await cancel_source_zone_entries(
+                action.model_copy(update={"action": PositionActionType.CLOSE}),
+                zones,
+                store,
+                gw,  # type: ignore[arg-type]
+            )
+        with pytest.raises(ValueError, match="No earlier zones"):
+            await cancel_source_zone_entries(
+                action.model_copy(update={"symbol": "ETHUSDT"}),
+                zones,
+                store,
+                gw,  # type: ignore[arg-type]
             )
 
     asyncio.run(run())
