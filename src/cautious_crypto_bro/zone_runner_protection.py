@@ -19,10 +19,13 @@ from .domain import (
     PositionActionType,
     Side,
     SourceMessage,
+    TakeProfitSource,
     TradeExecutionError,
 )
 from .entry_ownership import recover_entry_bindings
+from .execution_geometry import round_down
 from .portfolio_risk import PortfolioRiskUnavailable
+from .position_management.exit_installer import ExitInstaller
 from .position_management.trailing_stop_manager import TrailingStopManager
 from .zone_ledger import ZoneExecution, ZoneOrder, zone_group_id
 
@@ -74,6 +77,14 @@ class SourceZoneCancellationResult:
     target_zone_ids: tuple[UUID, ...]
     cancelled_order_ids: tuple[str, ...]
     account_state: AccountStateSummary
+
+
+@dataclass(frozen=True, slots=True)
+class ZoneReductionAllocation:
+    zone_id: UUID
+    remaining_quantity_before: Decimal
+    reduce_quantity: Decimal
+    remaining_quantity_after: Decimal
 
 
 def _zone_entry_economics(
@@ -598,3 +609,126 @@ async def cancel_source_zone_entries(
         cancelled_order_ids=tuple(cancelled),
         account_state=account,
     )
+
+
+def derive_zone_fixed_exits(
+    plan: ExecutionPlan,
+    orders: Sequence[ZoneOrder],
+    executions: Sequence[ZoneExecution],
+    context: InstrumentContext,
+    *,
+    exit_revision: int = 1,
+    tp_done: tuple[bool, bool, bool] = (False, False, False),
+) -> dict[str, tuple[Decimal, Decimal]]:
+    """Compute one zone's TP1/TP2/TP3 exits from its own fills and stop distance."""
+    if exit_revision < 1:
+        raise ValueError("Zone exit revision must be positive")
+    state = derive_zone_runner_state(
+        plan, orders, executions, mark_price=context.market_price, context=context
+    )
+    if state.remaining_quantity <= 0 or state.entry_average_price is None:
+        return {}
+    remaining_weight = plan.runner_pct + sum(
+        (
+            target.close_pct
+            for idx, target in enumerate(plan.take_profit_targets)
+            if not tp_done[idx]
+        ),
+        Decimal("0"),
+    )
+    if remaining_weight <= 0:
+        return {}
+    avg = state.entry_average_price
+    risk_distance = abs(avg - plan.stop_loss)
+    cap = plan.trader_take_profit or (
+        plan.take_profit if plan.take_profit_source is TakeProfitSource.TRADER else None
+    )
+    zone_pos = AccountPosition(
+        symbol=plan.symbol,
+        side=plan.side,
+        size=state.remaining_quantity,
+        avg_price=avg,
+        mark_price=context.market_price,
+        unrealised_pnl=Decimal("0"),
+        status="Open",
+        take_profit=None,
+        stop_loss=plan.stop_loss,
+    )
+    target_rs = ExitInstaller._resolve_target_rs(plan, zone_pos, risk_distance, cap)
+    exits: dict[str, tuple[Decimal, Decimal]] = {}
+    for index, target in enumerate(plan.take_profit_targets, start=1):
+        if tp_done[index - 1]:
+            continue
+        qty = round_down(
+            state.remaining_quantity * target.close_pct / remaining_weight,
+            context.qty_step,
+        )
+        if qty <= 0 or qty < context.min_qty:
+            continue
+        price = ExitInstaller._compute_exit_price(
+            zone_pos, target_rs[index - 1], risk_distance, cap, context
+        )
+        if price <= avg if plan.side is Side.LONG else price >= avg:
+            raise RuntimeError("Zone TP geometry cannot fit profitable exchange ticks")
+        if any(existing_price == price for _, existing_price in exits.values()):
+            raise RuntimeError("Zone TP geometry cannot fit distinct exchange ticks")
+        if context.min_notional and qty * price < context.min_notional:
+            continue
+        link_id = f"ccb-v2-{plan.intent_id.hex[:20]}-t{index}r{exit_revision}"
+        exits[link_id] = (qty, price)
+    return exits
+
+
+def allocate_source_zone_reduction(
+    action: PositionActionIntent,
+    zones: Sequence[tuple[ExecutionPlan, SourceMessage]],
+    orders: Sequence[ZoneOrder],
+    executions: Sequence[ZoneExecution],
+    context: InstrumentContext,
+) -> tuple[ZoneReductionAllocation, ...]:
+    """Allocate a source CLOSE/REDUCE action only across that source's active zones."""
+    if action.action not in {PositionActionType.CLOSE, PositionActionType.REDUCE}:
+        raise ValueError("Source zone reduction requires a CLOSE or REDUCE action")
+    pct = (
+        Decimal("100")
+        if action.action is PositionActionType.CLOSE
+        else Decimal(str(action.close_pct or 50.0))
+    )
+    allocations: list[ZoneReductionAllocation] = []
+    for plan, source in zones:
+        if (
+            plan.symbol != action.symbol
+            or (
+                action.expected_side is not None
+                and plan.side is not action.expected_side
+            )
+            or source.channel_id != action.source.channel_id
+            or source.message_id >= action.source.message_id
+            or source.published_at > action.source.published_at
+        ):
+            continue
+        state = derive_zone_runner_state(
+            plan, orders, executions, mark_price=context.market_price, context=context
+        )
+        if state.remaining_quantity <= 0:
+            continue
+        reduce_qty = (
+            state.remaining_quantity
+            if action.action is PositionActionType.CLOSE
+            else round_down(
+                state.remaining_quantity * pct / Decimal("100"), context.qty_step
+            )
+        )
+        if reduce_qty <= 0 or reduce_qty < context.min_qty:
+            raise ValueError("Zone reduction rounds below minimum quantity")
+        allocations.append(
+            ZoneReductionAllocation(
+                zone_id=plan.intent_id,
+                remaining_quantity_before=state.remaining_quantity,
+                reduce_quantity=reduce_qty,
+                remaining_quantity_after=state.remaining_quantity - reduce_qty,
+            )
+        )
+    if not allocations:
+        raise ValueError("No active earlier zones owned by this source for this symbol")
+    return tuple(allocations)

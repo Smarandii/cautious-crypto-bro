@@ -10,6 +10,24 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.112] - 2026-11-08
+
+### Added
+
+- Add `derive_zone_fixed_exits`, `ZoneReductionAllocation`, and
+  `allocate_source_zone_reduction` in
+  `src/cautious_crypto_bro/zone_runner_protection.py` to compute per-zone
+  `TP1`/`TP2`/`TP3` exits and source-scoped `CLOSE`/`REDUCE` allocations
+  without affecting sibling zones or other sources (#451, #123).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.111. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.111] - 2026-11-08
 
 ### Added
