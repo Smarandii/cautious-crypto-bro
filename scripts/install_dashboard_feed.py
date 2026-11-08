@@ -15,7 +15,9 @@ from cautious_crypto_bro.dashboard_balance import (  # noqa: E402
     decode_balance_feed,
     validate_balance_feed,
 )
-from cautious_crypto_bro.dashboard_feed import validate_public_feed  # noqa: E402
+from cautious_crypto_bro.dashboard_feed import (  # noqa: E402
+    decode_public_feed,
+)
 
 
 def install_balance() -> None:
@@ -57,7 +59,7 @@ def main() -> None:
     if len(raw.encode("utf-8")) > 60000:
         raise SystemExit("Trade feed exceeds public payload limit")
     try:
-        feed = validate_public_feed(json.loads(raw))
+        feed = decode_public_feed(raw)
     except (ValueError, TypeError):
         raise SystemExit(
             "Public trade feed validation failed; input withheld"

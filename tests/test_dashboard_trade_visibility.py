@@ -18,6 +18,8 @@ import install_dashboard_feed as installer  # noqa: E402
 from export_trade_feed import build_trade_feed  # noqa: E402
 
 from cautious_crypto_bro.dashboard_feed import (  # noqa: E402
+    decode_public_feed,
+    encode_public_feed,
     public_feed_from_snapshot,
     validate_public_feed,
 )
@@ -385,6 +387,10 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
         }
     )
     assert validate_public_feed(feed)["channel_analytics"] == analytics
+    encoded_feed = encode_public_feed(feed)
+    assert len(encoded_feed) < len(json.dumps(feed))
+    assert decode_public_feed(encoded_feed) == feed
+    assert decode_public_feed(json.dumps(feed)) == feed
 
     bad = json.loads(json.dumps(feed))
     bad["channel_analytics"]["rows"][0]["channel"] = "-100111"

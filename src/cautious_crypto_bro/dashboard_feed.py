@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import base64
+import gzip
+import io
 import json
 import math
 import re
 from datetime import datetime
+
+MAX_PUBLIC_FEED_BYTES = 60_000
+MAX_ENCODED_PUBLIC_FEED_BYTES = 48_000
 
 RISK_FIELDS = (
     "risk_per_trade_pct",
@@ -571,3 +577,31 @@ def public_feed_from_snapshot(snapshot: dict) -> dict:
     if snapshot.get("channel_analytics") is not None:
         payload["channel_analytics"] = snapshot["channel_analytics"]
     return validate_public_feed(payload)
+
+
+def encode_public_feed(value: object) -> str:
+    """Compress and base64-encode a validated public trade feed for dispatch."""
+    feed = validate_public_feed(value)
+    raw = json.dumps(feed, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    encoded = base64.b64encode(gzip.compress(raw, mtime=0)).decode("ascii")
+    if len(encoded) > MAX_ENCODED_PUBLIC_FEED_BYTES:
+        raise ValueError("Encoded public trade feed exceeds dispatch budget")
+    return encoded
+
+
+def decode_public_feed(raw: str) -> dict:
+    """Accept either raw JSON or gzip+base64 public trade feed and validate it."""
+    if len(raw.encode("utf-8")) > MAX_PUBLIC_FEED_BYTES:
+        raise ValueError("Trade feed exceeds public payload limit")
+    stripped = raw.strip()
+    if stripped.startswith("{"):
+        return validate_public_feed(json.loads(stripped))
+    try:
+        compressed = base64.b64decode(stripped, validate=True)
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as stream:
+            expanded = stream.read(MAX_PUBLIC_FEED_BYTES + 1)
+        if len(expanded) > MAX_PUBLIC_FEED_BYTES:
+            raise ValueError("Expanded public trade feed exceeds size budget")
+        return validate_public_feed(json.loads(expanded.decode("utf-8")))
+    except (OSError, UnicodeError, ValueError, EOFError) as exc:
+        raise ValueError("Public trade feed validation failed") from exc
