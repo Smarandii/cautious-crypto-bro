@@ -10,6 +10,24 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.102] - 2026-11-08
+
+### Fixed
+
+- Refresh `account_state` and `active_strategies` once in
+  `SignalPlanning._existing_portfolio_stop_risk` when `open_stop_risk_usdt`
+  raises `PortfolioRiskUnavailable` against the pre-extraction snapshot (which
+  can catch a concurrent trade mid-submission or mid-stop-handoff while LLM
+  inference runs), while still failing closed if the refreshed snapshot remains
+  unprotected (#433, #248).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.101. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) and architecture
+  audit items (#262) remain open.
+
 ## [2.2.101] - 2026-11-08
 
 ### Added

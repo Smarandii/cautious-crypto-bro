@@ -42,6 +42,7 @@ from ..domain import (
 from ..execution import ExecutionPlanner, ExecutionPlanningError
 from ..momentum import classify as classify_momentum
 from ..portfolio_risk import (
+    PortfolioRiskUnavailable,
     open_stop_risk_usdt,
     policy_with_remaining_portfolio_risk,
 )
@@ -633,7 +634,15 @@ class SignalPlanning:
             return None
         try:
             active_strategies = await self._store.get_active_position_strategies()
-            return open_stop_risk_usdt(account_state, active_strategies)
+            try:
+                return open_stop_risk_usdt(account_state, active_strategies)
+            except PortfolioRiskUnavailable:
+                refresh = getattr(self._executor, "account_state", None)
+                if refresh is None:
+                    raise
+                refreshed = await refresh()
+                active_strategies = await self._store.get_active_position_strategies()
+                return open_stop_risk_usdt(refreshed, active_strategies)
         except Exception as exc:
             planning_errors.append(
                 f"Portfolio stop-risk cap: {type(exc).__name__}: {exc}"
