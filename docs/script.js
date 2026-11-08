@@ -204,6 +204,7 @@ function renderTradeHistory(data, refreshFailed = false) {
       "Actions (exec / total)",
       "Current policy (W / L · WR)",
       "Current policy Net PnL · R · PF",
+      "Current policy Avg Win / Loss · USDT",
       "All-time size-reconciled (W / L · WR)",
       "All-time size-reconciled Net PnL · R · PF",
       "Terminal-certified (W / L · WR)",
@@ -244,6 +245,9 @@ function renderTradeHistory(data, refreshFailed = false) {
       const curPnl = curCount
         ? `${signed(ch.current_risk_net_pnl_usdt, 2)} USDT · ${signed(ch.current_risk_net_r, 2)}R · ${Number.isFinite(ch.current_risk_profit_factor) ? `${number(ch.current_risk_profit_factor, 2)}×` : "—"}`
         : "—";
+      const curAvgMag = curCount
+        ? `${signed(ch.current_risk_avg_win_usdt, 2)} / ${signed(ch.current_risk_avg_loss_usdt, 2)} USDT`
+        : "—";
       const sizeRecCount = ch.size_reconciled_trades ?? ch.completed_trades ?? 0;
       const sizeRecWl = `${sizeRecCount} (${ch.size_reconciled_winning_trades ?? ch.winning_trades ?? 0}W / ${ch.size_reconciled_losing_trades ?? ch.losing_trades ?? 0}L · ${pct(ch.size_reconciled_win_rate_pct ?? ch.win_rate_pct)})`;
       const sizeRecPnl = sizeRecCount
@@ -258,6 +262,7 @@ function renderTradeHistory(data, refreshFailed = false) {
         `${ch.executed_actions ?? 0} / ${ch.lifecycle_actions ?? 0}`,
         curWl,
         curPnl,
+        curAvgMag,
         sizeRecWl,
         sizeRecPnl,
         `${ch.completed_trades ?? 0} (${ch.winning_trades ?? 0}W / ${ch.losing_trades ?? 0}L · ${pct(ch.win_rate_pct)})`,

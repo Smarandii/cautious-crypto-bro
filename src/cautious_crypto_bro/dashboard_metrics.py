@@ -407,7 +407,7 @@ def _cohort_metrics(
     normalized = [{**p, "complete": True} for p in positions]
     perf = summarize_reconciled_positions(normalized)
     count = int(perf["position_count"])  # type: ignore[arg-type]
-    return {
+    base = {
         f"{prefix}_trades": count,
         f"{prefix}_winning_trades": int(perf["positive_count"]),  # type: ignore[arg-type]
         f"{prefix}_losing_trades": int(perf["negative_count"]),  # type: ignore[arg-type]
@@ -419,6 +419,10 @@ def _cohort_metrics(
         f"{prefix}_expectancy_r": perf["expectancy_r"],
         f"{prefix}_profit_factor": perf["profit_factor"],
     }
+    if prefix == "current_risk":
+        base["current_risk_avg_win_usdt"] = perf["avg_win_usdt"]
+        base["current_risk_avg_loss_usdt"] = perf["avg_loss_usdt"]
+    return base
 
 
 def _active_risk_per_trade_pct(

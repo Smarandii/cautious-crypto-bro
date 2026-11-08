@@ -10,6 +10,23 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.117] - 2026-11-08
+
+### Added
+
+- Add `current_risk_avg_win_usdt` and `current_risk_avg_loss_usdt` to
+  `channel_analytics` in `dashboard_metrics.py`, `dashboard_feed.py`, and
+  `docs/script.js` so the landing page displays per-channel average win and
+  average loss USDT magnitude under the active `3.0%` risk policy (#461, #248).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.116. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.116] - 2026-11-08
 
 ### Added

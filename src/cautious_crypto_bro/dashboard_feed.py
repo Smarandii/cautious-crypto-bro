@@ -102,6 +102,10 @@ CHANNEL_CUR_RISK_FIELDS = (
     *CHANNEL_CUR_RISK_SIGNED_FIELDS,
     "current_risk_profit_factor",
 )
+CHANNEL_CUR_RISK_MAGNITUDE_FIELDS = (
+    "current_risk_avg_win_usdt",
+    "current_risk_avg_loss_usdt",
+)
 CHANNEL_SUMMARY_FIELDS = (
     *CHANNEL_INT_FIELDS,
     "signal_post_ratio_pct",
@@ -122,10 +126,15 @@ CHANNEL_SUMMARY_FIELDS_V4 = (
     *CHANNEL_SUMMARY_FIELDS_V3,
     *CHANNEL_CUR_RISK_FIELDS,
 )
+CHANNEL_SUMMARY_FIELDS_V5 = (
+    *CHANNEL_SUMMARY_FIELDS_V4,
+    *CHANNEL_CUR_RISK_MAGNITUDE_FIELDS,
+)
 CHANNEL_ROW_FIELDS = ("channel", *CHANNEL_SUMMARY_FIELDS)
 CHANNEL_ROW_FIELDS_V2 = ("channel", *CHANNEL_SUMMARY_FIELDS_V2)
 CHANNEL_ROW_FIELDS_V3 = ("channel", *CHANNEL_SUMMARY_FIELDS_V3)
 CHANNEL_ROW_FIELDS_V4 = ("channel", *CHANNEL_SUMMARY_FIELDS_V4)
+CHANNEL_ROW_FIELDS_V5 = ("channel", *CHANNEL_SUMMARY_FIELDS_V5)
 CHANNEL_ANALYTICS_FIELDS = ("available", "rows", "totals")
 EXIT_PROFILES = {
     "baseline",
@@ -208,6 +217,8 @@ def _channel_field_sets(
         int_fields.extend(CHANNEL_CUR_RISK_INT_FIELDS)
         pct_fields.extend(CHANNEL_CUR_RISK_PCT_FIELDS)
         signed_fields.extend(CHANNEL_CUR_RISK_SIGNED_FIELDS)
+    if "current_risk_avg_win_usdt" in summary:
+        signed_fields.extend(CHANNEL_CUR_RISK_MAGNITUDE_FIELDS)
     return tuple(int_fields), tuple(pct_fields), tuple(signed_fields)
 
 
@@ -232,6 +243,8 @@ def _validate_channel_summary(summary: dict) -> None:
 
 
 def _expected_channel_fields(item: object, *, with_channel: bool) -> tuple[str, ...]:
+    if isinstance(item, dict) and "current_risk_avg_win_usdt" in item:
+        return CHANNEL_ROW_FIELDS_V5 if with_channel else CHANNEL_SUMMARY_FIELDS_V5
     if isinstance(item, dict) and "current_risk_trades" in item:
         return CHANNEL_ROW_FIELDS_V4 if with_channel else CHANNEL_SUMMARY_FIELDS_V4
     if isinstance(item, dict) and "size_reconciled_trades" in item:
