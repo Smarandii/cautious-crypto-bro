@@ -17,6 +17,7 @@ from cautious_crypto_bro.zone_ledger import ZoneExecution, ZoneOrder
 from cautious_crypto_bro.zone_portfolio_admission import (
     detect_zone_group_manual_drift,
     evaluate_zone_portfolio_admission,
+    measure_multi_zone_coverage,
 )
 
 
@@ -339,3 +340,31 @@ def test_detect_zone_group_manual_drift_catches_stop_freeze_and_exit_drift(
         stop_drift.pause_reason is not None
         and "not covered by verified child stop" in stop_drift.pause_reason
     )
+
+
+def test_measure_multi_zone_coverage_counts_blocked_sibling_zones_and_limits() -> None:
+    import sqlite3
+    from contextlib import closing
+
+    with closing(sqlite3.connect(":memory:")) as db:
+        assert measure_multi_zone_coverage(db)["multi_zone_groups"] == 0
+        db.executescript(
+            """
+            CREATE TABLE intents(intent_id TEXT, status TEXT, error TEXT, payload_json TEXT);
+            INSERT INTO intents VALUES
+              ('i1', 'EXECUTED', NULL, '{"source":{"channel_id":-1001,"message_id":10},"symbol":"BTCUSDT","side":"LONG"}'),
+              ('i2', 'FAILED', 'EntryPreflightError: Existing strategy owns BTCUSDT', '{"source":{"channel_id":-1001,"message_id":10},"symbol":"BTCUSDT","side":"LONG"}'),
+              ('i3', 'FAILED', 'EntryPreflightError: Existing strategy owns ETHUSDT', '{"source":{"channel_id":-1002,"message_id":20},"symbol":"ETHUSDT","side":"SHORT"}');
+            """
+        )
+        cov = measure_multi_zone_coverage(db)
+    assert cov["single_zone_groups"] == 1
+    assert cov["multi_zone_groups"] == 1
+    assert cov["total_multi_zone_candidates"] == 2
+    assert cov["multi_zone_executed"] == 1
+    assert cov["multi_zone_blocked_ownership_guard"] == 1
+    assert cov["single_zone_blocked_ownership_guard"] == 1
+    assert (
+        "no_profitability_improvement_claimed_from_zone_coverage"
+        in cov["attribution_limits"]
+    )  # type: ignore[operator]

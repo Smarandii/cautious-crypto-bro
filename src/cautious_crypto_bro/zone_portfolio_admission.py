@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -252,3 +254,68 @@ def detect_zone_group_manual_drift(
         automatic_mutations_allowed=False,
         trading_enabled=False,
     )
+
+
+ZONE_ATTRIBUTION_LIMITS = (
+    "unexecuted_sibling_zones_have_no_fill_or_pnl_attribution",
+    "same_account_bybit_trailing_stop_has_no_partial_size_or_parent_selector",
+    "no_profitability_improvement_claimed_from_zone_coverage",
+)
+
+
+def measure_multi_zone_coverage(database) -> dict[str, object]:
+    """Summarize single-zone vs multi-zone OPEN candidate groups without private IDs."""
+    tables = {
+        row[0]
+        for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "intents" not in tables:
+        return {
+            "single_zone_groups": 0,
+            "multi_zone_groups": 0,
+            "total_multi_zone_candidates": 0,
+            "multi_zone_executed": 0,
+            "multi_zone_blocked_ownership_guard": 0,
+            "single_zone_blocked_ownership_guard": 0,
+            "attribution_limits": list(ZONE_ATTRIBUTION_LIMITS),
+        }
+    cols = {row[1] for row in database.execute("PRAGMA table_info(intents)")}
+    err_sql = "COALESCE(error, '')" if "error" in cols else "''"
+    groups: dict[tuple[object, object, object, object], list[tuple[str, str]]] = (
+        defaultdict(list)
+    )
+    for status, err, payload_str in database.execute(
+        f"SELECT status, {err_sql}, payload_json FROM intents"
+    ):
+        payload = json.loads(payload_str)
+        source = payload.get("source") or {}
+        key = (
+            source.get("channel_id"),
+            source.get("message_id"),
+            payload.get("symbol"),
+            payload.get("side"),
+        )
+        groups[key].append((str(status or ""), str(err or "")))
+    single_groups = [items for items in groups.values() if len(items) == 1]
+    multi_groups = [items for items in groups.values() if len(items) > 1]
+    return {
+        "single_zone_groups": len(single_groups),
+        "multi_zone_groups": len(multi_groups),
+        "total_multi_zone_candidates": sum(len(items) for items in multi_groups),
+        "multi_zone_executed": sum(
+            1 for items in multi_groups for st, _ in items if st == "EXECUTED"
+        ),
+        "multi_zone_blocked_ownership_guard": sum(
+            1
+            for items in multi_groups
+            for st, err in items
+            if st == "FAILED" and "existing strategy owns" in err.lower()
+        ),
+        "single_zone_blocked_ownership_guard": sum(
+            1
+            for items in single_groups
+            for st, err in items
+            if st == "FAILED" and "existing strategy owns" in err.lower()
+        ),
+        "attribution_limits": list(ZONE_ATTRIBUTION_LIMITS),
+    }
