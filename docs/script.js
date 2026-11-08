@@ -382,6 +382,58 @@ function renderTradeHistory(data, refreshFailed = false) {
         }
       }
     }
+    if (Array.isArray(channelAnalytics.setup_cohorts) && channelAnalytics.setup_cohorts.length) {
+      add("h3", "Signal setup (entry type × stop source) meta-analysis", channelSection);
+      add(
+        "p",
+        "Compares MARKET, LIMIT, and RANGE entries paired with trader-supplied explicit stop losses (_TRADER) versus policy-derived default stops (_POLICY).",
+        channelSection,
+      );
+      const setupScroll = add("div", "", channelSection);
+      setupScroll.className = "trade-table-scroll";
+      setupScroll.tabIndex = 0;
+      setupScroll.setAttribute("role", "region");
+      setupScroll.setAttribute("aria-label", "Signal setup meta-analysis table");
+      const setupTable = add("table", "", setupScroll);
+      add("caption", "Performance by entry type and stop-loss source", setupTable);
+      const setupHead = add("tr", "", add("thead", "", setupTable));
+      for (const col of [
+        "Signal setup",
+        "Current policy (W / L · WR)",
+        "Current policy Net PnL · R · PF",
+        "Current policy Avg Win / Loss · USDT",
+        "All-time size-reconciled (W / L · WR)",
+        "All-time size-reconciled Net PnL · R · PF",
+        "Terminal-certified (W / L · WR)",
+        "Terminal Net PnL · USDT",
+      ]) {
+        add("th", col, setupHead).scope = "col";
+      }
+      const setupBody = add("tbody", "", setupTable);
+      for (const st of channelAnalytics.setup_cohorts) {
+        const tr = add("tr", "", setupBody);
+        const curN = st.current_risk_trades ?? 0;
+        const sizeN = st.size_reconciled_trades ?? 0;
+        for (const cell of [
+          st.setup,
+          `${curN} (${st.current_risk_winning_trades ?? 0}W / ${st.current_risk_losing_trades ?? 0}L · ${pct(st.current_risk_win_rate_pct)})`,
+          curN
+            ? `${signed(st.current_risk_net_pnl_usdt, 2)} USDT · ${signed(st.current_risk_net_r, 2)}R · ${Number.isFinite(st.current_risk_profit_factor) ? `${number(st.current_risk_profit_factor, 2)}×` : "—"}`
+            : "—",
+          curN
+            ? `${signed(st.current_risk_avg_win_usdt, 2)} / ${signed(st.current_risk_avg_loss_usdt, 2)} USDT`
+            : "—",
+          `${sizeN} (${st.size_reconciled_winning_trades ?? 0}W / ${st.size_reconciled_losing_trades ?? 0}L · ${pct(st.size_reconciled_win_rate_pct)})`,
+          sizeN
+            ? `${signed(st.size_reconciled_net_pnl_usdt, 2)} USDT · ${signed(st.size_reconciled_net_r, 2)}R · ${Number.isFinite(st.size_reconciled_profit_factor) ? `${number(st.size_reconciled_profit_factor, 2)}×` : "—"}`
+            : "—",
+          `${st.completed_trades ?? 0} (${st.winning_trades ?? 0}W / ${st.losing_trades ?? 0}L · ${pct(st.win_rate_pct)})`,
+          signed(st.net_pnl_usdt, 2),
+        ]) {
+          add("td", cell, tr);
+        }
+      }
+    }
   }
   if (!history?.available) {
     add("p", "Trade evidence unavailable. No outcomes inferred.");

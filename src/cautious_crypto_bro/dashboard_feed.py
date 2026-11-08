@@ -178,7 +178,24 @@ LADDER_COHORT_FIELDS = (
     "size_reconciled_profit_factor",
     "current_risk_profit_factor",
 )
+SETUP_COHORT_FIELDS = (
+    "setup",
+    *EXIT_COHORT_INT_FIELDS,
+    *EXIT_COHORT_PCT_FIELDS,
+    *EXIT_COHORT_SIGNED_FIELDS,
+    "profit_factor",
+    "size_reconciled_profit_factor",
+    "current_risk_profit_factor",
+)
 LADDER_DEPTHS = {"E1_only", "E1_E2", "E1_E2_E3_full"}
+SIGNAL_SETUPS = {
+    "MARKET_TRADER",
+    "MARKET_POLICY",
+    "LIMIT_TRADER",
+    "LIMIT_POLICY",
+    "RANGE_TRADER",
+    "RANGE_POLICY",
+}
 CHANNEL_ANALYTICS_FIELDS = ("available", "rows", "totals")
 EXIT_PROFILES = {
     "baseline",
@@ -350,17 +367,41 @@ def _validate_ladder_cohorts(cohorts: object) -> None:
         _validate_cohort_numbers(row)
 
 
-def _validate_channel_analytics(value: object) -> None:
-    extra_fields: list[str] = []
-    if isinstance(value, dict) and "exit_cohorts" in value:
-        extra_fields.append("exit_cohorts")
-    if isinstance(value, dict) and "ladder_cohorts" in value:
-        extra_fields.append("ladder_cohorts")
-    analytics = _fields(value, (*CHANNEL_ANALYTICS_FIELDS, *extra_fields))
+def _validate_setup_cohorts(cohorts: object) -> None:
+    if not isinstance(cohorts, list) or len(cohorts) > 10:
+        raise ValueError("Invalid public setup cohorts")
+    seen: set[str] = set()
+    for item in cohorts:
+        row = _fields(item, SETUP_COHORT_FIELDS)
+        setup = row["setup"]
+        if not isinstance(setup, str) or setup not in SIGNAL_SETUPS or setup in seen:
+            raise ValueError("Invalid or duplicate public signal setup cohort")
+        seen.add(setup)
+        _validate_cohort_numbers(row)
+
+
+def _validate_optional_analytics_cohorts(value: object) -> dict:
+    extra = (
+        tuple(
+            key
+            for key in ("exit_cohorts", "ladder_cohorts", "setup_cohorts")
+            if key in value
+        )
+        if isinstance(value, dict)
+        else ()
+    )
+    analytics = _fields(value, (*CHANNEL_ANALYTICS_FIELDS, *extra))
     if "exit_cohorts" in analytics:
         _validate_exit_cohorts(analytics["exit_cohorts"])
     if "ladder_cohorts" in analytics:
         _validate_ladder_cohorts(analytics["ladder_cohorts"])
+    if "setup_cohorts" in analytics:
+        _validate_setup_cohorts(analytics["setup_cohorts"])
+    return analytics
+
+
+def _validate_channel_analytics(value: object) -> None:
+    analytics = _validate_optional_analytics_cohorts(value)
     if type(analytics["available"]) is not bool:
         raise ValueError("Invalid channel analytics availability")
     rows = analytics["rows"]

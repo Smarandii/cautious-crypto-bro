@@ -356,6 +356,8 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
     assert analytics["exit_cohorts"][0]["size_reconciled_trades"] == 3
     assert analytics["ladder_cohorts"][0]["ladder_depth"] == "E1_only"
     assert analytics["ladder_cohorts"][0]["size_reconciled_trades"] == 3
+    assert analytics["setup_cohorts"][0]["setup"] == "MARKET_TRADER"
+    assert analytics["setup_cohorts"][0]["size_reconciled_trades"] == 3
 
     history = public_trade_history(positions, available=True)
     history["as_of"] = "2026-11-08T00:00:00+00:00"
