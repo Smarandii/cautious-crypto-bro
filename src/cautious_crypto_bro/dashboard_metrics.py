@@ -659,6 +659,7 @@ def build_channel_analytics(
 ) -> dict[str, object] | None:
     """Summarize per-channel signal pickup and reconciled PnL with privacy-safe IDs."""
     from .dashboard_cohorts import (
+        build_channel_exit_cohorts,
         build_decision_cohorts,
         build_exit_cohorts,
         build_ladder_cohorts,
@@ -754,6 +755,9 @@ def build_channel_analytics(
             database, tables, known_positions, known_size_rec, known_cur_risk
         ),
         "decision_cohorts": build_decision_cohorts(database, tables, channel_aliases),
+        "channel_exit_cohorts": build_channel_exit_cohorts(
+            channel_aliases, known_positions, known_size_rec, known_cur_risk
+        ),
     }
 
 
