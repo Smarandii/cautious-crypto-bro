@@ -10,6 +10,23 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.120] - 2026-11-08
+
+### Added
+
+- Add `exit_cohorts` to `channel_analytics` in `dashboard_metrics.py`,
+  `dashboard_feed.py`, and `docs/script.js` to display per-exit-profile and
+  randomized LONG A/B arm (`0.20R` control vs `0.15R` treatment) meta-analysis
+  on the landing page (#467, #248).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.119. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.119] - 2026-11-08
 
 ### Added
