@@ -10,6 +10,23 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.100] - 2026-11-08
+
+### Fixed
+
+- Retry `fetch_daily_wallet_history` inside `collect_balance_feed` on transient
+  Bybit `transaction-log` indexing lag at 8-hour funding boundaries (`Demo
+  ledger does not reconcile to its wallet anchor` / `Demo wallet changed while
+  reading its ledger`), while still failing closed if reconciliation does not
+  converge (#429, #248).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.99. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) and architecture
+  audit items (#262) remain open.
+
 ## [2.2.99] - 2026-11-08
 
 ### Changed

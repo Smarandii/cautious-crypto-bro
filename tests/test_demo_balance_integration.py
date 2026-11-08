@@ -491,3 +491,54 @@ def test_pages_installs_compressed_whitelisted_balance_without_truncation(
     with pytest.raises(SystemExit, match="input withheld"):
         installer.install_balance()
     assert target.read_bytes() == original
+
+
+def test_collect_balance_feed_retries_transient_funding_index_lag(
+    tmp_path, monkeypatch
+):
+    snapshot = daily_wallet_history(
+        history(), start=START, as_of=AS_OF, wallet_balance="1500"
+    )
+    attempts = 0
+    delays: list[float] = []
+
+    def flaky_fetch(_client):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError("Demo ledger does not reconcile to its wallet anchor")
+        return deepcopy(snapshot)
+
+    monkeypatch.setattr(balance_cache, "fetch_daily_wallet_history", flaky_fetch)
+    target = tmp_path / balance_cache.BALANCE_CACHE_FILENAME
+    feed = balance_cache.collect_balance_feed(
+        None,
+        target,
+        api_key="invented-key",
+        database_path=tmp_path / "state.db",
+        retry_delays=(2.0, 5.0),
+        sleep=delays.append,
+    )
+    assert feed["refresh_failed"] is False
+    assert attempts == 2
+    assert delays == [2.0]
+
+    # Persistent anchor mismatch still fails closed after bounded retries.
+    delays.clear()
+    monkeypatch.setattr(
+        balance_cache,
+        "fetch_daily_wallet_history",
+        lambda _client: (_ for _ in ()).throw(
+            ValueError("Demo ledger does not reconcile to its wallet anchor")
+        ),
+    )
+    failed = balance_cache.collect_balance_feed(
+        None,
+        target,
+        api_key="invented-key",
+        database_path=tmp_path / "state.db",
+        retry_delays=(2.0, 5.0),
+        sleep=delays.append,
+    )
+    assert failed["refresh_failed"] is True
+    assert delays == [2.0, 5.0]
