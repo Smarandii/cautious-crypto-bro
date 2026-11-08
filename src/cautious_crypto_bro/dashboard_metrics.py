@@ -388,6 +388,23 @@ def summarize_intent_outcomes(
     }
 
 
+def _side_metrics(
+    positions: list[Mapping[str, object]], side: str
+) -> dict[str, object]:
+    subset = [p for p in positions if p.get("side") == side]
+    perf = summarize_reconciled_positions(subset)
+    count = int(perf["position_count"])  # type: ignore[arg-type]
+    prefix = side.lower()
+    return {
+        f"{prefix}_trades": count,
+        f"{prefix}_win_rate_pct": perf["win_rate_pct"],
+        f"{prefix}_net_pnl_usdt": perf["net_pnl_usdt"] if count else 0.0,
+        f"{prefix}_net_r": (
+            _rounded(sum(_number(p, "net_r") for p in subset), 6) if count else 0.0
+        ),
+    }
+
+
 def _channel_summary(
     *,
     total_posts: int,
@@ -397,6 +414,9 @@ def _channel_summary(
     executed_intents: int,
     skipped_intents: int,
     failed_intents: int,
+    failed_ownership_guard: int,
+    failed_risk_budget_guard: int,
+    failed_other: int,
     lifecycle_actions: int,
     executed_actions: int,
     positions: list[Mapping[str, object]],
@@ -424,6 +444,9 @@ def _channel_summary(
         ),
         "skipped_intents": skipped_intents,
         "failed_intents": failed_intents,
+        "failed_ownership_guard": failed_ownership_guard,
+        "failed_risk_budget_guard": failed_risk_budget_guard,
+        "failed_other": failed_other,
         "lifecycle_actions": lifecycle_actions,
         "executed_actions": executed_actions,
         "completed_trades": completed_trades,
@@ -435,6 +458,8 @@ def _channel_summary(
         "expectancy_usdt": perf["expectancy_usdt"],
         "expectancy_r": perf["expectancy_r"],
         "profit_factor": perf["profit_factor"],
+        **_side_metrics(positions, "LONG"),
+        **_side_metrics(positions, "SHORT"),
     }
 
 
@@ -445,12 +470,23 @@ _INTENT_STATUS_FIELDS = {
 }
 
 
+def _failed_reason_field(error: str) -> str:
+    normalized = error.lower()
+    if "existing strategy owns" in normalized:
+        return "failed_ownership_guard"
+    if "market moved enough" in normalized or "risk budget" in normalized:
+        return "failed_risk_budget_guard"
+    return "failed_other"
+
+
 def _accumulate_channel_intents(
     database, buckets: dict[str, dict[str, object]]
 ) -> None:
-    for cid, mid, status in database.execute(
+    cols = {row[1] for row in database.execute("PRAGMA table_info(intents)")}
+    err_sql = "COALESCE(error, '')" if "error" in cols else "''"
+    for cid, mid, status, err in database.execute(
         "SELECT CAST(json_extract(payload_json, '$.source.channel_id') AS TEXT), "
-        "json_extract(payload_json, '$.source.message_id'), status FROM intents"
+        f"json_extract(payload_json, '$.source.message_id'), status, {err_sql} FROM intents"
     ):
         bucket = buckets.get(str(cid))
         if bucket is None:
@@ -461,6 +497,9 @@ def _accumulate_channel_intents(
         field = _INTENT_STATUS_FIELDS.get(str(status))
         if field is not None:
             bucket[field] = int(bucket[field]) + 1  # type: ignore[arg-type]
+        if status == "FAILED":
+            r_field = _failed_reason_field(str(err or ""))
+            bucket[r_field] = int(bucket[r_field]) + 1  # type: ignore[arg-type]
 
 
 def _accumulate_channel_actions(
@@ -495,12 +534,35 @@ def _channel_funnel_buckets(database) -> dict[str, dict[str, object]]:
             "executed_intents": 0,
             "skipped_intents": 0,
             "failed_intents": 0,
+            "failed_ownership_guard": 0,
+            "failed_risk_budget_guard": 0,
+            "failed_other": 0,
             "lifecycle_actions": 0,
             "executed_actions": 0,
         }
     _accumulate_channel_intents(database, buckets)
     _accumulate_channel_actions(database, buckets)
     return buckets
+
+
+def _bucket_summary(
+    bucket: dict[str, object], positions: list[Mapping[str, object]]
+) -> dict[str, object]:
+    return _channel_summary(
+        total_posts=int(bucket["total_posts"]),  # type: ignore[arg-type]
+        completed_posts=int(bucket["completed_posts"]),  # type: ignore[arg-type]
+        signal_posts=len(bucket["signal_msgs"]),  # type: ignore[arg-type]
+        open_intents=int(bucket["open_intents"]),  # type: ignore[arg-type]
+        executed_intents=int(bucket["executed_intents"]),  # type: ignore[arg-type]
+        skipped_intents=int(bucket["skipped_intents"]),  # type: ignore[arg-type]
+        failed_intents=int(bucket["failed_intents"]),  # type: ignore[arg-type]
+        failed_ownership_guard=int(bucket["failed_ownership_guard"]),  # type: ignore[arg-type]
+        failed_risk_budget_guard=int(bucket["failed_risk_budget_guard"]),  # type: ignore[arg-type]
+        failed_other=int(bucket["failed_other"]),  # type: ignore[arg-type]
+        lifecycle_actions=int(bucket["lifecycle_actions"]),  # type: ignore[arg-type]
+        executed_actions=int(bucket["executed_actions"]),  # type: ignore[arg-type]
+        positions=positions,
+    )
 
 
 def build_channel_analytics(
@@ -519,19 +581,12 @@ def build_channel_analytics(
     rows: list[dict[str, object]] = []
     for index, (cid, bucket) in enumerate(buckets.items(), 1):
         ch_positions = [p for p in complete if str(p.get("source_channel_id")) == cid]
-        summary = _channel_summary(
-            total_posts=int(bucket["total_posts"]),  # type: ignore[arg-type]
-            completed_posts=int(bucket["completed_posts"]),  # type: ignore[arg-type]
-            signal_posts=len(bucket["signal_msgs"]),  # type: ignore[arg-type]
-            open_intents=int(bucket["open_intents"]),  # type: ignore[arg-type]
-            executed_intents=int(bucket["executed_intents"]),  # type: ignore[arg-type]
-            skipped_intents=int(bucket["skipped_intents"]),  # type: ignore[arg-type]
-            failed_intents=int(bucket["failed_intents"]),  # type: ignore[arg-type]
-            lifecycle_actions=int(bucket["lifecycle_actions"]),  # type: ignore[arg-type]
-            executed_actions=int(bucket["executed_actions"]),  # type: ignore[arg-type]
-            positions=ch_positions,
+        rows.append(
+            {
+                "channel": f"source_{index}",
+                **_bucket_summary(bucket, ch_positions),
+            }
         )
-        rows.append({"channel": f"source_{index}", **summary})
     rows.sort(
         key=lambda r: (
             -int(r["completed_trades"]),  # type: ignore[arg-type]
@@ -543,22 +598,29 @@ def build_channel_analytics(
     known_positions = [
         p for p in complete if str(p.get("source_channel_id")) in known_cids
     ]
-    totals = _channel_summary(
-        total_posts=sum(int(b["total_posts"]) for b in buckets.values()),  # type: ignore[arg-type]
-        completed_posts=sum(int(b["completed_posts"]) for b in buckets.values()),  # type: ignore[arg-type]
-        signal_posts=sum(len(b["signal_msgs"]) for b in buckets.values()),  # type: ignore[arg-type]
-        open_intents=sum(int(b["open_intents"]) for b in buckets.values()),  # type: ignore[arg-type]
-        executed_intents=sum(int(b["executed_intents"]) for b in buckets.values()),  # type: ignore[arg-type]
-        skipped_intents=sum(int(b["skipped_intents"]) for b in buckets.values()),  # type: ignore[arg-type]
-        failed_intents=sum(int(b["failed_intents"]) for b in buckets.values()),  # type: ignore[arg-type]
-        lifecycle_actions=sum(int(b["lifecycle_actions"]) for b in buckets.values()),  # type: ignore[arg-type]
-        executed_actions=sum(int(b["executed_actions"]) for b in buckets.values()),  # type: ignore[arg-type]
-        positions=known_positions,
+    total_bucket: dict[str, object] = {
+        key: sum(int(b[key]) for b in buckets.values())  # type: ignore[arg-type]
+        for key in (
+            "total_posts",
+            "completed_posts",
+            "open_intents",
+            "executed_intents",
+            "skipped_intents",
+            "failed_intents",
+            "failed_ownership_guard",
+            "failed_risk_budget_guard",
+            "failed_other",
+            "lifecycle_actions",
+            "executed_actions",
+        )
+    }
+    total_bucket["signal_msgs"] = range(
+        sum(len(b["signal_msgs"]) for b in buckets.values())  # type: ignore[arg-type]
     )
     return {
         "available": bool(rows),
         "rows": rows,
-        "totals": totals,
+        "totals": _bucket_summary(total_bucket, known_positions),
     }
 
 

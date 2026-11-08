@@ -200,10 +200,12 @@ function renderTradeHistory(data, refreshFailed = false) {
       "Posts",
       "Signal posts (%)",
       "Signals picked up (exec / open)",
-      "Skipped / Failed",
+      "Skipped / Failed (owned · risk · other)",
       "Actions (exec / total)",
       "Completed trades (W / L)",
       "Win rate",
+      "LONG (trades · WR · PnL)",
+      "SHORT (trades · WR · PnL)",
       "Net PnL · USDT",
       "Net R",
       "Expectancy · R",
@@ -218,6 +220,10 @@ function renderTradeHistory(data, refreshFailed = false) {
         : "—";
     const pct = (value) =>
       Number.isFinite(value) ? `${number(value, 2)}%` : "—";
+    const sideCell = (count, wr, pnl) =>
+      count
+        ? `${count} · ${pct(wr)} · ${signed(pnl, 2)} USDT`
+        : "0";
     const allRows = channelAnalytics.totals
       ? [
           ...channelAnalytics.rows,
@@ -226,15 +232,21 @@ function renderTradeHistory(data, refreshFailed = false) {
       : channelAnalytics.rows;
     for (const ch of allRows) {
       const tr = add("tr", "", tbody);
+      const failedDetail =
+        ch.failed_ownership_guard != null
+          ? `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0} (${ch.failed_ownership_guard}·${ch.failed_risk_budget_guard ?? 0}·${ch.failed_other ?? 0})`
+          : `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0}`;
       for (const cell of [
         ch.channel,
         `${ch.total_posts ?? 0}`,
         `${ch.signal_posts ?? 0} (${pct(ch.signal_post_ratio_pct)})`,
         `${ch.executed_intents ?? 0} / ${ch.open_intents ?? 0} (${pct(ch.pickup_rate_pct)})`,
-        `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0}`,
+        failedDetail,
         `${ch.executed_actions ?? 0} / ${ch.lifecycle_actions ?? 0}`,
         `${ch.completed_trades ?? 0} (${ch.winning_trades ?? 0}W / ${ch.losing_trades ?? 0}L)`,
         pct(ch.win_rate_pct),
+        sideCell(ch.long_trades, ch.long_win_rate_pct, ch.long_net_pnl_usdt),
+        sideCell(ch.short_trades, ch.short_win_rate_pct, ch.short_net_pnl_usdt),
         signed(ch.net_pnl_usdt, 2),
         signed(ch.net_r, 3),
         signed(ch.expectancy_r, 3),

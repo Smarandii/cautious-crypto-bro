@@ -10,6 +10,23 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.103] - 2026-11-08
+
+### Added
+
+- Extend `channel_analytics` in `dashboard_metrics.py`, `dashboard_feed.py`,
+  and `docs/script.js` with per-channel directional (`LONG` vs `SHORT` trade
+  count, win rate, net USDT PnL, and net R) and failure-reason
+  (`failed_ownership_guard`, `failed_risk_budget_guard`, `failed_other`)
+  breakdowns (#435, #248).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.102. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) and architecture
+  audit items (#262) remain open.
+
 ## [2.2.102] - 2026-11-08
 
 ### Fixed

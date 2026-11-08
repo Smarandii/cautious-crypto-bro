@@ -46,6 +46,28 @@ CHANNEL_INT_FIELDS = (
     "winning_trades",
     "losing_trades",
 )
+CHANNEL_EXTENDED_INT_FIELDS = (
+    "failed_ownership_guard",
+    "failed_risk_budget_guard",
+    "failed_other",
+    "long_trades",
+    "short_trades",
+)
+CHANNEL_EXTENDED_PCT_FIELDS = (
+    "long_win_rate_pct",
+    "short_win_rate_pct",
+)
+CHANNEL_EXTENDED_SIGNED_FIELDS = (
+    "long_net_pnl_usdt",
+    "long_net_r",
+    "short_net_pnl_usdt",
+    "short_net_r",
+)
+CHANNEL_EXTENDED_FIELDS = (
+    *CHANNEL_EXTENDED_INT_FIELDS,
+    *CHANNEL_EXTENDED_PCT_FIELDS,
+    *CHANNEL_EXTENDED_SIGNED_FIELDS,
+)
 CHANNEL_SUMMARY_FIELDS = (
     *CHANNEL_INT_FIELDS,
     "signal_post_ratio_pct",
@@ -57,7 +79,9 @@ CHANNEL_SUMMARY_FIELDS = (
     "expectancy_r",
     "profit_factor",
 )
+CHANNEL_SUMMARY_FIELDS_V2 = (*CHANNEL_SUMMARY_FIELDS, *CHANNEL_EXTENDED_FIELDS)
 CHANNEL_ROW_FIELDS = ("channel", *CHANNEL_SUMMARY_FIELDS)
+CHANNEL_ROW_FIELDS_V2 = ("channel", *CHANNEL_SUMMARY_FIELDS_V2)
 CHANNEL_ANALYTICS_FIELDS = ("available", "rows", "totals")
 EXIT_PROFILES = {
     "baseline",
@@ -118,15 +142,41 @@ def validate_public_feed(feed: object) -> dict:
 
 
 def _validate_channel_summary(summary: dict) -> None:
-    for field in CHANNEL_INT_FIELDS:
+    int_fields = (
+        (*CHANNEL_INT_FIELDS, *CHANNEL_EXTENDED_INT_FIELDS)
+        if "long_trades" in summary
+        else CHANNEL_INT_FIELDS
+    )
+    pct_fields = (
+        (
+            "signal_post_ratio_pct",
+            "pickup_rate_pct",
+            "win_rate_pct",
+            *CHANNEL_EXTENDED_PCT_FIELDS,
+        )
+        if "long_trades" in summary
+        else ("signal_post_ratio_pct", "pickup_rate_pct", "win_rate_pct")
+    )
+    signed_fields = (
+        (
+            "net_pnl_usdt",
+            "net_r",
+            "expectancy_usdt",
+            "expectancy_r",
+            *CHANNEL_EXTENDED_SIGNED_FIELDS,
+        )
+        if "long_trades" in summary
+        else ("net_pnl_usdt", "net_r", "expectancy_usdt", "expectancy_r")
+    )
+    for field in int_fields:
         if type(summary[field]) is not int or summary[field] < 0:
             raise ValueError("Invalid public channel integer count")
-    for field in ("signal_post_ratio_pct", "pickup_rate_pct", "win_rate_pct"):
+    for field in pct_fields:
         _number(summary[field], nonnegative=True)
         if summary[field] is not None and summary[field] > 100:
             raise ValueError("Public channel percentage exceeds 100")
     _number(summary["profit_factor"], nonnegative=True)
-    for field in ("net_pnl_usdt", "net_r", "expectancy_usdt", "expectancy_r"):
+    for field in signed_fields:
         _number(summary[field])
 
 
@@ -139,7 +189,12 @@ def _validate_channel_analytics(value: object) -> None:
         raise ValueError("Invalid public channel analytics rows")
     seen: set[str] = set()
     for item in rows:
-        row = _fields(item, CHANNEL_ROW_FIELDS)
+        expected_row = (
+            CHANNEL_ROW_FIELDS_V2
+            if isinstance(item, dict) and "long_trades" in item
+            else CHANNEL_ROW_FIELDS
+        )
+        row = _fields(item, expected_row)
         channel = row["channel"]
         if (
             not isinstance(channel, str)
@@ -149,7 +204,13 @@ def _validate_channel_analytics(value: object) -> None:
             raise ValueError("Invalid or duplicate public channel identifier")
         seen.add(channel)
         _validate_channel_summary(row)
-    totals = _fields(analytics["totals"], CHANNEL_SUMMARY_FIELDS)
+    raw_totals = analytics["totals"]
+    expected_totals = (
+        CHANNEL_SUMMARY_FIELDS_V2
+        if isinstance(raw_totals, dict) and "long_trades" in raw_totals
+        else CHANNEL_SUMMARY_FIELDS
+    )
+    totals = _fields(raw_totals, expected_totals)
     _validate_channel_summary(totals)
 
 
