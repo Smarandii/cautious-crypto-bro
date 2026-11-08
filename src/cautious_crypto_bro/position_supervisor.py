@@ -336,7 +336,9 @@ class PositionSupervisor:
             if state.expected_exits is not None:
                 exit_drift = await self._fill_detector.drift_reason(state, account)
                 if exit_drift is not None:
-                    return await self._manual_override(state, account, exit_drift)
+                    return await self._confirm_exit_drift_or_close(
+                        state, account, exit_drift
+                    )
             account = await self._exit_installer.handoff_partial_stops(
                 state,
                 plan,
@@ -349,7 +351,7 @@ class PositionSupervisor:
 
         exit_drift = await self._fill_detector.drift_reason(state, account)
         if exit_drift is not None:
-            return await self._manual_override(state, account, exit_drift)
+            return await self._confirm_exit_drift_or_close(state, account, exit_drift)
 
         # Live positions must pass drift validation before expiry can cancel
         # entries or replace protection.
@@ -460,6 +462,19 @@ class PositionSupervisor:
                 )
             )
         return account
+
+    async def _confirm_exit_drift_or_close(
+        self,
+        state: PositionStrategy,
+        account: AccountStateSummary,
+        exit_drift: str,
+    ) -> AccountStateSummary:
+        refreshed = await self._executor.account_state()
+        if self._position(state, refreshed) is None:
+            return await self._handle_missing_position(
+                state, self._pending_entries(state, refreshed), refreshed
+            )
+        return await self._manual_override(state, account, exit_drift)
 
     async def _manual_override(
         self,

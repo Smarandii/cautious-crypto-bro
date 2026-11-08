@@ -986,3 +986,49 @@ def test_real_fixed_exit_fill_does_not_trigger_drift(tmp_path, partial):
             assert not await store.get_pending_strategy_alerts()
 
     asyncio.run(run())
+
+
+def test_multi_chunk_stop_close_clamping_exit_transitions_to_closed(tmp_path):
+    class MultiChunkStopExchange(Exchange):
+        position_reads = 0
+        closing_in_chunks = False
+
+        def handle(self, request):
+            if self.closing_in_chunks and request.url.path == "/v5/position/list":
+                self.position_reads += 1
+                if self.position_reads >= 2:
+                    self.size = Decimal("0")
+                    for o in self.orders.values():
+                        if o["orderStatus"] == "New":
+                            o["orderStatus"] = "Cancelled"
+            return super().handle(request)
+
+    async def run():
+        exchange = MultiChunkStopExchange()
+        with executor_for(exchange) as executor:
+            store, intent, _, coordinator, supervisor = await prepare(
+                tmp_path / "state.db", exchange, executor
+            )
+            await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            exchange.mark = Decimal("102")
+            await supervisor.reconcile_once()
+            # Simulate Bybit clamping TP1 quantity to the final trailing-stop chunk
+            # on the first read while the final chunk flattens the position on the next read.
+            target = next(
+                order for order in exchange.exits() if "-t1r" in order["orderLinkId"]
+            )
+            target["qty"] = "0.01"
+            target["leavesQty"] = "0.01"
+            exchange.size = Decimal("0.01")
+            exchange.closing_in_chunks = True
+            exchange.position_reads = 0
+            await supervisor.reconcile_once()
+            assert not await store.get_active_position_strategies()
+            assert not await store.get_pending_strategy_alerts()
+            with sqlite3.connect(tmp_path / "state.db") as db:
+                row = db.execute("SELECT status FROM position_strategies").fetchone()
+                assert row == (StrategyStatus.CLOSED.value,)
+
+    asyncio.run(run())
