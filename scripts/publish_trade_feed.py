@@ -28,7 +28,10 @@ from cautious_crypto_bro.dashboard_balance import (  # noqa: E402
     encode_balance_feed,
     validate_balance_feed,
 )
-from cautious_crypto_bro.dashboard_feed import validate_public_feed  # noqa: E402
+from cautious_crypto_bro.dashboard_feed import (  # noqa: E402
+    encode_public_feed,
+    validate_public_feed,
+)
 from cautious_crypto_bro.state_ownership import state_ownership  # noqa: E402
 from cautious_crypto_bro.terminal_entry_evidence import (  # noqa: E402
     TerminalEvidenceUnavailable,
@@ -189,6 +192,8 @@ def _github_dispatch(
     }
     if balance is not None:
         payload["inputs"]["balance_feed"] = encode_balance_feed(balance)
+    if len(json.dumps(payload).encode()) > 64_000:
+        payload["inputs"]["trade_feed"] = encode_public_feed(feed)
     if len(json.dumps(payload).encode()) > 64_000:
         raise ValueError("Complete public feeds exceed the dispatch budget")
     request = Request(

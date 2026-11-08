@@ -10,6 +10,25 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.125] - 2026-11-08
+
+### Fixed
+
+- Add `encode_public_feed` and `decode_public_feed` in
+  `src/cautious_crypto_bro/dashboard_feed.py` and fall back to gzip+base64
+  compression for `trade_feed` in `scripts/publish_trade_feed.py` and
+  `scripts/install_dashboard_feed.py` when the combined `trade_feed` +
+  `balance_feed` GitHub Actions `workflow_dispatch` payload exceeds 64 KB
+  (#477, #248).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.124. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.124] - 2026-11-08
 
 ### Added
