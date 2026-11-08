@@ -29,6 +29,7 @@ from cautious_crypto_bro.zone_ledger import ZoneExecution, ZoneOrder, zone_group
 from cautious_crypto_bro.zone_runner_protection import (
     cancel_zone_pending_entries,
     derive_zone_runner_state,
+    evaluate_zone_group_runner_contract,
     zone_group_open_stop_risk_usdt,
     zone_pending_entry_orders,
 )
@@ -883,4 +884,152 @@ def test_zone_group_open_stop_risk_rejects_corrupt_ledger_or_order_states() -> N
                 ),
                 (),
             ),
+        )
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_zone_group_runner_contract_handles_late_fills_and_flags_same_account_partial_trailing(
+    side: Side,
+) -> None:
+    if side is Side.LONG:
+        _, plan_a = _make_plan(
+            side, "98", "100", "90", activation_r="0.5", trail_r="0.2", locked_r="0.1"
+        )
+        _, plan_b = _make_plan(
+            side, "92", "94", "84", activation_r="1.0", trail_r="0.3", locked_r="0.2"
+        )
+        fill_a1, fill_a2_late, fill_b1 = D("100"), D("99"), D("93")
+        mark_pre_trail = D("101")
+        mark_trail_a = D("105")
+    else:
+        _, plan_a = _make_plan(
+            side, "100", "102", "110", activation_r="0.5", trail_r="0.2", locked_r="0.1"
+        )
+        _, plan_b = _make_plan(
+            side, "106", "108", "116", activation_r="1.0", trail_r="0.3", locked_r="0.2"
+        )
+        fill_a1, fill_a2_late, fill_b1 = D("100"), D("101"), D("107")
+        mark_pre_trail = D("99")
+        mark_trail_a = D("95")
+
+    orders = (
+        ZoneOrder(
+            zone_id=plan_a.intent_id,
+            order_id="a-e1",
+            order_link_id=f"ccb-v2-{plan_a.intent_id.hex[:20]}-e1",
+            role="ENTRY",
+            quantity=D("2"),
+        ),
+        ZoneOrder(
+            zone_id=plan_a.intent_id,
+            order_id="a-e2",
+            order_link_id=f"ccb-v2-{plan_a.intent_id.hex[:20]}-e2",
+            role="ENTRY",
+            quantity=D("2"),
+        ),
+        ZoneOrder(
+            zone_id=plan_b.intent_id,
+            order_id="b-e1",
+            order_link_id=f"ccb-v2-{plan_b.intent_id.hex[:20]}-e1",
+            role="ENTRY",
+            quantity=D("3"),
+        ),
+    )
+    exec_a1 = ZoneExecution(
+        execution_id="ex-a1",
+        order_id="a-e1",
+        side=side,
+        quantity=D("2"),
+        closed_quantity=D("0"),
+        price=fill_a1,
+        executed_at_ms=10,
+    )
+    # 1. Only Zone A is active: compatible with single-position Full trailing.
+    single_contract = evaluate_zone_group_runner_contract(
+        (plan_a, plan_b),
+        orders,
+        (exec_a1,),
+        mark_price=mark_trail_a,
+        context=CONTEXT,
+    )
+    assert single_contract.active_zone_count == 1
+    assert single_contract.trailing_zone_count == 1
+    assert (
+        single_contract.native_trailing_status
+        == "SINGLE_ACTIVE_ZONE_FULL_TRAILING_COMPATIBLE"
+    )
+    assert single_contract.operator_tradeoff_required is False
+    assert single_contract.protection_verified is False
+    assert single_contract.trading_enabled is False
+
+    # 2. Both zones filled, neither trailing yet: pre-trail partial-stop only.
+    exec_b1 = ZoneExecution(
+        execution_id="ex-b1",
+        order_id="b-e1",
+        side=side,
+        quantity=D("3"),
+        closed_quantity=D("0"),
+        price=fill_b1,
+        executed_at_ms=20,
+    )
+    pre_trail = evaluate_zone_group_runner_contract(
+        (plan_a, plan_b),
+        orders,
+        (exec_a1, exec_b1),
+        mark_price=mark_pre_trail,
+        context=CONTEXT,
+    )
+    assert pre_trail.active_zone_count == 2
+    assert pre_trail.trailing_zone_count == 0
+    assert pre_trail.native_trailing_status == "MULTI_ZONE_PRE_TRAIL_PARTIAL_STOP_ONLY"
+    assert pre_trail.operator_tradeoff_required is False
+
+    # 3. Late fill arrives on Zone A's E2 while Zone A is already trailing and
+    # Zone B is also active: Zone A's economics update from its own fills while
+    # Zone B is unaffected, and the contract flags same-account partial trailing.
+    exec_a2_late = ZoneExecution(
+        execution_id="ex-a2-late",
+        order_id="a-e2",
+        side=side,
+        quantity=D("2"),
+        closed_quantity=D("0"),
+        price=fill_a2_late,
+        executed_at_ms=30,
+    )
+    initial_stop_a = single_contract.states[0].protected_stop_loss
+    assert initial_stop_a is not None
+    multi_trail = evaluate_zone_group_runner_contract(
+        (plan_a, plan_b),
+        orders,
+        (exec_a1, exec_b1, exec_a2_late),
+        mark_price=mark_trail_a,
+        context=CONTEXT,
+        previous_protected_stops={plan_a.intent_id: initial_stop_a},
+        already_trailing_zones=frozenset({plan_a.intent_id}),
+    )
+    assert multi_trail.active_zone_count == 2
+    assert multi_trail.trailing_zone_count == 2
+    assert (
+        multi_trail.native_trailing_status
+        == "UNSUPPORTED_SAME_ACCOUNT_PARTIAL_TRAILING"
+    )
+    assert multi_trail.operator_tradeoff_required is True
+    assert multi_trail.states[0].remaining_quantity == D("4")
+    assert multi_trail.states[0].protected_stop_loss == initial_stop_a
+    assert multi_trail.states[1].remaining_quantity == D("3")
+    assert multi_trail.protection_verified is False
+    assert multi_trail.trading_enabled is False
+
+    with pytest.raises(ValueError, match="at least one plan"):
+        evaluate_zone_group_runner_contract(
+            (), orders, (), mark_price=mark_trail_a, context=CONTEXT
+        )
+    wrong_sym_plan = plan_a.model_copy(update={"symbol": "ETHUSDT"})
+    with pytest.raises(ValueError, match="share symbol and side"):
+        evaluate_zone_group_runner_contract(
+            (plan_a, wrong_sym_plan),
+            orders,
+            (),
+            mark_price=mark_trail_a,
+            context=CONTEXT,
         )

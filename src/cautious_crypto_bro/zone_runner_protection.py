@@ -44,6 +44,17 @@ class ZoneRunnerState:
     trailing_distance: Decimal | None
 
 
+@dataclass(frozen=True, slots=True)
+class ZoneGroupRunnerContract:
+    states: tuple[ZoneRunnerState, ...]
+    active_zone_count: int
+    trailing_zone_count: int
+    native_trailing_status: str
+    operator_tradeoff_required: bool
+    protection_verified: bool
+    trading_enabled: bool
+
+
 def _zone_entry_economics(
     side: Side,
     stop_loss: Decimal,
@@ -432,3 +443,56 @@ def zone_group_open_stop_risk_usdt(
             plan, order, binding, entered[order.order_id]
         )
     return total_risk
+
+
+def evaluate_zone_group_runner_contract(
+    plans: Sequence[ExecutionPlan],
+    orders: Sequence[ZoneOrder],
+    executions: Sequence[ZoneExecution],
+    *,
+    mark_price: Decimal,
+    context: InstrumentContext,
+    previous_protected_stops: Mapping[UUID, Decimal] | None = None,
+    already_trailing_zones: frozenset[UUID] = frozenset(),
+) -> ZoneGroupRunnerContract:
+    """Evaluate per-zone runner states and native broker trailing compatibility."""
+    if not plans:
+        raise ValueError("Zone group runner evaluation requires at least one plan")
+    symbol, side = plans[0].symbol, plans[0].side
+    if any(p.symbol != symbol or p.side is not side for p in plans):
+        raise ValueError("Zone group plans must share symbol and side")
+    prev_stops = previous_protected_stops or {}
+    states = tuple(
+        derive_zone_runner_state(
+            plan,
+            orders,
+            executions,
+            mark_price=mark_price,
+            context=context,
+            previous_protected_stop=prev_stops.get(plan.intent_id),
+            already_trailing=plan.intent_id in already_trailing_zones,
+        )
+        for plan in plans
+    )
+    active_count = sum(1 for state in states if state.remaining_quantity > 0)
+    trailing_count = sum(
+        1 for state in states if state.remaining_quantity > 0 and state.trailing_active
+    )
+    if active_count <= 1:
+        status = "SINGLE_ACTIVE_ZONE_FULL_TRAILING_COMPATIBLE"
+        tradeoff = False
+    elif trailing_count == 0:
+        status = "MULTI_ZONE_PRE_TRAIL_PARTIAL_STOP_ONLY"
+        tradeoff = False
+    else:
+        status = "UNSUPPORTED_SAME_ACCOUNT_PARTIAL_TRAILING"
+        tradeoff = True
+    return ZoneGroupRunnerContract(
+        states=states,
+        active_zone_count=active_count,
+        trailing_zone_count=trailing_count,
+        native_trailing_status=status,
+        operator_tradeoff_required=tradeoff,
+        protection_verified=False,
+        trading_enabled=False,
+    )
