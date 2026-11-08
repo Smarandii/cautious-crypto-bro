@@ -10,6 +10,24 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.110] - 2026-11-08
+
+### Added
+
+- Add `SourceZoneCancellationResult` and `cancel_source_zone_entries` in
+  `src/cautious_crypto_bro/zone_runner_protection.py` to cancel only earlier
+  pending zone entries from the same Telegram source and symbol while
+  preserving other sources' zones, newer zones, and protective orders
+  (#447, #123).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.109. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.109] - 2026-11-08
 
 ### Added

@@ -15,7 +15,10 @@ from .domain import (
     AccountStateSummary,
     ExecutionPlan,
     InstrumentContext,
+    PositionActionIntent,
+    PositionActionType,
     Side,
+    SourceMessage,
     TradeExecutionError,
 )
 from .entry_ownership import recover_entry_bindings
@@ -64,6 +67,13 @@ class ZoneExpiryResult:
     entry_frozen: bool
     zone_closed: bool
     account_state: AccountStateSummary | None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceZoneCancellationResult:
+    target_zone_ids: tuple[UUID, ...]
+    cancelled_order_ids: tuple[str, ...]
+    account_state: AccountStateSummary
 
 
 def _zone_entry_economics(
@@ -554,5 +564,37 @@ async def expire_zone_stale_entries(
         cancelled_order_ids=cancelled_ids,
         entry_frozen=True,
         zone_closed=(entered == 0),
+        account_state=account,
+    )
+
+
+async def cancel_source_zone_entries(
+    action: PositionActionIntent,
+    zones: Sequence[tuple[ExecutionPlan, SourceMessage]],
+    store: ExecutionCoordinatorStore | PositionSupervisorStore,
+    executor: AccountGateway,
+) -> SourceZoneCancellationResult:
+    """Cancel earlier pending zone entries from the same source and symbol."""
+    if action.action is not PositionActionType.CANCEL_ENTRIES:
+        raise ValueError("Source zone cancellation requires a CANCEL_ENTRIES action")
+    targets = [
+        plan
+        for plan, source in zones
+        if plan.symbol == action.symbol
+        and source.channel_id == action.source.channel_id
+        and source.message_id < action.source.message_id
+        and source.published_at <= action.source.published_at
+    ]
+    if not targets:
+        raise ValueError("No earlier zones owned by this source for this symbol")
+    cancelled: list[str] = []
+    account: AccountStateSummary | None = None
+    for plan in targets:
+        account, ids = await cancel_zone_pending_entries(plan, store, executor)
+        cancelled.extend(ids)
+    assert account is not None
+    return SourceZoneCancellationResult(
+        target_zone_ids=tuple(plan.intent_id for plan in targets),
+        cancelled_order_ids=tuple(cancelled),
         account_state=account,
     )
