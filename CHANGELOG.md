@@ -10,6 +10,22 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.99] - 2026-11-08
+
+### Changed
+
+- Extract strategy pause alert, filled-entry review, unverified/expired
+  lifecycle notice, manual/AUTO outcome, and recovery warning HTML rendering
+  from `ApprovalBot` into `src/cautious_crypto_bro/approval_notices.py`
+  (#427, #262).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.98. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) and architecture
+  audit items (#262) remain open.
+
 ## [2.2.98] - 2026-11-08
 
 ### Changed
