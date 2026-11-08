@@ -10,6 +10,23 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.114] - 2026-11-08
+
+### Added
+
+- Add `ZoneAdmissionDecision` and `evaluate_zone_portfolio_admission` in
+  `src/cautious_crypto_bro/zone_portfolio_admission.py` to enforce the
+  account-wide portfolio stop-risk cap across independent zone admissions while
+  rejecting any split-budget sibling plan (#455, #123).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.113. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.113] - 2026-11-08
 
 ### Fixed
