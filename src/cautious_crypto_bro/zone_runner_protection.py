@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -53,6 +54,16 @@ class ZoneGroupRunnerContract:
     operator_tradeoff_required: bool
     protection_verified: bool
     trading_enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ZoneExpiryResult:
+    zone_id: UUID
+    expired: bool
+    cancelled_order_ids: tuple[str, ...]
+    entry_frozen: bool
+    zone_closed: bool
+    account_state: AccountStateSummary | None
 
 
 def _zone_entry_economics(
@@ -495,4 +506,53 @@ def evaluate_zone_group_runner_contract(
         operator_tradeoff_required=tradeoff,
         protection_verified=False,
         trading_enabled=False,
+    )
+
+
+async def expire_zone_stale_entries(
+    plan: ExecutionPlan,
+    executions: Sequence[ZoneExecution],
+    store: ExecutionCoordinatorStore | PositionSupervisorStore,
+    executor: AccountGateway,
+    *,
+    legacy_entry_ttl_minutes: int = 0,
+    now: datetime | None = None,
+) -> ZoneExpiryResult:
+    """Expire one zone's pending entries after TTL without touching sibling zones."""
+    if legacy_entry_ttl_minutes < 0:
+        raise ValueError("Zone legacy entry TTL must not be negative")
+    ttl_minutes = (
+        plan.policy.strategy_v2.entry_order_ttl_minutes or legacy_entry_ttl_minutes
+    )
+    current_time = now if now is not None else datetime.now(UTC)
+    if ttl_minutes == 0 or current_time < plan.created_at + timedelta(
+        minutes=ttl_minutes
+    ):
+        return ZoneExpiryResult(
+            zone_id=plan.intent_id,
+            expired=False,
+            cancelled_order_ids=(),
+            entry_frozen=False,
+            zone_closed=False,
+            account_state=None,
+        )
+    account, cancelled_ids = await cancel_zone_pending_entries(plan, store, executor)
+    group = zone_group_id(plan.symbol, plan.side)
+    orders = await store.zone_bound_orders(group)
+    entry_ids = {
+        order.order_id
+        for order in orders
+        if order.zone_id == plan.intent_id and order.role == "ENTRY"
+    }
+    entered = sum(
+        (fill.quantity for fill in executions if fill.order_id in entry_ids),
+        Decimal("0"),
+    )
+    return ZoneExpiryResult(
+        zone_id=plan.intent_id,
+        expired=True,
+        cancelled_order_ids=cancelled_ids,
+        entry_frozen=True,
+        zone_closed=(entered == 0),
+        account_state=account,
     )
