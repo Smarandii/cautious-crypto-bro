@@ -347,6 +347,8 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
     assert ch2["current_risk_win_rate_pct"] == 100.0
     assert ch2["current_risk_net_pnl_usdt"] == 65.5
     assert ch2["current_risk_net_r"] == 1.31
+    assert ch2["current_risk_avg_win_usdt"] == 32.75
+    assert ch2["current_risk_avg_loss_usdt"] is None
     assert rows_by_ch["source_1"]["failed_ownership_guard"] == 1
 
     history = public_trade_history(positions, available=True)
