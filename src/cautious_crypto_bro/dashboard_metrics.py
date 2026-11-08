@@ -653,6 +653,60 @@ def _bucket_summary(
     )
 
 
+def _build_exit_cohorts(
+    complete: list[Mapping[str, object]],
+    size_reconciled: list[Mapping[str, object]],
+    current_risk: list[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    profiles = sorted(
+        {str(p.get("exit_profile") or "baseline") for p in size_reconciled}
+    )
+    cohorts: list[dict[str, object]] = []
+    for profile in profiles:
+        p_comp = [
+            p for p in complete if str(p.get("exit_profile") or "baseline") == profile
+        ]
+        p_size = [
+            p
+            for p in size_reconciled
+            if str(p.get("exit_profile") or "baseline") == profile
+        ]
+        p_cur = [
+            p
+            for p in current_risk
+            if str(p.get("exit_profile") or "baseline") == profile
+        ]
+        perf = summarize_reconciled_positions(p_comp)
+        comp_count = int(perf["position_count"])  # type: ignore[arg-type]
+        cohorts.append(
+            {
+                "exit_profile": profile,
+                "completed_trades": comp_count,
+                "winning_trades": int(perf["positive_count"]),  # type: ignore[arg-type]
+                "losing_trades": int(perf["negative_count"]),  # type: ignore[arg-type]
+                "win_rate_pct": perf["win_rate_pct"],
+                "net_pnl_usdt": perf["net_pnl_usdt"] if comp_count else 0.0,
+                "net_r": (
+                    _rounded(sum(_number(p, "net_r") for p in p_comp), 6)
+                    if comp_count
+                    else 0.0
+                ),
+                "expectancy_r": perf["expectancy_r"],
+                "profit_factor": perf["profit_factor"],
+                **_cohort_metrics(p_size, "size_reconciled"),
+                **_cohort_metrics(p_cur, "current_risk"),
+            }
+        )
+    cohorts.sort(
+        key=lambda c: (
+            -int(c["current_risk_trades"]),  # type: ignore[arg-type]
+            -int(c["size_reconciled_trades"]),  # type: ignore[arg-type]
+            str(c["exit_profile"]),
+        )
+    )
+    return cohorts
+
+
 def build_channel_analytics(
     database,
     positions: Iterable[Mapping[str, object]],
@@ -733,6 +787,9 @@ def build_channel_analytics(
         "rows": rows,
         "totals": _bucket_summary(
             total_bucket, known_positions, known_size_rec, known_cur_risk
+        ),
+        "exit_cohorts": _build_exit_cohorts(
+            known_positions, known_size_rec, known_cur_risk
         ),
     }
 

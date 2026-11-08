@@ -140,6 +140,35 @@ CHANNEL_ROW_FIELDS_V3 = ("channel", *CHANNEL_SUMMARY_FIELDS_V3)
 CHANNEL_ROW_FIELDS_V4 = ("channel", *CHANNEL_SUMMARY_FIELDS_V4)
 CHANNEL_ROW_FIELDS_V5 = ("channel", *CHANNEL_SUMMARY_FIELDS_V5)
 CHANNEL_ROW_FIELDS_V6 = ("channel", *CHANNEL_SUMMARY_FIELDS_V6)
+EXIT_COHORT_INT_FIELDS = (
+    "completed_trades",
+    "winning_trades",
+    "losing_trades",
+    *CHANNEL_SIZE_REC_INT_FIELDS,
+    *CHANNEL_CUR_RISK_INT_FIELDS,
+)
+EXIT_COHORT_PCT_FIELDS = (
+    "win_rate_pct",
+    *CHANNEL_SIZE_REC_PCT_FIELDS,
+    *CHANNEL_CUR_RISK_PCT_FIELDS,
+)
+EXIT_COHORT_SIGNED_FIELDS = (
+    "net_pnl_usdt",
+    "net_r",
+    "expectancy_r",
+    *CHANNEL_SIZE_REC_SIGNED_FIELDS,
+    *CHANNEL_CUR_RISK_SIGNED_FIELDS,
+    *CHANNEL_CUR_RISK_MAGNITUDE_FIELDS,
+)
+EXIT_COHORT_FIELDS = (
+    "exit_profile",
+    *EXIT_COHORT_INT_FIELDS,
+    *EXIT_COHORT_PCT_FIELDS,
+    *EXIT_COHORT_SIGNED_FIELDS,
+    "profit_factor",
+    "size_reconciled_profit_factor",
+    "current_risk_profit_factor",
+)
 CHANNEL_ANALYTICS_FIELDS = ("available", "rows", "totals")
 EXIT_PROFILES = {
     "baseline",
@@ -263,8 +292,43 @@ def _expected_channel_fields(item: object, *, with_channel: bool) -> tuple[str, 
     return CHANNEL_ROW_FIELDS if with_channel else CHANNEL_SUMMARY_FIELDS
 
 
+def _validate_exit_cohorts(cohorts: object) -> None:
+    if not isinstance(cohorts, list) or len(cohorts) > 20:
+        raise ValueError("Invalid public exit cohorts")
+    seen: set[str] = set()
+    for item in cohorts:
+        row = _fields(item, EXIT_COHORT_FIELDS)
+        profile = row["exit_profile"]
+        if (
+            not isinstance(profile, str)
+            or profile not in EXIT_PROFILES
+            or profile in seen
+        ):
+            raise ValueError("Invalid or duplicate public exit profile cohort")
+        seen.add(profile)
+        for field in EXIT_COHORT_INT_FIELDS:
+            if type(row[field]) is not int or row[field] < 0:
+                raise ValueError("Invalid public exit cohort integer count")
+        for field in EXIT_COHORT_PCT_FIELDS:
+            _number(row[field], nonnegative=True)
+            if row[field] is not None and row[field] > 100:
+                raise ValueError("Public exit cohort percentage exceeds 100")
+        for pf in (
+            "profit_factor",
+            "size_reconciled_profit_factor",
+            "current_risk_profit_factor",
+        ):
+            _number(row[pf], nonnegative=True)
+        for field in EXIT_COHORT_SIGNED_FIELDS:
+            _number(row[field])
+
+
 def _validate_channel_analytics(value: object) -> None:
-    analytics = _fields(value, CHANNEL_ANALYTICS_FIELDS)
+    if isinstance(value, dict) and "exit_cohorts" in value:
+        analytics = _fields(value, (*CHANNEL_ANALYTICS_FIELDS, "exit_cohorts"))
+        _validate_exit_cohorts(analytics["exit_cohorts"])
+    else:
+        analytics = _fields(value, CHANNEL_ANALYTICS_FIELDS)
     if type(analytics["available"]) is not bool:
         raise ValueError("Invalid channel analytics availability")
     rows = analytics["rows"]

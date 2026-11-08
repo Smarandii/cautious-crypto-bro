@@ -351,6 +351,9 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
     assert ch2["current_risk_avg_loss_usdt"] is None
     assert ch2["active_open_strategies"] == 0
     assert rows_by_ch["source_1"]["failed_ownership_guard"] == 1
+    assert analytics["exit_cohorts"][0]["exit_profile"] == "baseline"
+    assert analytics["exit_cohorts"][0]["current_risk_trades"] == 2
+    assert analytics["exit_cohorts"][0]["size_reconciled_trades"] == 3
 
     history = public_trade_history(positions, available=True)
     history["as_of"] = "2026-11-08T00:00:00+00:00"

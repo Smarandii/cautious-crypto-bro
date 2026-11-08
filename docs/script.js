@@ -278,6 +278,58 @@ function renderTradeHistory(data, refreshFailed = false) {
         add("td", cell, tr);
       }
     }
+    if (Array.isArray(channelAnalytics.exit_cohorts) && channelAnalytics.exit_cohorts.length) {
+      add("h3", "Exit profile & LONG A/B arm meta-analysis", channelSection);
+      add(
+        "p",
+        "Compares active LONG A/B exit arms (0.20R control vs 0.15R treatment) and historical exit profiles across current 3% policy, all-time size-reconciled, and terminal-certified cohorts.",
+        channelSection,
+      );
+      const exitScroll = add("div", "", channelSection);
+      exitScroll.className = "trade-table-scroll";
+      exitScroll.tabIndex = 0;
+      exitScroll.setAttribute("role", "region");
+      exitScroll.setAttribute("aria-label", "Exit profile meta-analysis table");
+      const exitTable = add("table", "", exitScroll);
+      add("caption", "Per-exit-profile strategy performance", exitTable);
+      const exitHead = add("tr", "", add("thead", "", exitTable));
+      for (const col of [
+        "Exit profile",
+        "Current policy (W / L · WR)",
+        "Current policy Net PnL · R · PF",
+        "Current policy Avg Win / Loss · USDT",
+        "All-time size-reconciled (W / L · WR)",
+        "All-time size-reconciled Net PnL · R · PF",
+        "Terminal-certified (W / L · WR)",
+        "Terminal Net PnL · USDT",
+      ]) {
+        add("th", col, exitHead).scope = "col";
+      }
+      const exitBody = add("tbody", "", exitTable);
+      for (const ex of channelAnalytics.exit_cohorts) {
+        const tr = add("tr", "", exitBody);
+        const curN = ex.current_risk_trades ?? 0;
+        const sizeN = ex.size_reconciled_trades ?? 0;
+        for (const cell of [
+          ex.exit_profile,
+          `${curN} (${ex.current_risk_winning_trades ?? 0}W / ${ex.current_risk_losing_trades ?? 0}L · ${pct(ex.current_risk_win_rate_pct)})`,
+          curN
+            ? `${signed(ex.current_risk_net_pnl_usdt, 2)} USDT · ${signed(ex.current_risk_net_r, 2)}R · ${Number.isFinite(ex.current_risk_profit_factor) ? `${number(ex.current_risk_profit_factor, 2)}×` : "—"}`
+            : "—",
+          curN
+            ? `${signed(ex.current_risk_avg_win_usdt, 2)} / ${signed(ex.current_risk_avg_loss_usdt, 2)} USDT`
+            : "—",
+          `${sizeN} (${ex.size_reconciled_winning_trades ?? 0}W / ${ex.size_reconciled_losing_trades ?? 0}L · ${pct(ex.size_reconciled_win_rate_pct)})`,
+          sizeN
+            ? `${signed(ex.size_reconciled_net_pnl_usdt, 2)} USDT · ${signed(ex.size_reconciled_net_r, 2)}R · ${Number.isFinite(ex.size_reconciled_profit_factor) ? `${number(ex.size_reconciled_profit_factor, 2)}×` : "—"}`
+            : "—",
+          `${ex.completed_trades ?? 0} (${ex.winning_trades ?? 0}W / ${ex.losing_trades ?? 0}L · ${pct(ex.win_rate_pct)})`,
+          signed(ex.net_pnl_usdt, 2),
+        ]) {
+          add("td", cell, tr);
+        }
+      }
+    }
   }
   if (!history?.available) {
     add("p", "Trade evidence unavailable. No outcomes inferred.");
