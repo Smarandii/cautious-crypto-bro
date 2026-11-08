@@ -10,6 +10,22 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.107] - 2026-11-08
+
+### Changed
+
+- Unify `_round_price` and `_round_down` in
+  `src/cautious_crypto_bro/position_management/_helpers.py` with
+  `execution_geometry.py` and move `pre_install_position_drift_reason` into
+  `src/cautious_crypto_bro/position_management/drift_detector.py`, bringing
+  every non-domain module in `src/` below 1,000 lines (#441, #262).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.106. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) remain open.
+
 ## [2.2.106] - 2026-11-08
 
 ### Changed

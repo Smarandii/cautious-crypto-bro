@@ -19,6 +19,26 @@ if TYPE_CHECKING:
     from .exit_installer import ExitInstaller
 
 
+def pre_install_position_drift_reason(
+    state: PositionStrategy,
+    plan: ExecutionPlan,
+    position: AccountPosition,
+) -> str | None:
+    if position.side is not state.side:
+        return "position side mismatch"
+    if position.take_profit is not None:
+        return (
+            "position take profit enabled outside Strategy V2; manual review required"
+        )
+    if not state.trailing_active and position.trailing_stop is not None:
+        return (
+            "position trailing stop enabled outside Strategy V2; manual review required"
+        )
+    if abs(position.avg_price - plan.stop_loss) <= 0:
+        return "invalid stop loss"
+    return None
+
+
 def manual_override_reason(
     state: PositionStrategy,
     plan: ExecutionPlan,
