@@ -32,6 +32,33 @@ HISTORY_FIELDS = (
     "limit",
     "as_of",
 )
+CHANNEL_INT_FIELDS = (
+    "total_posts",
+    "completed_posts",
+    "signal_posts",
+    "open_intents",
+    "executed_intents",
+    "skipped_intents",
+    "failed_intents",
+    "lifecycle_actions",
+    "executed_actions",
+    "completed_trades",
+    "winning_trades",
+    "losing_trades",
+)
+CHANNEL_SUMMARY_FIELDS = (
+    *CHANNEL_INT_FIELDS,
+    "signal_post_ratio_pct",
+    "pickup_rate_pct",
+    "win_rate_pct",
+    "net_pnl_usdt",
+    "net_r",
+    "expectancy_usdt",
+    "expectancy_r",
+    "profit_factor",
+)
+CHANNEL_ROW_FIELDS = ("channel", *CHANNEL_SUMMARY_FIELDS)
+CHANNEL_ANALYTICS_FIELDS = ("available", "rows", "totals")
 EXIT_PROFILES = {
     "baseline",
     "payoff_challenger",
@@ -74,7 +101,12 @@ def _timestamp(value: object, *, optional: bool = True) -> None:
 
 def validate_public_feed(feed: object) -> dict:
     """Reject extra fields instead of silently publishing arbitrary input."""
-    feed = _fields(feed, ("schema_version", "generated_at", "risk", "trade_history"))
+    base_fields = ("schema_version", "generated_at", "risk", "trade_history")
+    if isinstance(feed, dict) and "channel_analytics" in feed:
+        feed = _fields(feed, (*base_fields, "channel_analytics"))
+        _validate_channel_analytics(feed["channel_analytics"])
+    else:
+        feed = _fields(feed, base_fields)
     if type(feed["schema_version"]) is not int or feed["schema_version"] != 1:
         raise ValueError("Unsupported public feed schema")
     _timestamp(feed["generated_at"], optional=False)
@@ -83,6 +115,42 @@ def validate_public_feed(feed: object) -> dict:
     if len(json.dumps(feed, allow_nan=False).encode("utf-8")) > 60000:
         raise ValueError("Public feed exceeds dispatch payload budget")
     return feed
+
+
+def _validate_channel_summary(summary: dict) -> None:
+    for field in CHANNEL_INT_FIELDS:
+        if type(summary[field]) is not int or summary[field] < 0:
+            raise ValueError("Invalid public channel integer count")
+    for field in ("signal_post_ratio_pct", "pickup_rate_pct", "win_rate_pct"):
+        _number(summary[field], nonnegative=True)
+        if summary[field] is not None and summary[field] > 100:
+            raise ValueError("Public channel percentage exceeds 100")
+    _number(summary["profit_factor"], nonnegative=True)
+    for field in ("net_pnl_usdt", "net_r", "expectancy_usdt", "expectancy_r"):
+        _number(summary[field])
+
+
+def _validate_channel_analytics(value: object) -> None:
+    analytics = _fields(value, CHANNEL_ANALYTICS_FIELDS)
+    if type(analytics["available"]) is not bool:
+        raise ValueError("Invalid channel analytics availability")
+    rows = analytics["rows"]
+    if not isinstance(rows, list) or len(rows) > 50:
+        raise ValueError("Invalid public channel analytics rows")
+    seen: set[str] = set()
+    for item in rows:
+        row = _fields(item, CHANNEL_ROW_FIELDS)
+        channel = row["channel"]
+        if (
+            not isinstance(channel, str)
+            or not re.fullmatch(r"source_[1-9][0-9]{0,2}", channel)
+            or channel in seen
+        ):
+            raise ValueError("Invalid or duplicate public channel identifier")
+        seen.add(channel)
+        _validate_channel_summary(row)
+    totals = _fields(analytics["totals"], CHANNEL_SUMMARY_FIELDS)
+    _validate_channel_summary(totals)
 
 
 def _validate_risk(value: object) -> None:
@@ -145,11 +213,12 @@ def _validate_trade(value: object) -> None:
 def public_feed_from_snapshot(snapshot: dict) -> dict:
     """Project private/local aggregate context down to the explicit public contract."""
     risk = snapshot.get("risk") or {}
-    return validate_public_feed(
-        {
-            "schema_version": 1,
-            "generated_at": snapshot["generated_at"],
-            "risk": {field: risk.get(field) for field in RISK_FIELDS},
-            "trade_history": snapshot["trade_history"],
-        }
-    )
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "generated_at": snapshot["generated_at"],
+        "risk": {field: risk.get(field) for field in RISK_FIELDS},
+        "trade_history": snapshot["trade_history"],
+    }
+    if snapshot.get("channel_analytics") is not None:
+        payload["channel_analytics"] = snapshot["channel_analytics"]
+    return validate_public_feed(payload)
