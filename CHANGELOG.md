@@ -10,6 +10,22 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.106] - 2026-11-08
+
+### Changed
+
+- Extract approval-mode routing (`open_approval_mode`,
+  `position_action_approval_mode`) and lifecycle position-action planning
+  (`plan_position_actions`) from `SignalPlanning` into
+  `src/cautious_crypto_bro/signals/approval_routing.py` (#439, #262).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.105. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) and architecture
+  audit items (#262) remain open.
+
 ## [2.2.105] - 2026-11-08
 
 ### Added

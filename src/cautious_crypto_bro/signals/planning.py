@@ -16,7 +16,6 @@ from uuid import UUID
 from ..contract_symbols import (
     BYBIT_CONTRACT_ALIASES,
     ContractUnitError,
-    owned_action_symbol,
     resolve_open_contract,
 )
 from ..domain import (
@@ -27,10 +26,8 @@ from ..domain import (
     ExecutionPolicy,
     InstrumentContext,
     IntentStatus,
-    OpenRelation,
     PlanningCandidate,
     PositionActionIntent,
-    PositionActionType,
     PositionStrategy,
     Side,
     SignalContextSnapshot,
@@ -45,6 +42,13 @@ from ..portfolio_risk import (
     PortfolioRiskUnavailable,
     open_stop_risk_usdt,
     policy_with_remaining_portfolio_risk,
+)
+from .approval_routing import (
+    open_approval_mode,
+    position_action_approval_mode,
+)
+from .approval_routing import (
+    plan_position_actions as _plan_lifecycle_actions,
 )
 from .policy_assignment import (
     assign_participation_arm,
@@ -170,14 +174,6 @@ class SignalPlanning:
         self._demo_portfolio_stop_risk_cap_usdt = demo_portfolio_stop_risk_cap_usdt
         self._demo_entry_order_ttl_minutes = demo_entry_order_ttl_minutes
 
-    @staticmethod
-    def _manual(
-        message: str,
-        *args: object,
-    ) -> ApprovalMode:
-        logger.warning(message, *args)
-        return ApprovalMode.MANUAL
-
     def _open_approval_mode(
         self,
         intent: TradingIntent,
@@ -186,74 +182,14 @@ class SignalPlanning:
         account_state: AccountStateSummary | None,
         duplicate_in_batch: bool,
     ) -> ApprovalMode:
-        if intent.source.recovery_review_reason:
-            return ApprovalMode.MANUAL
-        if self._auto_approval_mode is AutoApprovalMode.DISABLED:
-            return ApprovalMode.MANUAL
-
-        if intent.relation not in {
-            OpenRelation.NEW,
-            OpenRelation.ADD_OR_REENTRY,
-        }:
-            return self._manual(
-                "OPEN %s from %s/%s remains MANUAL because relation is %s",
-                intent.symbol,
-                intent.source.channel_id,
-                intent.source.message_id,
-                intent.relation.value,
-            )
-
-        if duplicate_in_batch:
-            return self._manual(
-                "OPEN %s from %s/%s remains "
-                "MANUAL because the same symbol/"
-                "side appears multiple times in "
-                "the current post",
-                intent.symbol,
-                intent.source.channel_id,
-                intent.source.message_id,
-            )
-
-        if account_state is None or not position_context.account_state_available:
-            return self._manual(
-                "OPEN %s from %s/%s remains "
-                "MANUAL because trusted live "
-                "account state is unavailable",
-                intent.symbol,
-                intent.source.channel_id,
-                intent.source.message_id,
-            )
-
-        if intent.relation is OpenRelation.NEW and position_context.has_existing_copy(
-            intent.symbol,
-            intent.side,
-        ):
-            return self._manual(
-                "OPEN %s from %s/%s remains "
-                "MANUAL: model classified NEW "
-                "but trusted source history "
-                "already has a copied/in-flight "
-                "position",
-                intent.symbol,
-                intent.source.channel_id,
-                intent.source.message_id,
-            )
-
-        safety_reason = self._coordinator.auto_open_safety_reason(
+        return open_approval_mode(
             intent,
-            account_state,
+            auto_approval_mode=self._auto_approval_mode,
+            coordinator=self._coordinator,
+            position_context=position_context,
+            account_state=account_state,
+            duplicate_in_batch=duplicate_in_batch,
         )
-
-        if safety_reason is not None:
-            return self._manual(
-                "OPEN %s from %s/%s remains MANUAL: %s",
-                intent.symbol,
-                intent.source.channel_id,
-                intent.source.message_id,
-                safety_reason,
-            )
-
-        return ApprovalMode.AUTO
 
     def _position_action_approval_mode(
         self,
@@ -261,43 +197,11 @@ class SignalPlanning:
         *,
         account_state: AccountStateSummary | None,
     ) -> ApprovalMode:
-        if action.source.recovery_review_reason:
-            return ApprovalMode.MANUAL
-        if account_state is None:
-            return self._manual(
-                "Position action %s %s remains "
-                "MANUAL because live account "
-                "state is unavailable",
-                action.action.value,
-                action.symbol,
-            )
-
-        if action.action is PositionActionType.CANCEL_ENTRIES:
-            # Execution resolves ownership from durable source records, not position count.
-            executable = True
-        else:
-            positions = tuple(
-                position
-                for position in account_state.positions
-                if position.symbol == action.symbol
-            )
-            executable = len(positions) == 1 and (
-                action.expected_side is None
-                or action.expected_side is positions[0].side
-            )
-
-        if not executable:
-            logger.info(
-                "Position action %s %s skipped; no matching live position",
-                action.action.value,
-                action.symbol,
-            )
-            return ApprovalMode.SKIPPED
-
-        if self._auto_approval_mode is not AutoApprovalMode.ALL:
-            return ApprovalMode.MANUAL
-
-        return ApprovalMode.AUTO
+        return position_action_approval_mode(
+            action,
+            auto_approval_mode=self._auto_approval_mode,
+            account_state=account_state,
+        )
 
     async def plan_open_intents(
         self,
@@ -813,70 +717,11 @@ class SignalPlanning:
         account_state: AccountStateSummary | None,
         position_context: SignalPositionContext | None = None,
     ) -> tuple[PositionActionIntent, ...]:
-        history = position_context.source_open_history if position_context else ()
-        actions = tuple(
-            action.model_copy(
-                update={
-                    "symbol": owned_action_symbol(
-                        action.symbol,
-                        history
-                        if position_context is not None
-                        and position_context.source_channel_id
-                        == action.source.channel_id
-                        else (),
-                    )
-                }
-            )
-            for action in signals.position_actions
+        return await _plan_lifecycle_actions(
+            signals,
+            executor=self._executor,
+            auto_approval_mode=self._auto_approval_mode,
+            intent_max_age_seconds=self._intent_max_age_seconds,
+            account_state=account_state,
+            position_context=position_context,
         )
-        planned = tuple(
-            action.model_copy(
-                update={
-                    "approval_mode": (
-                        self._position_action_approval_mode(
-                            action,
-                            account_state=(account_state),
-                        )
-                    )
-                }
-            )
-            for action in actions
-        )
-        reviewed = []
-        for action in planned:
-            held_symbol = account_state is not None and any(
-                p.symbol == action.symbol for p in account_state.positions
-            )
-            expired = (
-                action.age_seconds(datetime.now(UTC)) > self._intent_max_age_seconds
-            )
-            if (
-                action.action is PositionActionType.CANCEL_ENTRIES
-                or expired
-                or held_symbol
-            ):
-                reviewed.append(action)
-                continue
-            try:
-                await self._executor.market_context(action.symbol)
-            except Exception as exc:
-                # Never guess a replacement ticker or block a held-position exit
-                # on metadata. Unknown unmatched symbols need human evidence review.
-                logger.warning(
-                    "Unmatched lifecycle contract %s needs review (%s)",
-                    action.symbol,
-                    type(exc).__name__,
-                )
-                action = action.model_copy(
-                    update={
-                        "approval_mode": ApprovalMode.MANUAL,
-                        "status": IntentStatus.SKIPPED,
-                        "contract_review_reason": (
-                            "Exchange contract verification unavailable "
-                            f"({type(exc).__name__}). Verify the original source ticker "
-                            "and account directly; no replacement symbol was chosen."
-                        ),
-                    }
-                )
-            reviewed.append(action)
-        return tuple(reviewed)
