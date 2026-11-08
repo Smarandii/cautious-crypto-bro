@@ -273,7 +273,7 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
             "funding": 0.0,
             "risk_usdt": 50.0,
             "closed_at": 3000,
-            "risk_per_trade_pct": 3.0,
+            "risk_per_trade_pct": 1.0,
         },
         {
             "complete": False,
@@ -341,6 +341,12 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
     assert ch2["size_reconciled_win_rate_pct"] == 66.67
     assert ch2["size_reconciled_net_pnl_usdt"] == 50.0
     assert ch2["size_reconciled_net_r"] == 1.0
+    assert ch2["current_risk_trades"] == 2
+    assert ch2["current_risk_winning_trades"] == 2
+    assert ch2["current_risk_losing_trades"] == 0
+    assert ch2["current_risk_win_rate_pct"] == 100.0
+    assert ch2["current_risk_net_pnl_usdt"] == 65.5
+    assert ch2["current_risk_net_r"] == 1.31
     assert rows_by_ch["source_1"]["failed_ownership_guard"] == 1
 
     history = public_trade_history(positions, available=True)

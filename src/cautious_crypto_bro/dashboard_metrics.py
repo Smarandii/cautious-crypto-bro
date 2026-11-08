@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from math import isfinite
 from statistics import fmean
@@ -401,24 +401,44 @@ def _is_size_reconciled_closed(position: Mapping[str, object]) -> bool:
     )
 
 
-def _size_reconciled_metrics(
-    positions: list[Mapping[str, object]],
+def _cohort_metrics(
+    positions: list[Mapping[str, object]], prefix: str
 ) -> dict[str, object]:
     normalized = [{**p, "complete": True} for p in positions]
     perf = summarize_reconciled_positions(normalized)
     count = int(perf["position_count"])  # type: ignore[arg-type]
     return {
-        "size_reconciled_trades": count,
-        "size_reconciled_winning_trades": int(perf["positive_count"]),  # type: ignore[arg-type]
-        "size_reconciled_losing_trades": int(perf["negative_count"]),  # type: ignore[arg-type]
-        "size_reconciled_win_rate_pct": perf["win_rate_pct"],
-        "size_reconciled_net_pnl_usdt": perf["net_pnl_usdt"] if count else 0.0,
-        "size_reconciled_net_r": (
+        f"{prefix}_trades": count,
+        f"{prefix}_winning_trades": int(perf["positive_count"]),  # type: ignore[arg-type]
+        f"{prefix}_losing_trades": int(perf["negative_count"]),  # type: ignore[arg-type]
+        f"{prefix}_win_rate_pct": perf["win_rate_pct"],
+        f"{prefix}_net_pnl_usdt": perf["net_pnl_usdt"] if count else 0.0,
+        f"{prefix}_net_r": (
             _rounded(sum(_number(p, "net_r") for p in normalized), 6) if count else 0.0
         ),
-        "size_reconciled_expectancy_r": perf["expectancy_r"],
-        "size_reconciled_profit_factor": perf["profit_factor"],
+        f"{prefix}_expectancy_r": perf["expectancy_r"],
+        f"{prefix}_profit_factor": perf["profit_factor"],
     }
+
+
+def _active_risk_per_trade_pct(
+    database, tables: set[str], positions: Sequence[Mapping[str, object]]
+) -> float | None:
+    if "execution_policy" in tables:
+        row = database.execute(
+            "SELECT risk_per_trade_pct FROM execution_policy WHERE id=1"
+        ).fetchone()
+        if row is not None:
+            policy_pct = _optional_number(row[0])
+            if policy_pct is not None and policy_pct > 0:
+                return policy_pct
+    rates = [
+        pct
+        for p in positions
+        if (pct := _optional_number(p.get("risk_per_trade_pct"))) is not None
+        and pct > 0
+    ]
+    return max(rates) if rates else None
 
 
 def _side_metrics(
@@ -454,6 +474,7 @@ def _channel_summary(
     executed_actions: int,
     positions: list[Mapping[str, object]],
     size_reconciled_positions: list[Mapping[str, object]],
+    current_risk_positions: list[Mapping[str, object]],
 ) -> dict[str, object]:
     perf = summarize_reconciled_positions(positions)
     completed_trades = int(perf["position_count"])  # type: ignore[arg-type]
@@ -494,7 +515,8 @@ def _channel_summary(
         "profit_factor": perf["profit_factor"],
         **_side_metrics(positions, "LONG"),
         **_side_metrics(positions, "SHORT"),
-        **_size_reconciled_metrics(size_reconciled_positions),
+        **_cohort_metrics(size_reconciled_positions, "size_reconciled"),
+        **_cohort_metrics(current_risk_positions, "current_risk"),
     }
 
 
@@ -584,6 +606,7 @@ def _bucket_summary(
     bucket: dict[str, object],
     positions: list[Mapping[str, object]],
     size_reconciled: list[Mapping[str, object]],
+    current_risk: list[Mapping[str, object]],
 ) -> dict[str, object]:
     return _channel_summary(
         total_posts=int(bucket["total_posts"]),  # type: ignore[arg-type]
@@ -600,6 +623,7 @@ def _bucket_summary(
         executed_actions=int(bucket["executed_actions"]),  # type: ignore[arg-type]
         positions=positions,
         size_reconciled_positions=size_reconciled,
+        current_risk_positions=current_risk,
     )
 
 
@@ -618,16 +642,27 @@ def build_channel_analytics(
     all_positions = list(positions)
     complete = [p for p in all_positions if p.get("complete") is True]
     size_reconciled = [p for p in all_positions if _is_size_reconciled_closed(p)]
+    active_risk = _active_risk_per_trade_pct(database, tables, size_reconciled)
+    current_risk = [
+        p
+        for p in size_reconciled
+        if active_risk is not None
+        and abs((_optional_number(p.get("risk_per_trade_pct")) or 0.0) - active_risk)
+        <= 1e-6
+    ]
     rows: list[dict[str, object]] = []
     for index, (cid, bucket) in enumerate(buckets.items(), 1):
         ch_positions = [p for p in complete if str(p.get("source_channel_id")) == cid]
         ch_size_rec = [
             p for p in size_reconciled if str(p.get("source_channel_id")) == cid
         ]
+        ch_cur_risk = [
+            p for p in current_risk if str(p.get("source_channel_id")) == cid
+        ]
         rows.append(
             {
                 "channel": f"source_{index}",
-                **_bucket_summary(bucket, ch_positions, ch_size_rec),
+                **_bucket_summary(bucket, ch_positions, ch_size_rec, ch_cur_risk),
             }
         )
     rows.sort(
@@ -643,6 +678,9 @@ def build_channel_analytics(
     ]
     known_size_rec = [
         p for p in size_reconciled if str(p.get("source_channel_id")) in known_cids
+    ]
+    known_cur_risk = [
+        p for p in current_risk if str(p.get("source_channel_id")) in known_cids
     ]
     total_bucket: dict[str, object] = {
         key: sum(int(b[key]) for b in buckets.values())  # type: ignore[arg-type]
@@ -666,7 +704,9 @@ def build_channel_analytics(
     return {
         "available": bool(rows),
         "rows": rows,
-        "totals": _bucket_summary(total_bucket, known_positions, known_size_rec),
+        "totals": _bucket_summary(
+            total_bucket, known_positions, known_size_rec, known_cur_risk
+        ),
     }
 
 
