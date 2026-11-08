@@ -434,6 +434,48 @@ function renderTradeHistory(data, refreshFailed = false) {
         }
       }
     }
+    if (Array.isArray(channelAnalytics.decision_cohorts) && channelAnalytics.decision_cohorts.length) {
+      add("h3", "Post-coverage & extraction disposition audit", channelSection);
+      add(
+        "p",
+        "Partitions every audited post in source_decisions into non-signal commentary, normalized actionable signals, UPDATE_EXISTING position recaps, deterministic evidence-filtered posts, and planning rejections.",
+        channelSection,
+      );
+      const decScroll = add("div", "", channelSection);
+      decScroll.className = "trade-table-scroll";
+      decScroll.tabIndex = 0;
+      decScroll.setAttribute("role", "region");
+      decScroll.setAttribute("aria-label", "Post disposition audit table");
+      const decTable = add("table", "", decScroll);
+      add("caption", "Per-channel source_decisions post disposition audit", decTable);
+      const decHead = add("tr", "", add("thead", "", decTable));
+      for (const col of [
+        "Channel",
+        "Audited posts",
+        "Actionable signals (%)",
+        "Non-signal commentary",
+        "UPDATE_EXISTING recaps",
+        "Evidence-filtered",
+        "Planning rejections",
+      ]) {
+        add("th", col, decHead).scope = "col";
+      }
+      const decBody = add("tbody", "", decTable);
+      for (const dc of channelAnalytics.decision_cohorts) {
+        const tr = add("tr", "", decBody);
+        for (const cell of [
+          dc.channel,
+          `${dc.audited_posts ?? 0}`,
+          `${dc.normalized_actionable ?? 0} (${pct(dc.actionable_ratio_pct)})`,
+          `${dc.non_signal_commentary ?? 0}`,
+          `${dc.update_existing_recap ?? 0}`,
+          `${dc.evidence_filtered ?? 0}`,
+          `${dc.planning_rejected ?? 0}`,
+        ]) {
+          add("td", cell, tr);
+        }
+      }
+    }
   }
   if (!history?.available) {
     add("p", "Trade evidence unavailable. No outcomes inferred.");

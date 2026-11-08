@@ -307,6 +307,11 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
               ('i3', 'FAILED', 'Existing strategy owns BTCUSDT', '{"source":{"channel_id":-100222,"message_id":10,"channel_title":"SECRET_BETA"}}');
             INSERT INTO position_actions VALUES
               ('a1', 'EXECUTED', '{"source":{"channel_id":-100111,"message_id":1,"channel_title":"SECRET_ALPHA"}}');
+            CREATE TABLE source_decisions(channel_id INTEGER, message_id INTEGER, attempt_count INTEGER, payload_json TEXT);
+            INSERT INTO source_decisions VALUES
+              (-100111, 1, 1, '{"extraction":{"intents":[{"symbol":"BTCUSDT","relation":"NEW"}]},"normalized":{"open_intents":[{"symbol":"BTCUSDT"}]},"planning":{"errors":[]}}'),
+              (-100111, 2, 1, '{"extraction":{"intents":[{"symbol":"ETHUSDT","relation":"UPDATE_EXISTING"}]},"normalized":{"open_intents":[]}}'),
+              (-100111, 3, 1, '{"extraction":{"intents":[]},"normalized":{"open_intents":[]}}');
             """
         )
         from cautious_crypto_bro.dashboard_metrics import build_channel_analytics
@@ -358,6 +363,13 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
     assert analytics["ladder_cohorts"][0]["size_reconciled_trades"] == 3
     assert analytics["setup_cohorts"][0]["setup"] == "MARKET_TRADER"
     assert analytics["setup_cohorts"][0]["size_reconciled_trades"] == 3
+    dec = analytics["decision_cohorts"][0]
+    assert dec["channel"] == "source_2"
+    assert dec["audited_posts"] == 3
+    assert dec["normalized_actionable"] == 1
+    assert dec["update_existing_recap"] == 1
+    assert dec["non_signal_commentary"] == 1
+    assert dec["evidence_filtered"] == 0
 
     history = public_trade_history(positions, available=True)
     history["as_of"] = "2026-11-08T00:00:00+00:00"

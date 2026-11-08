@@ -196,6 +196,19 @@ SIGNAL_SETUPS = {
     "RANGE_TRADER",
     "RANGE_POLICY",
 }
+DECISION_COHORT_INT_FIELDS = (
+    "audited_posts",
+    "non_signal_commentary",
+    "normalized_actionable",
+    "update_existing_recap",
+    "evidence_filtered",
+    "planning_rejected",
+)
+DECISION_COHORT_FIELDS = (
+    "channel",
+    *DECISION_COHORT_INT_FIELDS,
+    "actionable_ratio_pct",
+)
 CHANNEL_ANALYTICS_FIELDS = ("available", "rows", "totals")
 EXIT_PROFILES = {
     "baseline",
@@ -380,23 +393,63 @@ def _validate_setup_cohorts(cohorts: object) -> None:
         _validate_cohort_numbers(row)
 
 
+def _validate_decision_cohorts(cohorts: object) -> None:
+    if not isinstance(cohorts, list) or len(cohorts) > 50:
+        raise ValueError("Invalid public decision cohorts")
+    seen: set[str] = set()
+    for item in cohorts:
+        row = _fields(item, DECISION_COHORT_FIELDS)
+        channel = row["channel"]
+        if (
+            not isinstance(channel, str)
+            or not re.fullmatch(r"source_[1-9][0-9]{0,2}", channel)
+            or channel in seen
+        ):
+            raise ValueError("Invalid or duplicate public decision channel")
+        seen.add(channel)
+        for field in DECISION_COHORT_INT_FIELDS:
+            if type(row[field]) is not int or row[field] < 0:
+                raise ValueError("Invalid public decision integer count")
+        if (
+            row["non_signal_commentary"]
+            + row["normalized_actionable"]
+            + row["update_existing_recap"]
+            + row["evidence_filtered"]
+            != row["audited_posts"]
+        ):
+            raise ValueError("Public decision disposition counts do not sum to total")
+        _number(row["actionable_ratio_pct"], nonnegative=True)
+        if (
+            row["actionable_ratio_pct"] is not None
+            and row["actionable_ratio_pct"] > 100
+        ):
+            raise ValueError("Public decision percentage exceeds 100")
+
+
 def _validate_optional_analytics_cohorts(value: object) -> dict:
     extra = (
         tuple(
             key
-            for key in ("exit_cohorts", "ladder_cohorts", "setup_cohorts")
+            for key in (
+                "exit_cohorts",
+                "ladder_cohorts",
+                "setup_cohorts",
+                "decision_cohorts",
+            )
             if key in value
         )
         if isinstance(value, dict)
         else ()
     )
     analytics = _fields(value, (*CHANNEL_ANALYTICS_FIELDS, *extra))
-    if "exit_cohorts" in analytics:
-        _validate_exit_cohorts(analytics["exit_cohorts"])
-    if "ladder_cohorts" in analytics:
-        _validate_ladder_cohorts(analytics["ladder_cohorts"])
-    if "setup_cohorts" in analytics:
-        _validate_setup_cohorts(analytics["setup_cohorts"])
+    for key, validator in (
+        ("exit_cohorts", _validate_exit_cohorts),
+        ("ladder_cohorts", _validate_ladder_cohorts),
+        ("setup_cohorts", _validate_setup_cohorts),
+        ("decision_cohorts", _validate_decision_cohorts),
+    ):
+        if key in analytics:
+            validator(analytics[key])
     return analytics
 
 
