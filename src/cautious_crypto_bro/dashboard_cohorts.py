@@ -313,3 +313,52 @@ def build_decision_cohorts(
         )
     )
     return cohorts
+
+
+def build_channel_exit_cohorts(
+    channel_aliases: Mapping[str, str],
+    complete: list[Mapping[str, object]],
+    size_reconciled: list[Mapping[str, object]],
+    current_risk: list[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    pairs = sorted(
+        {
+            (
+                channel_aliases[str(p.get("source_channel_id"))],
+                str(p.get("exit_profile") or "baseline"),
+            )
+            for p in size_reconciled
+            if str(p.get("source_channel_id")) in channel_aliases
+        }
+    )
+    cohorts: list[dict[str, object]] = []
+    for alias, profile in pairs:
+        p_comp = [
+            p
+            for p in complete
+            if channel_aliases.get(str(p.get("source_channel_id"))) == alias
+            and str(p.get("exit_profile") or "baseline") == profile
+        ]
+        p_size = [
+            p
+            for p in size_reconciled
+            if channel_aliases.get(str(p.get("source_channel_id"))) == alias
+            and str(p.get("exit_profile") or "baseline") == profile
+        ]
+        p_cur = [
+            p
+            for p in current_risk
+            if channel_aliases.get(str(p.get("source_channel_id"))) == alias
+            and str(p.get("exit_profile") or "baseline") == profile
+        ]
+        row = _cohort_row("exit_profile", profile, p_comp, p_size, p_cur)
+        cohorts.append({"channel": alias, **row})
+    cohorts.sort(
+        key=lambda c: (
+            -int(c["current_risk_trades"]),  # type: ignore[arg-type]
+            -int(c["size_reconciled_trades"]),  # type: ignore[arg-type]
+            str(c["channel"]),
+            str(c["exit_profile"]),
+        )
+    )
+    return cohorts

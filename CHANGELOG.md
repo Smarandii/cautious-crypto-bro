@@ -10,6 +10,23 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.124] - 2026-11-08
+
+### Added
+
+- Add `channel_exit_cohorts` (per-channel × exit-profile cross-tabulation) to
+  `channel_analytics` in `dashboard_cohorts.py`, `dashboard_metrics.py`,
+  `dashboard_feed.py`, and `docs/script.js` to isolate within-channel A/B arm
+  performance from channel-mix effects on the landing page (#475, #248).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.123. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.123] - 2026-11-08
 
 ### Added

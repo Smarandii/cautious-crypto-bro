@@ -476,6 +476,56 @@ function renderTradeHistory(data, refreshFailed = false) {
         }
       }
     }
+    if (Array.isArray(channelAnalytics.channel_exit_cohorts) && channelAnalytics.channel_exit_cohorts.length) {
+      add("h3", "Channel × exit-profile cross-tabulation", channelSection);
+      add(
+        "p",
+        "Stratifies each channel by exit profile to isolate within-channel A/B arm performance (for example, source_4 on 0.20R control vs 0.15R treatment) from channel-mix effects.",
+        channelSection,
+      );
+      const cxScroll = add("div", "", channelSection);
+      cxScroll.className = "trade-table-scroll";
+      cxScroll.tabIndex = 0;
+      cxScroll.setAttribute("role", "region");
+      cxScroll.setAttribute("aria-label", "Channel by exit-profile cross-tabulation table");
+      const cxTable = add("table", "", cxScroll);
+      add("caption", "Per-channel and exit-profile strategy performance", cxTable);
+      const cxHead = add("tr", "", add("thead", "", cxTable));
+      for (const col of [
+        "Channel",
+        "Exit profile",
+        "Current policy (W / L · WR)",
+        "Current policy Net PnL · R · PF",
+        "Current policy Avg Win / Loss · USDT",
+        "All-time size-reconciled (W / L · WR)",
+        "All-time size-reconciled Net PnL · R · PF",
+      ]) {
+        add("th", col, cxHead).scope = "col";
+      }
+      const cxBody = add("tbody", "", cxTable);
+      for (const cx of channelAnalytics.channel_exit_cohorts) {
+        const tr = add("tr", "", cxBody);
+        const curN = cx.current_risk_trades ?? 0;
+        const sizeN = cx.size_reconciled_trades ?? 0;
+        for (const cell of [
+          cx.channel,
+          cx.exit_profile,
+          `${curN} (${cx.current_risk_winning_trades ?? 0}W / ${cx.current_risk_losing_trades ?? 0}L · ${pct(cx.current_risk_win_rate_pct)})`,
+          curN
+            ? `${signed(cx.current_risk_net_pnl_usdt, 2)} USDT · ${signed(cx.current_risk_net_r, 2)}R · ${Number.isFinite(cx.current_risk_profit_factor) ? `${number(cx.current_risk_profit_factor, 2)}×` : "—"}`
+            : "—",
+          curN
+            ? `${signed(cx.current_risk_avg_win_usdt, 2)} / ${signed(cx.current_risk_avg_loss_usdt, 2)} USDT`
+            : "—",
+          `${sizeN} (${cx.size_reconciled_winning_trades ?? 0}W / ${cx.size_reconciled_losing_trades ?? 0}L · ${pct(cx.size_reconciled_win_rate_pct)})`,
+          sizeN
+            ? `${signed(cx.size_reconciled_net_pnl_usdt, 2)} USDT · ${signed(cx.size_reconciled_net_r, 2)}R · ${Number.isFinite(cx.size_reconciled_profit_factor) ? `${number(cx.size_reconciled_profit_factor, 2)}×` : "—"}`
+            : "—",
+        ]) {
+          add("td", cell, tr);
+        }
+      }
+    }
   }
   if (!history?.available) {
     add("p", "Trade evidence unavailable. No outcomes inferred.");

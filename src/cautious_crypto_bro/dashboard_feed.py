@@ -209,6 +209,7 @@ DECISION_COHORT_FIELDS = (
     *DECISION_COHORT_INT_FIELDS,
     "actionable_ratio_pct",
 )
+CHANNEL_EXIT_COHORT_FIELDS = ("channel", *EXIT_COHORT_FIELDS)
 CHANNEL_ANALYTICS_FIELDS = ("available", "rows", "totals")
 EXIT_PROFILES = {
     "baseline",
@@ -426,6 +427,26 @@ def _validate_decision_cohorts(cohorts: object) -> None:
             raise ValueError("Public decision percentage exceeds 100")
 
 
+def _validate_channel_exit_cohorts(cohorts: object) -> None:
+    if not isinstance(cohorts, list) or len(cohorts) > 100:
+        raise ValueError("Invalid public channel-exit cohorts")
+    seen: set[tuple[str, str]] = set()
+    for item in cohorts:
+        row = _fields(item, CHANNEL_EXIT_COHORT_FIELDS)
+        channel = row["channel"]
+        profile = row["exit_profile"]
+        if (
+            not isinstance(channel, str)
+            or not re.fullmatch(r"source_[1-9][0-9]{0,2}", channel)
+            or not isinstance(profile, str)
+            or profile not in EXIT_PROFILES
+            or (channel, profile) in seen
+        ):
+            raise ValueError("Invalid or duplicate public channel-exit cohort")
+        seen.add((channel, profile))
+        _validate_cohort_numbers(row)
+
+
 def _validate_optional_analytics_cohorts(value: object) -> dict:
     extra = (
         tuple(
@@ -435,6 +456,7 @@ def _validate_optional_analytics_cohorts(value: object) -> dict:
                 "ladder_cohorts",
                 "setup_cohorts",
                 "decision_cohorts",
+                "channel_exit_cohorts",
             )
             if key in value
         )
@@ -447,6 +469,7 @@ def _validate_optional_analytics_cohorts(value: object) -> dict:
         ("ladder_cohorts", _validate_ladder_cohorts),
         ("setup_cohorts", _validate_setup_cohorts),
         ("decision_cohorts", _validate_decision_cohorts),
+        ("channel_exit_cohorts", _validate_channel_exit_cohorts),
     ):
         if key in analytics:
             validator(analytics[key])

@@ -370,6 +370,9 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
     assert dec["update_existing_recap"] == 1
     assert dec["non_signal_commentary"] == 1
     assert dec["evidence_filtered"] == 0
+    cx = analytics["channel_exit_cohorts"][0]
+    assert cx["channel"] == "source_2" and cx["exit_profile"] == "baseline"
+    assert cx["size_reconciled_trades"] == 3
 
     history = public_trade_history(positions, available=True)
     history["as_of"] = "2026-11-08T00:00:00+00:00"
