@@ -29,8 +29,10 @@ from cautious_crypto_bro.portfolio_risk import PortfolioRiskUnavailable
 from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.zone_ledger import ZoneExecution, ZoneOrder, zone_group_id
 from cautious_crypto_bro.zone_runner_protection import (
+    allocate_source_zone_reduction,
     cancel_source_zone_entries,
     cancel_zone_pending_entries,
+    derive_zone_fixed_exits,
     derive_zone_runner_state,
     evaluate_zone_group_runner_contract,
     expire_zone_stale_entries,
@@ -1355,3 +1357,186 @@ def test_cancel_source_zone_entries_preserves_other_sources_newer_zones_and_stop
             )
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_derive_zone_fixed_exits_and_source_reduction_isolate_zones(
+    side: Side,
+) -> None:
+    from datetime import timedelta
+
+    t0 = datetime.now(UTC) - timedelta(minutes=30)
+    t1 = t0 + timedelta(minutes=10)
+    t2 = t0 + timedelta(minutes=20)
+    if side is Side.LONG:
+        _, plan_a = _make_plan(side, "98", "100", "90")
+        _, plan_b = _make_plan(side, "92", "94", "84")
+        fill_a, fill_b = D("100"), D("93")
+        expected_tp1_a = D("105.0")
+    else:
+        _, plan_a = _make_plan(side, "100", "102", "110")
+        _, plan_b = _make_plan(side, "106", "108", "116")
+        fill_a, fill_b = D("100"), D("107")
+        expected_tp1_a = D("95.0")
+
+    orders = (
+        ZoneOrder(
+            zone_id=plan_a.intent_id,
+            order_id="a-e1",
+            order_link_id=f"ccb-v2-{plan_a.intent_id.hex[:20]}-e1",
+            role="ENTRY",
+            quantity=D("10"),
+        ),
+        ZoneOrder(
+            zone_id=plan_a.intent_id,
+            order_id="a-tp1",
+            order_link_id=f"ccb-v2-{plan_a.intent_id.hex[:20]}-t1r1",
+            role="EXIT",
+            quantity=D("2.5"),
+        ),
+        ZoneOrder(
+            zone_id=plan_b.intent_id,
+            order_id="b-e1",
+            order_link_id=f"ccb-v2-{plan_b.intent_id.hex[:20]}-e1",
+            role="ENTRY",
+            quantity=D("6"),
+        ),
+    )
+    exec_a = ZoneExecution(
+        execution_id="ex-a",
+        order_id="a-e1",
+        side=side,
+        quantity=D("10"),
+        closed_quantity=D("0"),
+        price=fill_a,
+        executed_at_ms=10,
+    )
+    exec_b = ZoneExecution(
+        execution_id="ex-b",
+        order_id="b-e1",
+        side=side,
+        quantity=D("6"),
+        closed_quantity=D("0"),
+        price=fill_b,
+        executed_at_ms=20,
+    )
+    exits_a = derive_zone_fixed_exits(
+        plan_a, orders, (exec_a, exec_b), CONTEXT, exit_revision=1
+    )
+    exits_b = derive_zone_fixed_exits(
+        plan_b, orders, (exec_a, exec_b), CONTEXT, exit_revision=1
+    )
+    assert len(exits_a) == 3 and len(exits_b) == 3
+    tp1_link_a = f"ccb-v2-{plan_a.intent_id.hex[:20]}-t1r1"
+    assert exits_a[tp1_link_a] == (D("2.5"), expected_tp1_a)
+
+    # Partial exit on Zone A reduces only Zone A; Zone B's exits are unchanged.
+    exec_a_tp1 = ZoneExecution(
+        execution_id="ex-a-tp1",
+        order_id="a-tp1",
+        side=Side.SHORT if side is Side.LONG else Side.LONG,
+        quantity=D("2.5"),
+        closed_quantity=D("2.5"),
+        price=expected_tp1_a,
+        executed_at_ms=30,
+    )
+    exits_a_after = derive_zone_fixed_exits(
+        plan_a,
+        orders,
+        (exec_a, exec_b, exec_a_tp1),
+        CONTEXT,
+        exit_revision=2,
+        tp_done=(True, False, False),
+    )
+    exits_b_after = derive_zone_fixed_exits(
+        plan_b, orders, (exec_a, exec_b, exec_a_tp1), CONTEXT, exit_revision=1
+    )
+    assert len(exits_a_after) == 2
+    assert exits_b_after == exits_b
+
+    # Source-scoped REDUCE and CLOSE apply only to earlier active zones of that source.
+    src_a = SourceMessage(
+        channel_id=-1001,
+        channel_title="A",
+        message_id=10,
+        published_at=t0,
+        received_at=t0,
+        text="open A",
+    )
+    src_b = SourceMessage(
+        channel_id=-1002,
+        channel_title="B",
+        message_id=5,
+        published_at=t0,
+        received_at=t0,
+        text="open B",
+    )
+    src_a_reduce = SourceMessage(
+        channel_id=-1001,
+        channel_title="A",
+        message_id=20,
+        published_at=t1,
+        received_at=t1,
+        text="reduce 50%",
+    )
+    src_a_new = SourceMessage(
+        channel_id=-1001,
+        channel_title="A",
+        message_id=30,
+        published_at=t2,
+        received_at=t2,
+        text="new A",
+    )
+    _, plan_a_new = _make_plan(
+        side,
+        "96" if side is Side.LONG else "104",
+        "97" if side is Side.LONG else "105",
+        "88" if side is Side.LONG else "112",
+    )
+    zones = ((plan_a, src_a), (plan_b, src_b), (plan_a_new, src_a_new))
+    reduce_action = PositionActionIntent(
+        source=src_a_reduce,
+        symbol="BTCUSDT",
+        action=PositionActionType.REDUCE,
+        close_pct=50.0,
+        expected_side=side,
+        summary="Reduce 50%",
+        confidence=1.0,
+    )
+    allocs = allocate_source_zone_reduction(
+        reduce_action, zones, orders, (exec_a, exec_b, exec_a_tp1), CONTEXT
+    )
+    assert len(allocs) == 1
+    assert allocs[0].zone_id == plan_a.intent_id
+    assert allocs[0].remaining_quantity_before == D("7.5")
+    assert allocs[0].reduce_quantity == D("3.75")
+    assert allocs[0].remaining_quantity_after == D("3.75")
+
+    close_action = reduce_action.model_copy(
+        update={"action": PositionActionType.CLOSE, "close_pct": None}
+    )
+    close_allocs = allocate_source_zone_reduction(
+        close_action, zones, orders, (exec_a, exec_b, exec_a_tp1), CONTEXT
+    )
+    assert len(close_allocs) == 1
+    assert close_allocs[0].reduce_quantity == D("7.5")
+    assert close_allocs[0].remaining_quantity_after == D("0")
+
+    with pytest.raises(ValueError, match="CLOSE or REDUCE"):
+        allocate_source_zone_reduction(
+            reduce_action.model_copy(
+                update={"action": PositionActionType.CANCEL_ENTRIES}
+            ),
+            zones,
+            orders,
+            (exec_a, exec_b),
+            CONTEXT,
+        )
+    with pytest.raises(ValueError, match="No active earlier zones"):
+        allocate_source_zone_reduction(
+            reduce_action.model_copy(update={"symbol": "ETHUSDT"}),
+            zones,
+            orders,
+            (exec_a, exec_b),
+            CONTEXT,
+        )
