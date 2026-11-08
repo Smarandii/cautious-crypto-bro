@@ -177,7 +177,7 @@ function renderTradeHistory(data, refreshFailed = false) {
     add("h3", "Channel signal & profitability meta-analysis", channelSection);
     add(
       "p",
-      "Privacy-safe source cohorts ordered by completed trades. Shows total posts ingested, post-to-signal ratio, OPEN signals picked up vs skipped/rejected, reconciled whole-trade win rate, net PnL, and expectancy per channel.",
+      "Privacy-safe source cohorts ordered by size-reconciled closed trades. Size-reconciled closed trades require entry_qty == closed_qty with zero open entry orders; terminal-certified trades additionally require every cancelled scale-in leg (E2/E3) to be observed before Bybit's 24-hour cancelled-order retention window expires (pre-cache shallow-fill winners often lost E2/E3 cancellation rows after 24h while full-ladder stop-out losers retained all Filled rows).",
       channelSection,
     );
     const scroll = add("div", "", channelSection);
@@ -202,14 +202,15 @@ function renderTradeHistory(data, refreshFailed = false) {
       "Signals picked up (exec / open)",
       "Skipped / Failed (owned · risk · other)",
       "Actions (exec / total)",
-      "Completed trades (W / L)",
-      "Win rate",
+      "Size-reconciled closed (W / L · WR)",
+      "Size-reconciled Net PnL · R · PF",
+      "Terminal-certified (W / L · WR)",
       "LONG (trades · WR · PnL)",
       "SHORT (trades · WR · PnL)",
-      "Net PnL · USDT",
-      "Net R",
-      "Expectancy · R",
-      "Profit factor",
+      "Terminal Net PnL · USDT",
+      "Terminal Net R",
+      "Terminal Expectancy · R",
+      "Terminal PF",
     ]) {
       add("th", col, headRow).scope = "col";
     }
@@ -236,6 +237,11 @@ function renderTradeHistory(data, refreshFailed = false) {
         ch.failed_ownership_guard != null
           ? `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0} (${ch.failed_ownership_guard}·${ch.failed_risk_budget_guard ?? 0}·${ch.failed_other ?? 0})`
           : `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0}`;
+      const sizeRecCount = ch.size_reconciled_trades ?? ch.completed_trades ?? 0;
+      const sizeRecWl = `${sizeRecCount} (${ch.size_reconciled_winning_trades ?? ch.winning_trades ?? 0}W / ${ch.size_reconciled_losing_trades ?? ch.losing_trades ?? 0}L · ${pct(ch.size_reconciled_win_rate_pct ?? ch.win_rate_pct)})`;
+      const sizeRecPnl = sizeRecCount
+        ? `${signed(ch.size_reconciled_net_pnl_usdt ?? ch.net_pnl_usdt, 2)} USDT · ${signed(ch.size_reconciled_net_r ?? ch.net_r, 2)}R · ${Number.isFinite(ch.size_reconciled_profit_factor) ? `${number(ch.size_reconciled_profit_factor, 2)}×` : "—"}`
+        : "—";
       for (const cell of [
         ch.channel,
         `${ch.total_posts ?? 0}`,
@@ -243,8 +249,9 @@ function renderTradeHistory(data, refreshFailed = false) {
         `${ch.executed_intents ?? 0} / ${ch.open_intents ?? 0} (${pct(ch.pickup_rate_pct)})`,
         failedDetail,
         `${ch.executed_actions ?? 0} / ${ch.lifecycle_actions ?? 0}`,
-        `${ch.completed_trades ?? 0} (${ch.winning_trades ?? 0}W / ${ch.losing_trades ?? 0}L)`,
-        pct(ch.win_rate_pct),
+        sizeRecWl,
+        sizeRecPnl,
+        `${ch.completed_trades ?? 0} (${ch.winning_trades ?? 0}W / ${ch.losing_trades ?? 0}L · ${pct(ch.win_rate_pct)})`,
         sideCell(ch.long_trades, ch.long_win_rate_pct, ch.long_net_pnl_usdt),
         sideCell(ch.short_trades, ch.short_win_rate_pct, ch.short_net_pnl_usdt),
         signed(ch.net_pnl_usdt, 2),

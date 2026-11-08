@@ -265,6 +265,7 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
             "side": "SHORT",
             "source_channel_id": -100111,
             "entry_qty": 2.0,
+            "closed_qty": 2.0,
             "net_pnl": -15.5,
             "net_r": -0.31,
             "gross_pnl": -14.0,
@@ -272,6 +273,24 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
             "funding": 0.0,
             "risk_usdt": 50.0,
             "closed_at": 3000,
+            "risk_per_trade_pct": 3.0,
+        },
+        {
+            "complete": False,
+            "symbol": "SOLUSDT",
+            "side": "LONG",
+            "source_channel_id": -100111,
+            "entry_qty": 5.0,
+            "closed_qty": 5.0,
+            "open_entry_orders": 0,
+            "ambiguous_rows": 0,
+            "net_pnl": 20.0,
+            "net_r": 0.4,
+            "gross_pnl": 21.0,
+            "fees": 1.0,
+            "funding": 0.0,
+            "risk_usdt": 50.0,
+            "closed_at": 4000,
             "risk_per_trade_pct": 3.0,
         },
     ]
@@ -316,6 +335,12 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
     assert ch2["long_net_pnl_usdt"] == 45.5 and ch2["long_net_r"] == 0.91
     assert ch2["short_trades"] == 1 and ch2["short_win_rate_pct"] == 0.0
     assert ch2["short_net_pnl_usdt"] == -15.5 and ch2["short_net_r"] == -0.31
+    assert ch2["size_reconciled_trades"] == 3
+    assert ch2["size_reconciled_winning_trades"] == 2
+    assert ch2["size_reconciled_losing_trades"] == 1
+    assert ch2["size_reconciled_win_rate_pct"] == 66.67
+    assert ch2["size_reconciled_net_pnl_usdt"] == 50.0
+    assert ch2["size_reconciled_net_r"] == 1.0
     assert rows_by_ch["source_1"]["failed_ownership_guard"] == 1
 
     history = public_trade_history(positions, available=True)

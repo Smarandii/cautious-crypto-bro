@@ -10,6 +10,25 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.105] - 2026-11-08
+
+### Added
+
+- Expose size-reconciled closed-position metrics (`size_reconciled_trades`,
+  `size_reconciled_winning_trades`, `size_reconciled_losing_trades`,
+  `size_reconciled_win_rate_pct`, `size_reconciled_net_pnl_usdt`,
+  `size_reconciled_net_r`, `size_reconciled_expectancy_r`,
+  `size_reconciled_profit_factor`) alongside terminal-order-certified metrics
+  in `channel_analytics` and `docs/script.js` to surface Bybit's 24-hour
+  cancelled-order retention bias on pre-cache shallow-fill winners (#437, #248).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.103. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123/#312) and architecture
+  audit items (#262) remain open.
+
 ## [2.2.103] - 2026-11-08
 
 ### Added
