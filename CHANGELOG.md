@@ -10,6 +10,23 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.123] - 2026-11-08
+
+### Added
+
+- Extract `src/cautious_crypto_bro/dashboard_cohorts.py` and add
+  `decision_cohorts` (`source_decisions` post-disposition audit per channel) to
+  `channel_analytics` in `dashboard_metrics.py`, `dashboard_feed.py`, and
+  `docs/script.js` (#473, #248).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.122. Roll back
+  both VPS services together using `/usr/local/sbin/ccb-vps-cutover` and the
+  retained state backup. Independent zones (#123) remain fail-closed pending
+  operator selection of subaccount UID isolation or partial-stop-only runner
+  protection.
+
 ## [2.2.122] - 2026-11-08
 
 ### Added

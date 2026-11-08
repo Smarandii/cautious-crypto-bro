@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -654,248 +653,18 @@ def _bucket_summary(
     )
 
 
-def _build_exit_cohorts(
-    complete: list[Mapping[str, object]],
-    size_reconciled: list[Mapping[str, object]],
-    current_risk: list[Mapping[str, object]],
-) -> list[dict[str, object]]:
-    profiles = sorted(
-        {str(p.get("exit_profile") or "baseline") for p in size_reconciled}
-    )
-    cohorts: list[dict[str, object]] = []
-    for profile in profiles:
-        p_comp = [
-            p for p in complete if str(p.get("exit_profile") or "baseline") == profile
-        ]
-        p_size = [
-            p
-            for p in size_reconciled
-            if str(p.get("exit_profile") or "baseline") == profile
-        ]
-        p_cur = [
-            p
-            for p in current_risk
-            if str(p.get("exit_profile") or "baseline") == profile
-        ]
-        perf = summarize_reconciled_positions(p_comp)
-        comp_count = int(perf["position_count"])  # type: ignore[arg-type]
-        cohorts.append(
-            {
-                "exit_profile": profile,
-                "completed_trades": comp_count,
-                "winning_trades": int(perf["positive_count"]),  # type: ignore[arg-type]
-                "losing_trades": int(perf["negative_count"]),  # type: ignore[arg-type]
-                "win_rate_pct": perf["win_rate_pct"],
-                "net_pnl_usdt": perf["net_pnl_usdt"] if comp_count else 0.0,
-                "net_r": (
-                    _rounded(sum(_number(p, "net_r") for p in p_comp), 6)
-                    if comp_count
-                    else 0.0
-                ),
-                "expectancy_r": perf["expectancy_r"],
-                "profit_factor": perf["profit_factor"],
-                **_cohort_metrics(p_size, "size_reconciled"),
-                **_cohort_metrics(p_cur, "current_risk"),
-            }
-        )
-    cohorts.sort(
-        key=lambda c: (
-            -int(c["current_risk_trades"]),  # type: ignore[arg-type]
-            -int(c["size_reconciled_trades"]),  # type: ignore[arg-type]
-            str(c["exit_profile"]),
-        )
-    )
-    return cohorts
-
-
-_LADDER_DEPTH_ORDER = ("E1_only", "E1_E2", "E1_E2_E3_full")
-
-
-def _plan_leg_thresholds(database, tables: set[str]) -> dict[str, tuple[float, float]]:
-    if "execution_plans" not in tables:
-        return {}
-    thresholds: dict[str, tuple[float, float]] = {}
-    for intent_id, payload_str in database.execute(
-        "SELECT CAST(intent_id AS TEXT), payload_json FROM execution_plans"
-    ):
-        try:
-            orders = json.loads(payload_str).get("orders") or []
-            q1 = float(orders[0]["quantity"])
-            q12 = q1 + (float(orders[1]["quantity"]) if len(orders) > 1 else 0.0)
-            thresholds[str(intent_id)] = (q1, q12)
-        except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-            continue
-    return thresholds
-
-
-def _classify_ladder_depth(
-    position: Mapping[str, object],
-    thresholds: dict[str, tuple[float, float]],
-) -> str:
-    explicit = position.get("ladder_depth")
-    if explicit in _LADDER_DEPTH_ORDER:
-        return str(explicit)
-    pair = thresholds.get(str(position.get("intent_id") or ""))
-    entry_qty = _optional_number(position.get("entry_qty")) or 0.0
-    if pair is None or entry_qty <= 0:
-        return "E1_only"
-    q1, q12 = pair
-    if abs(entry_qty - q1) <= max(1e-6, q1 * 0.01):
-        return "E1_only"
-    if abs(entry_qty - q12) <= max(1e-6, q12 * 0.01):
-        return "E1_E2"
-    return "E1_E2_E3_full"
-
-
-def _build_ladder_cohorts(
-    database,
-    tables: set[str],
-    complete: list[Mapping[str, object]],
-    size_reconciled: list[Mapping[str, object]],
-    current_risk: list[Mapping[str, object]],
-) -> list[dict[str, object]]:
-    thresholds = _plan_leg_thresholds(database, tables)
-    cohorts: list[dict[str, object]] = []
-    for depth in _LADDER_DEPTH_ORDER:
-        p_comp = [p for p in complete if _classify_ladder_depth(p, thresholds) == depth]
-        p_size = [
-            p for p in size_reconciled if _classify_ladder_depth(p, thresholds) == depth
-        ]
-        p_cur = [
-            p for p in current_risk if _classify_ladder_depth(p, thresholds) == depth
-        ]
-        if not p_size:
-            continue
-        perf = summarize_reconciled_positions(p_comp)
-        comp_count = int(perf["position_count"])  # type: ignore[arg-type]
-        cohorts.append(
-            {
-                "ladder_depth": depth,
-                "completed_trades": comp_count,
-                "winning_trades": int(perf["positive_count"]),  # type: ignore[arg-type]
-                "losing_trades": int(perf["negative_count"]),  # type: ignore[arg-type]
-                "win_rate_pct": perf["win_rate_pct"],
-                "net_pnl_usdt": perf["net_pnl_usdt"] if comp_count else 0.0,
-                "net_r": (
-                    _rounded(sum(_number(p, "net_r") for p in p_comp), 6)
-                    if comp_count
-                    else 0.0
-                ),
-                "expectancy_r": perf["expectancy_r"],
-                "profit_factor": perf["profit_factor"],
-                **_cohort_metrics(p_size, "size_reconciled"),
-                **_cohort_metrics(p_cur, "current_risk"),
-            }
-        )
-    return cohorts
-
-
-_SIGNAL_SETUP_ORDER = (
-    "MARKET_TRADER",
-    "MARKET_POLICY",
-    "LIMIT_TRADER",
-    "LIMIT_POLICY",
-    "RANGE_TRADER",
-    "RANGE_POLICY",
-)
-
-
-def _intent_setups(database, tables: set[str]) -> dict[str, str]:
-    setups: dict[str, str] = {}
-    entry_types: dict[str, str] = {}
-    if "intents" in tables:
-        for intent_id, payload_str in database.execute(
-            "SELECT CAST(intent_id AS TEXT), payload_json FROM intents"
-        ):
-            try:
-                etype = str(
-                    (json.loads(payload_str).get("entry") or {}).get("type") or "MARKET"
-                ).upper()
-                if etype in {"MARKET", "LIMIT", "RANGE"}:
-                    entry_types[str(intent_id)] = etype
-            except (TypeError, ValueError, json.JSONDecodeError):
-                continue
-    stop_sources: dict[str, str] = {}
-    if "execution_plans" in tables:
-        for intent_id, payload_str in database.execute(
-            "SELECT CAST(intent_id AS TEXT), payload_json FROM execution_plans"
-        ):
-            try:
-                src = str(
-                    json.loads(payload_str).get("stop_loss_source") or "TRADER"
-                ).upper()
-                stop_sources[str(intent_id)] = "TRADER" if src == "TRADER" else "POLICY"
-            except (TypeError, ValueError, json.JSONDecodeError):
-                continue
-    for iid in set(entry_types) | set(stop_sources):
-        setups[iid] = (
-            f"{entry_types.get(iid, 'MARKET')}_{stop_sources.get(iid, 'TRADER')}"
-        )
-    return setups
-
-
-def _classify_signal_setup(
-    position: Mapping[str, object], setups: dict[str, str]
-) -> str:
-    explicit = position.get("setup")
-    if explicit in _SIGNAL_SETUP_ORDER:
-        return str(explicit)
-    return setups.get(str(position.get("intent_id") or ""), "MARKET_TRADER")
-
-
-def _build_setup_cohorts(
-    database,
-    tables: set[str],
-    complete: list[Mapping[str, object]],
-    size_reconciled: list[Mapping[str, object]],
-    current_risk: list[Mapping[str, object]],
-) -> list[dict[str, object]]:
-    setups = _intent_setups(database, tables)
-    cohorts: list[dict[str, object]] = []
-    for setup in _SIGNAL_SETUP_ORDER:
-        p_comp = [p for p in complete if _classify_signal_setup(p, setups) == setup]
-        p_size = [
-            p for p in size_reconciled if _classify_signal_setup(p, setups) == setup
-        ]
-        p_cur = [p for p in current_risk if _classify_signal_setup(p, setups) == setup]
-        if not p_size:
-            continue
-        perf = summarize_reconciled_positions(p_comp)
-        comp_count = int(perf["position_count"])  # type: ignore[arg-type]
-        cohorts.append(
-            {
-                "setup": setup,
-                "completed_trades": comp_count,
-                "winning_trades": int(perf["positive_count"]),  # type: ignore[arg-type]
-                "losing_trades": int(perf["negative_count"]),  # type: ignore[arg-type]
-                "win_rate_pct": perf["win_rate_pct"],
-                "net_pnl_usdt": perf["net_pnl_usdt"] if comp_count else 0.0,
-                "net_r": (
-                    _rounded(sum(_number(p, "net_r") for p in p_comp), 6)
-                    if comp_count
-                    else 0.0
-                ),
-                "expectancy_r": perf["expectancy_r"],
-                "profit_factor": perf["profit_factor"],
-                **_cohort_metrics(p_size, "size_reconciled"),
-                **_cohort_metrics(p_cur, "current_risk"),
-            }
-        )
-    cohorts.sort(
-        key=lambda c: (
-            -int(c["current_risk_trades"]),  # type: ignore[arg-type]
-            -int(c["size_reconciled_trades"]),  # type: ignore[arg-type]
-            str(c["setup"]),
-        )
-    )
-    return cohorts
-
-
 def build_channel_analytics(
     database,
     positions: Iterable[Mapping[str, object]],
 ) -> dict[str, object] | None:
     """Summarize per-channel signal pickup and reconciled PnL with privacy-safe IDs."""
+    from .dashboard_cohorts import (
+        build_decision_cohorts,
+        build_exit_cohorts,
+        build_ladder_cohorts,
+        build_setup_cohorts,
+    )
+
     tables = {
         row[0]
         for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -915,7 +684,10 @@ def build_channel_analytics(
         <= 1e-6
     ]
     rows: list[dict[str, object]] = []
+    channel_aliases: dict[str, str] = {}
     for index, (cid, bucket) in enumerate(buckets.items(), 1):
+        alias = f"source_{index}"
+        channel_aliases[cid] = alias
         ch_positions = [p for p in complete if str(p.get("source_channel_id")) == cid]
         ch_size_rec = [
             p for p in size_reconciled if str(p.get("source_channel_id")) == cid
@@ -925,7 +697,7 @@ def build_channel_analytics(
         ]
         rows.append(
             {
-                "channel": f"source_{index}",
+                "channel": alias,
                 **_bucket_summary(bucket, ch_positions, ch_size_rec, ch_cur_risk),
             }
         )
@@ -972,15 +744,16 @@ def build_channel_analytics(
         "totals": _bucket_summary(
             total_bucket, known_positions, known_size_rec, known_cur_risk
         ),
-        "exit_cohorts": _build_exit_cohorts(
+        "exit_cohorts": build_exit_cohorts(
             known_positions, known_size_rec, known_cur_risk
         ),
-        "ladder_cohorts": _build_ladder_cohorts(
+        "ladder_cohorts": build_ladder_cohorts(
             database, tables, known_positions, known_size_rec, known_cur_risk
         ),
-        "setup_cohorts": _build_setup_cohorts(
+        "setup_cohorts": build_setup_cohorts(
             database, tables, known_positions, known_size_rec, known_cur_risk
         ),
+        "decision_cohorts": build_decision_cohorts(database, tables, channel_aliases),
     }
 
 
