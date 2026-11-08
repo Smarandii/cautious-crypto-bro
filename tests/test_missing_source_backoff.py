@@ -111,7 +111,11 @@ def test_missing_retry_backoff_survives_restart_and_recovers_after_one_day(
         source = reader(monkeypatch, client, store, seen)
         if write_failure:
             client.messages.append(
-                FakeMessage(message_id=4, published_at=datetime.now(UTC), text="new")
+                FakeMessage(
+                    message_id=4,
+                    published_at=datetime.now(UTC) + timedelta(seconds=5),
+                    text="new",
+                )
             )
             async with aiosqlite.connect(database) as db:
                 await db.execute(

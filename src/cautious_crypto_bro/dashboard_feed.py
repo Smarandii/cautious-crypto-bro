@@ -68,6 +68,23 @@ CHANNEL_EXTENDED_FIELDS = (
     *CHANNEL_EXTENDED_PCT_FIELDS,
     *CHANNEL_EXTENDED_SIGNED_FIELDS,
 )
+CHANNEL_SIZE_REC_INT_FIELDS = (
+    "size_reconciled_trades",
+    "size_reconciled_winning_trades",
+    "size_reconciled_losing_trades",
+)
+CHANNEL_SIZE_REC_PCT_FIELDS = ("size_reconciled_win_rate_pct",)
+CHANNEL_SIZE_REC_SIGNED_FIELDS = (
+    "size_reconciled_net_pnl_usdt",
+    "size_reconciled_net_r",
+    "size_reconciled_expectancy_r",
+)
+CHANNEL_SIZE_REC_FIELDS = (
+    *CHANNEL_SIZE_REC_INT_FIELDS,
+    *CHANNEL_SIZE_REC_PCT_FIELDS,
+    *CHANNEL_SIZE_REC_SIGNED_FIELDS,
+    "size_reconciled_profit_factor",
+)
 CHANNEL_SUMMARY_FIELDS = (
     *CHANNEL_INT_FIELDS,
     "signal_post_ratio_pct",
@@ -80,8 +97,13 @@ CHANNEL_SUMMARY_FIELDS = (
     "profit_factor",
 )
 CHANNEL_SUMMARY_FIELDS_V2 = (*CHANNEL_SUMMARY_FIELDS, *CHANNEL_EXTENDED_FIELDS)
+CHANNEL_SUMMARY_FIELDS_V3 = (
+    *CHANNEL_SUMMARY_FIELDS_V2,
+    *CHANNEL_SIZE_REC_FIELDS,
+)
 CHANNEL_ROW_FIELDS = ("channel", *CHANNEL_SUMMARY_FIELDS)
 CHANNEL_ROW_FIELDS_V2 = ("channel", *CHANNEL_SUMMARY_FIELDS_V2)
+CHANNEL_ROW_FIELDS_V3 = ("channel", *CHANNEL_SUMMARY_FIELDS_V3)
 CHANNEL_ANALYTICS_FIELDS = ("available", "rows", "totals")
 EXIT_PROFILES = {
     "baseline",
@@ -141,10 +163,20 @@ def validate_public_feed(feed: object) -> dict:
     return feed
 
 
-def _validate_channel_summary(summary: dict) -> None:
+def _channel_field_sets(
+    summary: dict,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    has_v2 = "long_trades" in summary
+    has_v3 = "size_reconciled_trades" in summary
     int_fields = (
-        (*CHANNEL_INT_FIELDS, *CHANNEL_EXTENDED_INT_FIELDS)
-        if "long_trades" in summary
+        (
+            *CHANNEL_INT_FIELDS,
+            *CHANNEL_EXTENDED_INT_FIELDS,
+            *CHANNEL_SIZE_REC_INT_FIELDS,
+        )
+        if has_v3
+        else (*CHANNEL_INT_FIELDS, *CHANNEL_EXTENDED_INT_FIELDS)
+        if has_v2
         else CHANNEL_INT_FIELDS
     )
     pct_fields = (
@@ -153,8 +185,16 @@ def _validate_channel_summary(summary: dict) -> None:
             "pickup_rate_pct",
             "win_rate_pct",
             *CHANNEL_EXTENDED_PCT_FIELDS,
+            *CHANNEL_SIZE_REC_PCT_FIELDS,
         )
-        if "long_trades" in summary
+        if has_v3
+        else (
+            "signal_post_ratio_pct",
+            "pickup_rate_pct",
+            "win_rate_pct",
+            *CHANNEL_EXTENDED_PCT_FIELDS,
+        )
+        if has_v2
         else ("signal_post_ratio_pct", "pickup_rate_pct", "win_rate_pct")
     )
     signed_fields = (
@@ -164,10 +204,24 @@ def _validate_channel_summary(summary: dict) -> None:
             "expectancy_usdt",
             "expectancy_r",
             *CHANNEL_EXTENDED_SIGNED_FIELDS,
+            *CHANNEL_SIZE_REC_SIGNED_FIELDS,
         )
-        if "long_trades" in summary
+        if has_v3
+        else (
+            "net_pnl_usdt",
+            "net_r",
+            "expectancy_usdt",
+            "expectancy_r",
+            *CHANNEL_EXTENDED_SIGNED_FIELDS,
+        )
+        if has_v2
         else ("net_pnl_usdt", "net_r", "expectancy_usdt", "expectancy_r")
     )
+    return int_fields, pct_fields, signed_fields
+
+
+def _validate_channel_summary(summary: dict) -> None:
+    int_fields, pct_fields, signed_fields = _channel_field_sets(summary)
     for field in int_fields:
         if type(summary[field]) is not int or summary[field] < 0:
             raise ValueError("Invalid public channel integer count")
@@ -176,8 +230,18 @@ def _validate_channel_summary(summary: dict) -> None:
         if summary[field] is not None and summary[field] > 100:
             raise ValueError("Public channel percentage exceeds 100")
     _number(summary["profit_factor"], nonnegative=True)
+    if "size_reconciled_profit_factor" in summary:
+        _number(summary["size_reconciled_profit_factor"], nonnegative=True)
     for field in signed_fields:
         _number(summary[field])
+
+
+def _expected_channel_fields(item: object, *, with_channel: bool) -> tuple[str, ...]:
+    if isinstance(item, dict) and "size_reconciled_trades" in item:
+        return CHANNEL_ROW_FIELDS_V3 if with_channel else CHANNEL_SUMMARY_FIELDS_V3
+    if isinstance(item, dict) and "long_trades" in item:
+        return CHANNEL_ROW_FIELDS_V2 if with_channel else CHANNEL_SUMMARY_FIELDS_V2
+    return CHANNEL_ROW_FIELDS if with_channel else CHANNEL_SUMMARY_FIELDS
 
 
 def _validate_channel_analytics(value: object) -> None:
@@ -189,12 +253,7 @@ def _validate_channel_analytics(value: object) -> None:
         raise ValueError("Invalid public channel analytics rows")
     seen: set[str] = set()
     for item in rows:
-        expected_row = (
-            CHANNEL_ROW_FIELDS_V2
-            if isinstance(item, dict) and "long_trades" in item
-            else CHANNEL_ROW_FIELDS
-        )
-        row = _fields(item, expected_row)
+        row = _fields(item, _expected_channel_fields(item, with_channel=True))
         channel = row["channel"]
         if (
             not isinstance(channel, str)
@@ -205,12 +264,9 @@ def _validate_channel_analytics(value: object) -> None:
         seen.add(channel)
         _validate_channel_summary(row)
     raw_totals = analytics["totals"]
-    expected_totals = (
-        CHANNEL_SUMMARY_FIELDS_V2
-        if isinstance(raw_totals, dict) and "long_trades" in raw_totals
-        else CHANNEL_SUMMARY_FIELDS
+    totals = _fields(
+        raw_totals, _expected_channel_fields(raw_totals, with_channel=False)
     )
-    totals = _fields(raw_totals, expected_totals)
     _validate_channel_summary(totals)
 
 

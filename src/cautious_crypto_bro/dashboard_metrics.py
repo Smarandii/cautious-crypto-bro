@@ -388,6 +388,39 @@ def summarize_intent_outcomes(
     }
 
 
+def _is_size_reconciled_closed(position: Mapping[str, object]) -> bool:
+    if position.get("complete") is True:
+        return True
+    entry_qty = _optional_number(position.get("entry_qty")) or 0.0
+    closed_qty = _optional_number(position.get("closed_qty")) or 0.0
+    return (
+        entry_qty > 0
+        and abs(entry_qty - closed_qty) <= 1e-6
+        and not position.get("ambiguous_rows")
+        and not position.get("open_entry_orders")
+    )
+
+
+def _size_reconciled_metrics(
+    positions: list[Mapping[str, object]],
+) -> dict[str, object]:
+    normalized = [{**p, "complete": True} for p in positions]
+    perf = summarize_reconciled_positions(normalized)
+    count = int(perf["position_count"])  # type: ignore[arg-type]
+    return {
+        "size_reconciled_trades": count,
+        "size_reconciled_winning_trades": int(perf["positive_count"]),  # type: ignore[arg-type]
+        "size_reconciled_losing_trades": int(perf["negative_count"]),  # type: ignore[arg-type]
+        "size_reconciled_win_rate_pct": perf["win_rate_pct"],
+        "size_reconciled_net_pnl_usdt": perf["net_pnl_usdt"] if count else 0.0,
+        "size_reconciled_net_r": (
+            _rounded(sum(_number(p, "net_r") for p in normalized), 6) if count else 0.0
+        ),
+        "size_reconciled_expectancy_r": perf["expectancy_r"],
+        "size_reconciled_profit_factor": perf["profit_factor"],
+    }
+
+
 def _side_metrics(
     positions: list[Mapping[str, object]], side: str
 ) -> dict[str, object]:
@@ -420,6 +453,7 @@ def _channel_summary(
     lifecycle_actions: int,
     executed_actions: int,
     positions: list[Mapping[str, object]],
+    size_reconciled_positions: list[Mapping[str, object]],
 ) -> dict[str, object]:
     perf = summarize_reconciled_positions(positions)
     completed_trades = int(perf["position_count"])  # type: ignore[arg-type]
@@ -460,6 +494,7 @@ def _channel_summary(
         "profit_factor": perf["profit_factor"],
         **_side_metrics(positions, "LONG"),
         **_side_metrics(positions, "SHORT"),
+        **_size_reconciled_metrics(size_reconciled_positions),
     }
 
 
@@ -546,7 +581,9 @@ def _channel_funnel_buckets(database) -> dict[str, dict[str, object]]:
 
 
 def _bucket_summary(
-    bucket: dict[str, object], positions: list[Mapping[str, object]]
+    bucket: dict[str, object],
+    positions: list[Mapping[str, object]],
+    size_reconciled: list[Mapping[str, object]],
 ) -> dict[str, object]:
     return _channel_summary(
         total_posts=int(bucket["total_posts"]),  # type: ignore[arg-type]
@@ -562,6 +599,7 @@ def _bucket_summary(
         lifecycle_actions=int(bucket["lifecycle_actions"]),  # type: ignore[arg-type]
         executed_actions=int(bucket["executed_actions"]),  # type: ignore[arg-type]
         positions=positions,
+        size_reconciled_positions=size_reconciled,
     )
 
 
@@ -577,19 +615,24 @@ def build_channel_analytics(
     if not {"source_messages", "intents", "position_actions"} <= tables:
         return None
     buckets = _channel_funnel_buckets(database)
-    complete = [p for p in positions if p.get("complete") is True]
+    all_positions = list(positions)
+    complete = [p for p in all_positions if p.get("complete") is True]
+    size_reconciled = [p for p in all_positions if _is_size_reconciled_closed(p)]
     rows: list[dict[str, object]] = []
     for index, (cid, bucket) in enumerate(buckets.items(), 1):
         ch_positions = [p for p in complete if str(p.get("source_channel_id")) == cid]
+        ch_size_rec = [
+            p for p in size_reconciled if str(p.get("source_channel_id")) == cid
+        ]
         rows.append(
             {
                 "channel": f"source_{index}",
-                **_bucket_summary(bucket, ch_positions),
+                **_bucket_summary(bucket, ch_positions, ch_size_rec),
             }
         )
     rows.sort(
         key=lambda r: (
-            -int(r["completed_trades"]),  # type: ignore[arg-type]
+            -int(r["size_reconciled_trades"]),  # type: ignore[arg-type]
             -int(r["total_posts"]),  # type: ignore[arg-type]
             str(r["channel"]),
         )
@@ -597,6 +640,9 @@ def build_channel_analytics(
     known_cids = set(buckets)
     known_positions = [
         p for p in complete if str(p.get("source_channel_id")) in known_cids
+    ]
+    known_size_rec = [
+        p for p in size_reconciled if str(p.get("source_channel_id")) in known_cids
     ]
     total_bucket: dict[str, object] = {
         key: sum(int(b[key]) for b in buckets.values())  # type: ignore[arg-type]
@@ -620,7 +666,7 @@ def build_channel_analytics(
     return {
         "available": bool(rows),
         "rows": rows,
-        "totals": _bucket_summary(total_bucket, known_positions),
+        "totals": _bucket_summary(total_bucket, known_positions, known_size_rec),
     }
 
 
