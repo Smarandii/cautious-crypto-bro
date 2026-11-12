@@ -398,11 +398,17 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
         legacy["channel_analytics"]["totals"],
     ]:
         summary.pop("failed_by_reason")
+        summary.pop("unresolved_intents")
     assert validate_public_feed(legacy) == legacy
 
     bad_counts = json.loads(json.dumps(feed))
     bad_counts["channel_analytics"]["totals"]["failed_by_reason"]["stale_request"] += 1
     with pytest.raises(ValueError, match="failure total"):
+        validate_public_feed(bad_counts)
+
+    bad_counts = json.loads(json.dumps(feed))
+    bad_counts["channel_analytics"]["totals"]["unresolved_intents"]["pending"] += 1
+    with pytest.raises(ValueError, match="intent total"):
         validate_public_feed(bad_counts)
 
     bad = json.loads(json.dumps(feed))
@@ -445,13 +451,47 @@ def test_entry_failure_reasons_agree_across_dashboard_reports():
                 for index, reason in enumerate(failures)
             ],
         )
+        db.executemany(
+            "INSERT INTO intents VALUES (?, ?, '', ?)",
+            [
+                (
+                    status,
+                    status,
+                    json.dumps({"source": {"channel_id": 1, "message_id": 1}}),
+                )
+                for status in (
+                    "EXECUTED",
+                    "SKIPPED",
+                    "PENDING",
+                    "EXECUTING",
+                    "UNCERTAIN",
+                )
+            ],
+        )
         analytics = build_channel_analytics(db, [])
 
     assert analytics is not None
+    timestamp = "2026-11-12T00:00:00+00:00"
+    history = public_trade_history([], available=True) | {"as_of": timestamp}
+    feed = public_feed_from_snapshot(
+        {
+            "generated_at": timestamp,
+            "risk": {},
+            "trade_history": history,
+            "channel_analytics": analytics,
+        }
+    )
+    assert validate_public_feed(feed) == feed
     outcomes = summarize_intent_outcomes({"FAILED": len(failures)}, failures)
     totals = analytics["totals"]
     assert totals["failed_by_reason"] == outcomes["failed_by_reason"]
     assert all(count == 1 for count in totals["failed_by_reason"].values())
+    assert totals["unresolved_intents"] == {
+        "pending": 1,
+        "executing": 1,
+        "uncertain": 1,
+    }
+    assert totals["open_intents"] == len(failures) + 5
     assert sum(row["failed_intents"] for row in analytics["rows"]) == len(failures)
     for row in analytics["rows"]:
         assert sum(row["failed_by_reason"].values()) == row["failed_intents"]

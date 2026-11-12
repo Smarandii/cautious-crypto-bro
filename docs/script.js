@@ -210,7 +210,7 @@ function renderTradeHistory(data, refreshFailed = false) {
       "Posts (done / total)",
       "Signal posts (%)",
       "Signals picked up (exec / open)",
-      "Skipped / Failed",
+      "Skipped / Failed / Unresolved",
       "Actions (exec / total)",
       "Open positions",
       "Current risk (W / L · WR)",
@@ -267,6 +267,10 @@ function renderTradeHistory(data, refreshFailed = false) {
         .map(([label, count]) => `${count} ${label}`)
         .join(" · ");
       const failedDetail = `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0}${reasonText ? ` (${reasonText})` : ""}`;
+      const unresolved = ch.unresolved_intents;
+      const unresolvedDetail = unresolved
+        ? `${unresolved.pending} pending · ${unresolved.executing} executing · ${unresolved.uncertain} uncertain`
+        : "Unresolved breakdown unavailable";
       const curCount = ch.current_risk_trades ?? 0;
       const curWl = `${curCount} (${ch.current_risk_winning_trades ?? 0}W / ${ch.current_risk_losing_trades ?? 0}L · ${pct(ch.current_risk_win_rate_pct)})`;
       const curPnl = curCount
@@ -285,7 +289,7 @@ function renderTradeHistory(data, refreshFailed = false) {
         `${ch.completed_posts ?? ch.total_posts ?? 0} / ${ch.total_posts ?? 0}`,
         `${ch.signal_posts ?? 0} (${pct(ch.signal_post_ratio_pct)})`,
         `${ch.executed_intents ?? 0} / ${ch.open_intents ?? 0} (${pct(ch.pickup_rate_pct)})`,
-        failedDetail,
+        `${failedDetail} · ${unresolvedDetail}`,
         `${ch.executed_actions ?? 0} / ${ch.lifecycle_actions ?? 0}`,
         `${ch.active_open_strategies ?? 0}`,
         curWl,

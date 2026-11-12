@@ -535,6 +535,7 @@ _INTENT_STATUS_FIELDS = {
     "SKIPPED": "skipped_intents",
     "FAILED": "failed_intents",
 }
+_UNRESOLVED_INTENT_STATUSES = ("PENDING", "EXECUTING", "UNCERTAIN")
 
 
 def _accumulate_channel_intents(
@@ -555,6 +556,10 @@ def _accumulate_channel_intents(
         field = _INTENT_STATUS_FIELDS.get(str(status))
         if field is not None:
             bucket[field] = int(bucket[field]) + 1  # type: ignore[arg-type]
+        if status in _UNRESOLVED_INTENT_STATUSES:
+            unresolved = bucket["unresolved_intents"]
+            assert isinstance(unresolved, dict)
+            unresolved[status.lower()] += 1
         if status == "FAILED":
             reasons = bucket["failed_by_reason"]
             assert isinstance(reasons, dict)
@@ -611,6 +616,9 @@ def _channel_funnel_buckets(database, tables: set[str]) -> dict[str, dict[str, o
             "skipped_intents": 0,
             "failed_intents": 0,
             "failed_by_reason": dict.fromkeys(ENTRY_FAILURE_REASONS, 0),
+            "unresolved_intents": dict.fromkeys(
+                (status.lower() for status in _UNRESOLVED_INTENT_STATUSES), 0
+            ),
             "lifecycle_actions": 0,
             "executed_actions": 0,
             "active_open_strategies": 0,
@@ -627,7 +635,7 @@ def _bucket_summary(
     size_reconciled: list[Mapping[str, object]],
     current_risk: list[Mapping[str, object]],
 ) -> dict[str, object]:
-    return _channel_summary(
+    summary = _channel_summary(
         total_posts=int(bucket["total_posts"]),  # type: ignore[arg-type]
         completed_posts=int(bucket["completed_posts"]),  # type: ignore[arg-type]
         signal_posts=len(bucket["signal_msgs"]),  # type: ignore[arg-type]
@@ -643,6 +651,8 @@ def _bucket_summary(
         size_reconciled_positions=size_reconciled,
         current_risk_positions=current_risk,
     )
+    summary["unresolved_intents"] = bucket["unresolved_intents"]
+    return summary
 
 
 def build_channel_analytics(
@@ -728,6 +738,10 @@ def build_channel_analytics(
     total_bucket["failed_by_reason"] = {
         reason: sum(row["failed_by_reason"][reason] for row in rows)  # type: ignore[index]
         for reason in ENTRY_FAILURE_REASONS
+    }
+    total_bucket["unresolved_intents"] = {
+        status: sum(row["unresolved_intents"][status] for row in rows)  # type: ignore[index]
+        for status in ("pending", "executing", "uncertain")
     }
     total_bucket["signal_msgs"] = range(
         sum(len(b["signal_msgs"]) for b in buckets.values())  # type: ignore[arg-type]

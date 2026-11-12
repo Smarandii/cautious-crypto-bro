@@ -330,6 +330,22 @@ def _validate_channel_summary(summary: dict) -> None:
         _validate_entry_failure_counts(
             summary["failed_by_reason"], summary["failed_intents"]
         )
+    if "unresolved_intents" in summary:
+        _validate_unresolved_entry_counts(summary)
+
+
+def _validate_unresolved_entry_counts(summary: dict) -> None:
+    counts = _fields(
+        summary["unresolved_intents"], ("pending", "executing", "uncertain")
+    )
+    if any(type(count) is not int or count < 0 for count in counts.values()):
+        raise ValueError("Invalid public unresolved entry intent count")
+    terminal = sum(
+        summary[field]
+        for field in ("executed_intents", "skipped_intents", "failed_intents")
+    )
+    if terminal + sum(counts.values()) != summary["open_intents"]:
+        raise ValueError("Entry intent counts do not match the intent total")
 
 
 def _validate_entry_failure_counts(value: object, failed_intents: int) -> None:
@@ -343,7 +359,14 @@ def _validate_entry_failure_counts(value: object, failed_intents: int) -> None:
 def _expected_channel_fields(item: object, *, with_channel: bool) -> tuple[str, ...]:
     if isinstance(item, dict) and "active_open_strategies" in item:
         fields = CHANNEL_ROW_FIELDS_V6 if with_channel else CHANNEL_SUMMARY_FIELDS_V6
-        return (*fields, "failed_by_reason") if "failed_by_reason" in item else fields
+        return (
+            *fields,
+            *(
+                field
+                for field in ("failed_by_reason", "unresolved_intents")
+                if field in item
+            ),
+        )
     if isinstance(item, dict) and "current_risk_avg_win_usdt" in item:
         return CHANNEL_ROW_FIELDS_V5 if with_channel else CHANNEL_SUMMARY_FIELDS_V5
     if isinstance(item, dict) and "current_risk_trades" in item:
