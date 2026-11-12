@@ -346,34 +346,37 @@ def _is_entry_order(order: Mapping[str, object]) -> bool:
     return remaining is None or remaining > 0
 
 
+ENTRY_FAILURE_REASONS: tuple[str, ...] = (
+    "risk_budget_guard",
+    "ownership_guard",
+    "stale_request",
+    "minimum_order_guard",
+    "exchange_or_other",
+    "uncategorized",
+)
+
+
+def _entry_failure_reason(error: str) -> str:
+    normalized = error.lower()
+    if "market moved enough" in normalized or "risk budget" in normalized:
+        return "risk_budget_guard"
+    if "existing strategy owns" in normalized:
+        return "ownership_guard"
+    if "stale" in normalized:
+        return "stale_request"
+    if "minorderqty" in normalized or "notional too small" in normalized:
+        return "minimum_order_guard"
+    return "exchange_or_other" if normalized else "uncategorized"
+
+
 def summarize_intent_outcomes(
     status_counts: Mapping[str, int], failure_reasons: Iterable[str]
 ) -> dict[str, int | dict[str, int]]:
     """Separate expected no-order safety stops from stale and other failures."""
-    categories = {
-        "risk_budget_guard": 0,
-        "ownership_guard": 0,
-        "stale_request": 0,
-        "minimum_order_guard": 0,
-        "exchange_or_other": 0,
-        "uncategorized": 0,
-    }
+    categories = dict.fromkeys(ENTRY_FAILURE_REASONS, 0)
     failed_reasons = list(failure_reasons)
     for reason in failed_reasons:
-        normalized = reason.lower()
-        if "market moved enough" in normalized or "risk budget" in normalized:
-            category = "risk_budget_guard"
-        elif "existing strategy owns" in normalized:
-            category = "ownership_guard"
-        elif "stale" in normalized:
-            category = "stale_request"
-        elif "minorderqty" in normalized or "notional too small" in normalized:
-            category = "minimum_order_guard"
-        elif normalized:
-            category = "exchange_or_other"
-        else:
-            category = "uncategorized"
-        categories[category] += 1
+        categories[_entry_failure_reason(reason)] += 1
 
     failed_count = status_counts.get("FAILED", 0)
     if failed_count > len(failed_reasons):
@@ -471,9 +474,7 @@ def _channel_summary(
     executed_intents: int,
     skipped_intents: int,
     failed_intents: int,
-    failed_ownership_guard: int,
-    failed_risk_budget_guard: int,
-    failed_other: int,
+    failed_by_reason: dict[str, int],
     lifecycle_actions: int,
     executed_actions: int,
     active_open_strategies: int,
@@ -504,9 +505,12 @@ def _channel_summary(
         ),
         "skipped_intents": skipped_intents,
         "failed_intents": failed_intents,
-        "failed_ownership_guard": failed_ownership_guard,
-        "failed_risk_budget_guard": failed_risk_budget_guard,
-        "failed_other": failed_other,
+        "failed_ownership_guard": failed_by_reason["ownership_guard"],
+        "failed_risk_budget_guard": failed_by_reason["risk_budget_guard"],
+        "failed_other": failed_intents
+        - failed_by_reason["ownership_guard"]
+        - failed_by_reason["risk_budget_guard"],
+        "failed_by_reason": failed_by_reason,
         "lifecycle_actions": lifecycle_actions,
         "executed_actions": executed_actions,
         "active_open_strategies": active_open_strategies,
@@ -533,15 +537,6 @@ _INTENT_STATUS_FIELDS = {
 }
 
 
-def _failed_reason_field(error: str) -> str:
-    normalized = error.lower()
-    if "existing strategy owns" in normalized:
-        return "failed_ownership_guard"
-    if "market moved enough" in normalized or "risk budget" in normalized:
-        return "failed_risk_budget_guard"
-    return "failed_other"
-
-
 def _accumulate_channel_intents(
     database, buckets: dict[str, dict[str, object]]
 ) -> None:
@@ -561,8 +556,9 @@ def _accumulate_channel_intents(
         if field is not None:
             bucket[field] = int(bucket[field]) + 1  # type: ignore[arg-type]
         if status == "FAILED":
-            r_field = _failed_reason_field(str(err or ""))
-            bucket[r_field] = int(bucket[r_field]) + 1  # type: ignore[arg-type]
+            reasons = bucket["failed_by_reason"]
+            assert isinstance(reasons, dict)
+            reasons[_entry_failure_reason(str(err or ""))] += 1
 
 
 def _accumulate_channel_actions(
@@ -614,9 +610,7 @@ def _channel_funnel_buckets(database, tables: set[str]) -> dict[str, dict[str, o
             "executed_intents": 0,
             "skipped_intents": 0,
             "failed_intents": 0,
-            "failed_ownership_guard": 0,
-            "failed_risk_budget_guard": 0,
-            "failed_other": 0,
+            "failed_by_reason": dict.fromkeys(ENTRY_FAILURE_REASONS, 0),
             "lifecycle_actions": 0,
             "executed_actions": 0,
             "active_open_strategies": 0,
@@ -641,9 +635,7 @@ def _bucket_summary(
         executed_intents=int(bucket["executed_intents"]),  # type: ignore[arg-type]
         skipped_intents=int(bucket["skipped_intents"]),  # type: ignore[arg-type]
         failed_intents=int(bucket["failed_intents"]),  # type: ignore[arg-type]
-        failed_ownership_guard=int(bucket["failed_ownership_guard"]),  # type: ignore[arg-type]
-        failed_risk_budget_guard=int(bucket["failed_risk_budget_guard"]),  # type: ignore[arg-type]
-        failed_other=int(bucket["failed_other"]),  # type: ignore[arg-type]
+        failed_by_reason=bucket["failed_by_reason"],  # type: ignore[arg-type]
         lifecycle_actions=int(bucket["lifecycle_actions"]),  # type: ignore[arg-type]
         executed_actions=int(bucket["executed_actions"]),  # type: ignore[arg-type]
         active_open_strategies=int(bucket["active_open_strategies"]),  # type: ignore[arg-type]
@@ -728,13 +720,14 @@ def build_channel_analytics(
             "executed_intents",
             "skipped_intents",
             "failed_intents",
-            "failed_ownership_guard",
-            "failed_risk_budget_guard",
-            "failed_other",
             "lifecycle_actions",
             "executed_actions",
             "active_open_strategies",
         )
+    }
+    total_bucket["failed_by_reason"] = {
+        reason: sum(row["failed_by_reason"][reason] for row in rows)  # type: ignore[index]
+        for reason in ENTRY_FAILURE_REASONS
     }
     total_bucket["signal_msgs"] = range(
         sum(len(b["signal_msgs"]) for b in buckets.values())  # type: ignore[arg-type]

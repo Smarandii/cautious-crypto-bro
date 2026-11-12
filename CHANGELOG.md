@@ -10,6 +10,26 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.126] - 2026-11-12
+
+### Fixed
+
+- Use consistent failure reason categories in the historical and live Demo
+  reports. The dashboard shows per-source counts for stale requests,
+  minimum-order guards, exchange failures and missing reasons (#485).
+
+### Changed
+
+- Refresh the Python base image, GitHub Actions dependencies and Ruff
+  (#479, #480, #481).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.125.
+  Earlier public feeds still render. Roll back both Demo services together
+  using the retained images and state. Profit magnitude verification (#248)
+  and independent zones (#123) remain open.
+
 ## [2.2.125] - 2026-11-08
 
 ### Fixed

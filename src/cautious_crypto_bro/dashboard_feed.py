@@ -10,6 +10,8 @@ import math
 import re
 from datetime import datetime
 
+from .dashboard_metrics import ENTRY_FAILURE_REASONS
+
 MAX_PUBLIC_FEED_BYTES = 60_000
 MAX_ENCODED_PUBLIC_FEED_BYTES = 48_000
 
@@ -323,11 +325,24 @@ def _validate_channel_summary(summary: dict) -> None:
             _number(summary[pf_field], nonnegative=True)
     for field in signed_fields:
         _number(summary[field])
+    if "failed_by_reason" in summary:
+        _validate_entry_failure_counts(
+            summary["failed_by_reason"], summary["failed_intents"]
+        )
+
+
+def _validate_entry_failure_counts(value: object, failed_intents: int) -> None:
+    counts = _fields(value, ENTRY_FAILURE_REASONS)
+    if any(type(count) is not int or count < 0 for count in counts.values()):
+        raise ValueError("Invalid public entry failure reason count")
+    if sum(counts.values()) != failed_intents:
+        raise ValueError("Entry failure reason counts do not match the failure total")
 
 
 def _expected_channel_fields(item: object, *, with_channel: bool) -> tuple[str, ...]:
     if isinstance(item, dict) and "active_open_strategies" in item:
-        return CHANNEL_ROW_FIELDS_V6 if with_channel else CHANNEL_SUMMARY_FIELDS_V6
+        fields = CHANNEL_ROW_FIELDS_V6 if with_channel else CHANNEL_SUMMARY_FIELDS_V6
+        return (*fields, "failed_by_reason") if "failed_by_reason" in item else fields
     if isinstance(item, dict) and "current_risk_avg_win_usdt" in item:
         return CHANNEL_ROW_FIELDS_V5 if with_channel else CHANNEL_SUMMARY_FIELDS_V5
     if isinstance(item, dict) and "current_risk_trades" in item:
