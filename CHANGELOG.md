@@ -10,6 +10,22 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.130] - 2026-11-12
+
+### Fixed
+
+- Show pending, executing and uncertain Demo entry intents by source and
+  overall. The public feed reconciles all six statuses to the recorded entry
+  total. Older feeds display that the breakdown is unavailable (#494).
+
+### Delivery and rollback
+
+- CI passed for the dashboard change. The deployed public feed reconciled
+  267 entry intents across all sources, including three pending entries.
+- Schema 17 and configuration remain compatible with v2.2.129. Roll back the
+  app and publisher together using the retained images and state.
+- Profit magnitude verification (#248) and independent zones (#123) remain open.
+
 ## [2.2.129] - 2026-11-12
 
 ### Added
