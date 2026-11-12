@@ -12,6 +12,16 @@ from .dashboard_metrics import (
     _rounded,
     summarize_reconciled_positions,
 )
+from .forensic_pnl import (
+    DEMO_EXIT_PROFILE_REVIEW_CASES,
+    DEMO_LONG_EXIT_AB_CONTROL_PROFILE,
+    DEMO_LONG_EXIT_AB_TREATMENT_PROFILE,
+)
+
+LONG_EXIT_ARMS = {
+    DEMO_LONG_EXIT_AB_CONTROL_PROFILE,
+    DEMO_LONG_EXIT_AB_TREATMENT_PROFILE,
+}
 
 _LADDER_DEPTH_ORDER = ("E1_only", "E1_E2", "E1_E2_E3_full")
 _SIGNAL_SETUP_ORDER = (
@@ -55,9 +65,9 @@ def build_exit_cohorts(
     size_reconciled: list[Mapping[str, object]],
     current_risk: list[Mapping[str, object]],
 ) -> list[dict[str, object]]:
-    profiles = sorted(
-        {str(p.get("exit_profile") or "baseline") for p in size_reconciled}
-    )
+    profiles = {str(p.get("exit_profile") or "baseline") for p in size_reconciled}
+    if profiles & LONG_EXIT_ARMS:
+        profiles |= LONG_EXIT_ARMS
     cohorts = [
         _cohort_row(
             "exit_profile",
@@ -78,8 +88,25 @@ def build_exit_cohorts(
                 if str(p.get("exit_profile") or "baseline") == profile
             ],
         )
-        for profile in profiles
+        for profile in sorted(profiles)
     ]
+    for cohort in cohorts:
+        profile = cohort["exit_profile"]
+        if profile in LONG_EXIT_ARMS:
+            terminal = [
+                p
+                for p in current_risk
+                if p.get("complete") is True
+                and p.get("side") == "LONG"
+                and p.get("exit_profile") == profile
+            ]
+            metrics = _cohort_metrics(terminal, "terminal")
+            cohort["current_risk_terminal"] = {
+                "trades": len(terminal),
+                "net_pnl_usdt": metrics["terminal_net_pnl_usdt"],
+                "net_r": metrics["terminal_net_r"],
+                "review_target": DEMO_EXIT_PROFILE_REVIEW_CASES,
+            }
     cohorts.sort(
         key=lambda c: (
             -int(c["current_risk_trades"]),  # type: ignore[arg-type]

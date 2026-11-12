@@ -473,3 +473,48 @@ def test_public_feed_validates_optional_long_exit_control_fraction(fraction):
             public_feed_from_snapshot(snapshot)["risk"]["long_exit_control_fraction"]
             == fraction
         )
+
+
+def test_long_exit_review_uses_terminal_current_risk_long_trades():
+    from cautious_crypto_bro.dashboard_cohorts import build_exit_cohorts
+    from cautious_crypto_bro.dashboard_feed import _validate_exit_cohorts
+    from cautious_crypto_bro.forensic_pnl import (
+        DEMO_LONG_EXIT_AB_CONTROL_PROFILE,
+        DEMO_LONG_EXIT_AB_TREATMENT_PROFILE,
+    )
+
+    control = DEMO_LONG_EXIT_AB_CONTROL_PROFILE
+    treatment = DEMO_LONG_EXIT_AB_TREATMENT_PROFILE
+    matching = {
+        "exit_profile": control,
+        "side": "LONG",
+        "complete": True,
+        "net_pnl": 10,
+        "net_r": 0.1,
+    }
+    old_risk = matching | {"net_pnl": 50}
+    incomplete = matching | {"complete": False, "net_pnl": 100}
+    short = matching | {"side": "SHORT", "net_pnl": 200}
+    treated = matching | {"exit_profile": treatment, "net_pnl": -20, "net_r": -0.2}
+    complete = [matching, old_risk, short, treated]
+    current_risk = [matching, incomplete, short, treated]
+    cohorts = build_exit_cohorts(complete, [*complete, incomplete], current_risk)
+    _validate_exit_cohorts(cohorts)
+    by_profile = {row["exit_profile"]: row for row in cohorts}
+    assert by_profile[control]["current_risk_terminal"] == {
+        "trades": 1,
+        "net_pnl_usdt": 10.0,
+        "net_r": 0.1,
+        "review_target": 20,
+    }
+    assert by_profile[treatment]["current_risk_terminal"] == {
+        "trades": 1,
+        "net_pnl_usdt": -20.0,
+        "net_r": -0.2,
+        "review_target": 20,
+    }
+    legacy = [
+        {k: v for k, v in row.items() if k != "current_risk_terminal"}
+        for row in cohorts
+    ]
+    _validate_exit_cohorts(legacy)

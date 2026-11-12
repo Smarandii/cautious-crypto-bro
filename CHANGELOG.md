@@ -10,6 +10,19 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.129] - 2026-11-12
+
+### Added
+
+- Show the terminal-certified trades at the current risk for each LONG exit
+  arm, with net PnL, net R and the review target (#492).
+
+### Delivery and rollback
+
+- Schema 17 and configuration remain compatible with v2.2.128. Roll back
+  both Demo services together using the retained images and state.
+  Profit magnitude verification (#248) and independent zones (#123) remain open.
+
 ## [2.2.128] - 2026-11-12
 
 ### Fixed
