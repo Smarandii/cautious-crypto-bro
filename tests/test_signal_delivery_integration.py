@@ -4,6 +4,7 @@ import asyncio
 import sqlite3
 from contextlib import closing
 
+import aiosqlite
 import pytest
 from test_remaining_concerns import Exchange, executor_for, prepare
 
@@ -12,6 +13,83 @@ from cautious_crypto_bro.signals.delivery import SignalDelivery
 from cautious_crypto_bro.storage import IntentStore
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize(
+    "kind,table,id_column",
+    [
+        ("OPEN", "intents", "intent_id"),
+        ("ACTION", "position_actions", "action_id"),
+    ],
+)
+@pytest.mark.parametrize("stale", [False, True])
+def test_manual_reconciliation_preserves_concurrent_changes(
+    tmp_path, monkeypatch, kind, table, id_column, stale
+):
+    async def run():
+        database = tmp_path / "state.sqlite3"
+        store = IntentStore(database)
+        with closing(sqlite3.connect(database)) as db:
+            for name, key in (
+                ("intents", "intent_id"),
+                ("position_actions", "action_id"),
+            ):
+                db.execute(
+                    f"CREATE TABLE {name} ({key} TEXT PRIMARY KEY, status TEXT, "
+                    "approval_mode TEXT, created_at TEXT, error TEXT, updated_at TEXT)"
+                )
+            db.execute(
+                "CREATE TABLE manual_deliveries (record_id TEXT PRIMARY KEY, kind TEXT)"
+            )
+            db.executemany(
+                f"INSERT INTO {table} ({id_column}, status, approval_mode, created_at) "
+                "VALUES (?, 'PENDING', 'MANUAL', ?)",
+                [
+                    (
+                        record_id,
+                        "2020-01-01T00:00:00+00:00"
+                        if stale
+                        else "2099-01-01T00:00:00+00:00",
+                    )
+                    for record_id in ("status-changed", "delivery-created", "orphan")
+                ],
+            )
+            db.commit()
+
+        fetchall = aiosqlite.Cursor.fetchall
+
+        async def fetch_then_change(cursor):
+            rows = await fetchall(cursor)
+            with closing(sqlite3.connect(database)) as db:
+                db.execute(
+                    f"UPDATE {table} SET status='EXECUTED' WHERE {id_column}='status-changed'"
+                )
+                db.execute(
+                    "INSERT INTO manual_deliveries VALUES ('delivery-created', ?)",
+                    (kind,),
+                )
+                db.commit()
+            return rows
+
+        monkeypatch.setattr(aiosqlite.Cursor, "fetchall", fetch_then_change)
+        assert await store.reconcile_manual_deliveries() == (
+            (0, 1) if stale else (1, 0)
+        )
+        with closing(sqlite3.connect(database)) as db:
+            assert dict(db.execute(f"SELECT {id_column}, status FROM {table}")) == {
+                "status-changed": "EXECUTED",
+                "delivery-created": "PENDING",
+                "orphan": "FAILED" if stale else "PENDING",
+            }
+            expected = {"delivery-created": kind}
+            if not stale:
+                expected["orphan"] = kind
+            assert (
+                dict(db.execute("SELECT record_id, kind FROM manual_deliveries"))
+                == expected
+            )
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("cancel_send", [False, True])

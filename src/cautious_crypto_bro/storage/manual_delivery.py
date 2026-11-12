@@ -94,34 +94,46 @@ class ManualDeliveryRepositoryImpl(_Store):
             requeued = 0
             failed = 0
             for record_id, kind, created_at in orphaned:
+                table = "intents" if kind == "OPEN" else "position_actions"
+                id_column = "intent_id" if kind == "OPEN" else "action_id"
+                # A callback or another recovery can change the row after selection.
+                still_orphaned = f"""
+                    {id_column} = ? AND status = ? AND approval_mode = ?
+                    AND NOT EXISTS (
+                        SELECT 1 FROM manual_deliveries WHERE record_id = {table}.{id_column}
+                    )
+                """
+                orphan_params = (
+                    record_id,
+                    IntentStatus.PENDING.value,
+                    ApprovalMode.MANUAL.value,
+                )
                 if datetime.fromisoformat(created_at) < cutoff:
-                    table = "intents" if kind == "OPEN" else "position_actions"
-                    id_column = "intent_id" if kind == "OPEN" else "action_id"
-                    await db.execute(
+                    cursor = await db.execute(
                         f"""
                         UPDATE {table}
                         SET
                             status = ?,
                             error = ?,
                             updated_at = CURRENT_TIMESTAMP
-                        WHERE {id_column} = ?
+                        WHERE {still_orphaned}
                         """,
                         (
                             IntentStatus.FAILED.value,
                             "Stale manual approval request; delivery queue was lost",
-                            record_id,
+                            *orphan_params,
                         ),
                     )
-                    failed += 1
+                    failed += cursor.rowcount
                 else:
-                    await db.execute(
-                        """
+                    cursor = await db.execute(
+                        f"""
                         INSERT INTO manual_deliveries(record_id, kind)
-                        VALUES (?, ?)
+                        SELECT {id_column}, ? FROM {table} WHERE {still_orphaned}
                         """,
-                        (record_id, kind),
+                        (kind, *orphan_params),
                     )
-                    requeued += 1
+                    requeued += cursor.rowcount
 
             await db.commit()
             return requeued, failed

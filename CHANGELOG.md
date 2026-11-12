@@ -10,6 +10,20 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.127] - 2026-11-12
+
+### Fixed
+
+- Recheck manual approval status and delivery ownership at the SQLite write.
+  Recovery preserves concurrent status changes and newly queued deliveries
+  for entries and position actions (#487).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.126.
+  Roll back both Demo services together using the retained images and state.
+  Profit magnitude verification (#248) and independent zones (#123) remain open.
+
 ## [2.2.126] - 2026-11-12
 
 ### Fixed
