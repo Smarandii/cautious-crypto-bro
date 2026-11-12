@@ -93,6 +93,18 @@ If the available native lifecycle cannot preserve independent allocations, keep
 activation disabled and record the precise failed scenario. Do not substitute a
 shared stop or an app-only protective promise to pass tests.
 
+## Isolated Demo state
+
+Verify each Demo executor's authenticated UID before opening its state store.
+Initialize a fresh isolated database with `initialize_isolated_demo` and the
+verified UID. Reopening requires the same UID, including after key rotation.
+The binding and schema 18 are committed together. Ordinary startup and older
+app versions reject schema 18. Keep bound state with its account when restoring
+a backup and use an isolated-aware version to reopen it.
+
+The ordinary single-account path continues to use schema 17. Isolated state
+binding does not enable live multi-account routing.
+
 ## Source actions, evidence and reporting
 
 Each zone has its own approval, entry lifetime and cancellation lineage. A source
