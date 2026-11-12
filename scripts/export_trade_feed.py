@@ -62,6 +62,7 @@ def main() -> None:
         if settings.demo_portfolio_stop_risk_cap_usdt is not None
         else None,
         "exit_profile": settings.demo_exit_profile,
+        "long_exit_control_fraction": float(settings.demo_long_exit_control_fraction),
     }
     uri = settings.database_path.resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True)) as database:

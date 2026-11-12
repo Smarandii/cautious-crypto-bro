@@ -264,8 +264,9 @@ def test_singleton_prevents_parallel_publishing_and_startup_clears_old_health(
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("control_fraction", [None, "0", "0.50"])
 def test_publisher_keeps_private_terminal_evidence_across_temporary_exports(
-    settings, monkeypatch
+    settings, monkeypatch, control_fraction
 ):
     import export_forensic_replay
     import export_trade_feed
@@ -273,6 +274,11 @@ def test_publisher_keeps_private_terminal_evidence_across_temporary_exports(
     import cautious_crypto_bro.btc_benchmark as benchmark_module
     import cautious_crypto_bro.demo_balance_cache as balance_cache
 
+    if control_fraction is not None:
+        monkeypatch.setenv("DEMO_LONG_EXIT_CONTROL_FRACTION", control_fraction)
+        settings = publisher.PublisherSettings(
+            **settings.model_dump(exclude={"demo_long_exit_control_fraction"})
+        )
     settings.database_path.touch()
     public = feed()
     paths = []
@@ -296,6 +302,10 @@ def test_publisher_keeps_private_terminal_evidence_across_temporary_exports(
         bundle.write_text("PRIVATE_ARCHIVE_CANARY", encoding="utf-8")
 
     def build(database, bundle, risk):
+        if control_fraction is None:
+            assert "long_exit_control_fraction" not in risk
+        else:
+            assert risk["long_exit_control_fraction"] == float(control_fraction)
         with pytest.raises(sqlite3.OperationalError):
             database.execute("CREATE TABLE forbidden_write (value TEXT)")
         return public

@@ -58,6 +58,7 @@ class PublisherSettings(BaseSettings):
     )
     demo_portfolio_stop_risk_cap_usdt: Decimal | None = Field(default=None, gt=0)
     demo_exit_profile: str = "baseline"
+    demo_long_exit_control_fraction: Decimal | None = Field(default=None, ge=0, le=1)
 
 
 def _secret(settings: PublisherSettings, name: str) -> str:
@@ -96,6 +97,10 @@ def export_feed(settings: PublisherSettings, bundle: Path, output: Path) -> None
         else None,
         "exit_profile": settings.demo_exit_profile,
     }
+    if settings.demo_long_exit_control_fraction is not None:
+        risk["long_exit_control_fraction"] = float(
+            settings.demo_long_exit_control_fraction
+        )
     uri = settings.database_path.resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True)) as database:
         feed = build_trade_feed(database, bundle, risk)
