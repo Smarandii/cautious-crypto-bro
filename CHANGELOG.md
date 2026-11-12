@@ -10,6 +10,26 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.131] - 2026-11-13
+
+### Added
+
+- Add a read-only Demo preflight that verifies each configured executor's
+  authenticated account identity. It rejects duplicate, mismatched, invalid
+  and unavailable identities with redacted errors (#500).
+- Cover two same-post entry zones in the execution integration suite. Both
+  plans retain their own risk budget, and the current same-account coordinator
+  rejects the second zone before exchange submission after restart (#498).
+
+### Delivery and rollback
+
+- CI and the Demo cutover passed for the preflight. Authenticated exchange
+  checks verified native protection on three open positions.
+- Schema 17 and configuration remain compatible with v2.2.130. Roll back both
+  services together using the retained images and state.
+- The preflight is callable. Live zone routing, the isolated-account lifecycle
+  test and profitability verification remain open (#123, #498, #248).
+
 ## [2.2.130] - 2026-11-12
 
 ### Fixed
