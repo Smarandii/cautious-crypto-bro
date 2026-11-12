@@ -177,7 +177,7 @@ function renderTradeHistory(data, refreshFailed = false) {
     add("h3", "Channel signal & profitability meta-analysis", channelSection);
     add(
       "p",
-      "Privacy-safe source cohorts ordered by size-reconciled closed trades. Size-reconciled closed trades require entry_qty == closed_qty with zero open entry orders; terminal-certified trades additionally require every cancelled scale-in leg (E2/E3) to be observed before Bybit's 24-hour cancelled-order retention window expires (pre-cache shallow-fill winners often lost E2/E3 cancellation rows after 24h while full-ladder stop-out losers retained all Filled rows).",
+      "Current risk includes size-reconciled trades whose recorded risk matches the active risk percentage. Size reconciliation requires matching entry and closed quantities and zero open entry orders. Terminal certification also requires evidence of each entry order's final state.",
       channelSection,
     );
     const scroll = add("div", "", channelSection);
@@ -203,9 +203,9 @@ function renderTradeHistory(data, refreshFailed = false) {
       "Skipped / Failed (owned · risk · other)",
       "Actions (exec / total)",
       "Open positions",
-      "Current policy (W / L · WR)",
-      "Current policy Net PnL · R · PF",
-      "Current policy Avg Win / Loss · USDT",
+      "Current risk (W / L · WR)",
+      "Current risk Net PnL · R · PF",
+      "Current risk Avg Win / Loss · USDT",
       "All-time size-reconciled (W / L · WR)",
       "All-time size-reconciled Net PnL · R · PF",
       "Terminal-certified (W / L · WR)",
@@ -282,7 +282,7 @@ function renderTradeHistory(data, refreshFailed = false) {
       add("h3", "Exit profile & LONG A/B arm meta-analysis", channelSection);
       add(
         "p",
-        "Compares active LONG A/B exit arms (0.20R control vs 0.15R treatment) and historical exit profiles across current 3% policy, all-time size-reconciled, and terminal-certified cohorts.",
+        "Compares active LONG A/B exit arms (0.20R control vs 0.15R treatment) and historical exit profiles across current-risk, all-time size-reconciled, and terminal-certified cohorts.",
         channelSection,
       );
       const exitScroll = add("div", "", channelSection);
@@ -295,9 +295,9 @@ function renderTradeHistory(data, refreshFailed = false) {
       const exitHead = add("tr", "", add("thead", "", exitTable));
       for (const col of [
         "Exit profile",
-        "Current policy (W / L · WR)",
-        "Current policy Net PnL · R · PF",
-        "Current policy Avg Win / Loss · USDT",
+        "Current risk (W / L · WR)",
+        "Current risk Net PnL · R · PF",
+        "Current risk Avg Win / Loss · USDT",
         "All-time size-reconciled (W / L · WR)",
         "All-time size-reconciled Net PnL · R · PF",
         "Terminal-certified (W / L · WR)",
@@ -347,9 +347,9 @@ function renderTradeHistory(data, refreshFailed = false) {
       const ladderHead = add("tr", "", add("thead", "", ladderTable));
       for (const col of [
         "Filled ladder depth",
-        "Current policy (W / L · WR)",
-        "Current policy Net PnL · R · PF",
-        "Current policy Avg Win / Loss · USDT",
+        "Current risk (W / L · WR)",
+        "Current risk Net PnL · R · PF",
+        "Current risk Avg Win / Loss · USDT",
         "All-time size-reconciled (W / L · WR)",
         "All-time size-reconciled Net PnL · R · PF",
         "Terminal-certified (W / L · WR)",
@@ -399,9 +399,9 @@ function renderTradeHistory(data, refreshFailed = false) {
       const setupHead = add("tr", "", add("thead", "", setupTable));
       for (const col of [
         "Signal setup",
-        "Current policy (W / L · WR)",
-        "Current policy Net PnL · R · PF",
-        "Current policy Avg Win / Loss · USDT",
+        "Current risk (W / L · WR)",
+        "Current risk Net PnL · R · PF",
+        "Current risk Avg Win / Loss · USDT",
         "All-time size-reconciled (W / L · WR)",
         "All-time size-reconciled Net PnL · R · PF",
         "Terminal-certified (W / L · WR)",
@@ -494,9 +494,9 @@ function renderTradeHistory(data, refreshFailed = false) {
       for (const col of [
         "Channel",
         "Exit profile",
-        "Current policy (W / L · WR)",
-        "Current policy Net PnL · R · PF",
-        "Current policy Avg Win / Loss · USDT",
+        "Current risk (W / L · WR)",
+        "Current risk Net PnL · R · PF",
+        "Current risk Avg Win / Loss · USDT",
         "All-time size-reconciled (W / L · WR)",
         "All-time size-reconciled Net PnL · R · PF",
       ]) {
@@ -534,10 +534,10 @@ function renderTradeHistory(data, refreshFailed = false) {
   const rows = history.rows ?? [];
   add(
     "p",
-    `Showing ${rows.length} of ${history.total_completed ?? "unknown"} complete trades · ${history.omitted_count ?? 0} older rows omitted.`,
+    `Showing ${rows.length} of ${history.total_completed ?? "unknown"} terminal-certified trades · ${history.omitted_count ?? 0} older rows omitted.`,
   );
   if (!rows.length) {
-    add("p", "No complete trades in this evidence window.");
+    add("p", "No terminal-certified trades in this evidence window.");
     return;
   }
   function tradeTable(trades, parent, caption) {
@@ -547,7 +547,7 @@ function renderTradeHistory(data, refreshFailed = false) {
     scroll.setAttribute("role", "region");
     scroll.setAttribute(
       "aria-label",
-      "Complete Demo trades; scroll horizontally for all columns",
+      "Terminal-certified Demo trades, scroll horizontally for all columns",
     );
     const table = add("table", "", scroll);
     add("caption", caption, table);
