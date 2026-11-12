@@ -200,7 +200,7 @@ function renderTradeHistory(data, refreshFailed = false) {
       "Posts (done / total)",
       "Signal posts (%)",
       "Signals picked up (exec / open)",
-      "Skipped / Failed (owned · risk · other)",
+      "Skipped / Failed",
       "Actions (exec / total)",
       "Open positions",
       "Current risk (W / L · WR)",
@@ -237,10 +237,26 @@ function renderTradeHistory(data, refreshFailed = false) {
       : channelAnalytics.rows;
     for (const ch of allRows) {
       const tr = add("tr", "", tbody);
-      const failedDetail =
-        ch.failed_ownership_guard != null
-          ? `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0} (${ch.failed_ownership_guard}·${ch.failed_risk_budget_guard ?? 0}·${ch.failed_other ?? 0})`
-          : `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0}`;
+      const reasons = ch.failed_by_reason;
+      const breakdown = reasons
+        ? [
+            ["ownership", reasons.ownership_guard],
+            ["risk budget", reasons.risk_budget_guard],
+            ["stale", reasons.stale_request],
+            ["minimum order", reasons.minimum_order_guard],
+            ["exchange / other", reasons.exchange_or_other],
+            ["missing reason", reasons.uncategorized],
+          ]
+        : [
+            ["ownership", ch.failed_ownership_guard],
+            ["risk budget", ch.failed_risk_budget_guard],
+            ["other", ch.failed_other],
+          ];
+      const reasonText = breakdown
+        .filter(([, count]) => count > 0)
+        .map(([label, count]) => `${count} ${label}`)
+        .join(" · ");
+      const failedDetail = `${ch.skipped_intents ?? 0} / ${ch.failed_intents ?? 0}${reasonText ? ` (${reasonText})` : ""}`;
       const curCount = ch.current_risk_trades ?? 0;
       const curWl = `${curCount} (${ch.current_risk_winning_trades ?? 0}W / ${ch.current_risk_losing_trades ?? 0}L · ${pct(ch.current_risk_win_rate_pct)})`;
       const curPnl = curCount

@@ -392,7 +392,66 @@ def test_build_channel_analytics_exports_funnel_and_pnl_without_private_ids():
     assert decode_public_feed(encoded_feed) == feed
     assert decode_public_feed(json.dumps(feed)) == feed
 
+    legacy = json.loads(json.dumps(feed))
+    for summary in [
+        *legacy["channel_analytics"]["rows"],
+        legacy["channel_analytics"]["totals"],
+    ]:
+        summary.pop("failed_by_reason")
+    assert validate_public_feed(legacy) == legacy
+
+    bad_counts = json.loads(json.dumps(feed))
+    bad_counts["channel_analytics"]["totals"]["failed_by_reason"]["stale_request"] += 1
+    with pytest.raises(ValueError, match="failure total"):
+        validate_public_feed(bad_counts)
+
     bad = json.loads(json.dumps(feed))
     bad["channel_analytics"]["rows"][0]["channel"] = "-100111"
     with pytest.raises(ValueError, match="channel identifier"):
         validate_public_feed(bad)
+
+
+def test_entry_failure_reasons_agree_across_dashboard_reports():
+    from cautious_crypto_bro.dashboard_metrics import (
+        build_channel_analytics,
+        summarize_intent_outcomes,
+    )
+
+    failures = [
+        "existing strategy owns the symbol and risk budget exhausted",
+        "existing strategy owns the symbol",
+        "stale request",
+        "notional too small",
+        "exchange rejected order",
+        "",
+    ]
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.executescript("""
+            CREATE TABLE source_messages(channel_id INTEGER, message_id INTEGER, status TEXT);
+            CREATE TABLE intents(intent_id TEXT, status TEXT, error TEXT, payload_json TEXT);
+            CREATE TABLE position_actions(status TEXT, payload_json TEXT);
+            INSERT INTO source_messages VALUES (1, 1, 'COMPLETED'), (2, 1, 'COMPLETED');
+            """)
+        db.executemany(
+            "INSERT INTO intents VALUES (?, 'FAILED', ?, ?)",
+            [
+                (
+                    str(index),
+                    reason,
+                    json.dumps(
+                        {"source": {"channel_id": 1 + index % 2, "message_id": 1}}
+                    ),
+                )
+                for index, reason in enumerate(failures)
+            ],
+        )
+        analytics = build_channel_analytics(db, [])
+
+    assert analytics is not None
+    outcomes = summarize_intent_outcomes({"FAILED": len(failures)}, failures)
+    totals = analytics["totals"]
+    assert totals["failed_by_reason"] == outcomes["failed_by_reason"]
+    assert all(count == 1 for count in totals["failed_by_reason"].values())
+    assert sum(row["failed_intents"] for row in analytics["rows"]) == len(failures)
+    for row in analytics["rows"]:
+        assert sum(row["failed_by_reason"].values()) == row["failed_intents"]
