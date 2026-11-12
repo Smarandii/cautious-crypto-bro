@@ -15,10 +15,9 @@ from cautious_crypto_bro.domain import (
     IntentStatus,
     StoreError,
 )
-from cautious_crypto_bro.portfolio_risk import (
-    PortfolioRiskUnavailable,
-    open_stop_risk_usdt,
-)
+from cautious_crypto_bro.execution import ExecutionPlanner
+from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
+from cautious_crypto_bro.isolated_demo_risk import IsolatedDemoPortfolio
 from cautious_crypto_bro.position_supervisor import PositionSupervisor
 from cautious_crypto_bro.storage import IntentStore
 
@@ -29,6 +28,8 @@ class DemoAccount(Exchange):
     def __init__(self, uid):
         super().__init__()
         self.uid = uid
+        self.hide_entries = False
+        self.unavailable = False
 
     def handle(self, request):
         if request.url.path == "/v5/user/query-api":
@@ -37,10 +38,19 @@ class DemoAccount(Exchange):
             return httpx.Response(
                 200, json={"retCode": 0, "result": {"userID": self.uid}}
             )
+        if request.url.path == "/v5/position/list" and self.unavailable:
+            return httpx.Response(200, json={"retCode": 10003, "retMsg": "unavailable"})
+        if request.url.path == "/v5/order/realtime" and self.hide_entries:
+            return httpx.Response(200, json={"retCode": 0, "result": {"list": []}})
         return super().handle(request)
 
 
-def test_isolated_zones_share_capacity_and_keep_independent_protection(tmp_path):
+@pytest.mark.parametrize(
+    "scenario", ["capacity", "hidden", "unprotected", "unavailable", "success"]
+)
+def test_isolated_zones_share_capacity_and_keep_independent_protection(
+    tmp_path, scenario
+):
     async def run():
         first_account = DemoAccount(101)
         sibling_account = DemoAccount(202)
@@ -75,61 +85,74 @@ def test_isolated_zones_share_capacity_and_keep_independent_protection(tmp_path)
                 != sibling_zone[2].entry_orders[0].price
             )
 
-            # The simulator owns admission until production routing carries account identity.
-            admission_lock = asyncio.Lock()
-
-            async def submit(zone, cap):
-                async with admission_lock:
-                    total = Decimal("0")
-                    for executor, (store, *_) in zip(
-                        (first, sibling), zones, strict=True
-                    ):
-                        total += open_stop_risk_usdt(
-                            await executor.account_state(),
-                            await store.get_active_position_strategies(),
-                        )
-                    _, intent, plan, coordinator, _ = zone
-                    if total + plan.planned_max_loss_usdt > cap:
-                        return None
-                    return await coordinator.execute_intent(
-                        intent.intent_id, approval_mode=ApprovalMode.MANUAL
-                    )
-
-            accepted, denied = await asyncio.gather(
-                submit(first_zone, Decimal("100")),
-                submit(sibling_zone, Decimal("100")),
+            accounts = ((first, first_zone[0]), (sibling, sibling_zone[0]))
+            portfolio = IsolatedDemoPortfolio(
+                accounts,
+                Decimal("100" if scenario in {"capacity", "hidden"} else "140"),
             )
-            assert accepted.status is IntentStatus.EXECUTED
-            assert denied is None
-            assert not sibling_account.orders
-            assert (
-                await sibling_zone[0].get_intent(sibling_zone[1].intent_id)
-            ).status is IntentStatus.PENDING
-            first_entries = list(first_account.orders)
-            first_account.fill(first_entries[0])
-            with pytest.raises(PortfolioRiskUnavailable, match="no exchange stop"):
-                await submit(sibling_zone, Decimal("140"))
-            assert not sibling_account.orders
-            first_account.stop = first_zone[2].stop_loss
-            assert (
-                await submit(sibling_zone, Decimal("140"))
-            ).status is IntentStatus.EXECUTED
+            coordinators = [
+                ExecutionCoordinator(
+                    store=store,
+                    executor=executor,
+                    planner=ExecutionPlanner(),
+                    max_age_seconds=3600,
+                    isolated_demo_portfolio=portfolio,
+                )
+                for executor, store in accounts
+            ]
 
-            for account, zone in zip(
-                (first_account, sibling_account), zones, strict=True
+            async def submit(index):
+                return await coordinators[index].execute_intent(
+                    zones[index][1].intent_id, approval_mode=ApprovalMode.MANUAL
+                )
+
+            if scenario == "capacity":
+                accepted, outcome = await asyncio.gather(submit(0), submit(1))
+            else:
+                accepted = await submit(0)
+                if scenario == "unprotected":
+                    first_account.fill(next(iter(first_account.orders)))
+                first_account.hide_entries = scenario == "hidden"
+                first_account.unavailable = scenario == "unavailable"
+                outcome = await submit(1)
+            assert accepted.status is IntentStatus.EXECUTED
+            if scenario != "success":
+                reason = {
+                    "capacity": "cap exceeded",
+                    "hidden": "cap exceeded",
+                    "unprotected": "no exchange stop",
+                    "unavailable": "unavailable",
+                }[scenario]
+                assert outcome.status is IntentStatus.FAILED
+                assert reason in outcome.message
+                assert not sibling_account.orders
+                assert not await sibling_zone[0].get_active_position_strategies()
+                return
+            assert outcome.status is IntentStatus.EXECUTED
+
+            supervisors = [
+                PositionSupervisor(
+                    store=store,
+                    executor=executor,
+                    mutation_lock=portfolio.mutation_lock,
+                )
+                for executor, store in accounts
+            ]
+
+            for account, zone, supervisor in zip(
+                (first_account, sibling_account), zones, supervisors, strict=True
             ):
                 entries = list(account.orders)
-                if not account.size:
-                    account.fill(entries[0])
+                account.fill(entries[0])
                 account.mark = account.avg
                 # Exchange applies the entry order's native stop on fill.
                 account.stop = zone[2].stop_loss
-                await zone[4].reconcile_once()
+                await supervisor.reconcile_once()
                 account.fill(entries[1])
-                await zone[4].reconcile_once()
+                await supervisor.reconcile_once()
                 account.mark = Decimal("120")
                 account.market_fills_exits = True
-                await zone[4].reconcile_once()
+                await supervisor.reconcile_once()
                 assert account.size > 0 and account.stop > 0 and account.trail > 0
 
             for path, executor, account in zip(
@@ -139,7 +162,9 @@ def test_isolated_zones_share_capacity_and_keep_independent_protection(tmp_path)
                 reopened = IntentStore(path)
                 await reopened.initialize_isolated_demo(account.uid)
                 await PositionSupervisor(
-                    store=reopened, executor=executor, mutation_lock=asyncio.Lock()
+                    store=reopened,
+                    executor=executor,
+                    mutation_lock=portfolio.mutation_lock,
                 ).reconcile_once()
                 state = await state_for(reopened)
                 assert state.trailing_active
@@ -152,7 +177,7 @@ def test_isolated_zones_share_capacity_and_keep_independent_protection(tmp_path)
             )
             sibling_requests = len(sibling_account.requests)
             first_account.size = Decimal("0")
-            await first_zone[4].reconcile_once()
+            await supervisors[0].reconcile_once()
             assert not await first_zone[0].get_active_position_strategies()
             assert sibling_protection == (
                 sibling_account.size,
