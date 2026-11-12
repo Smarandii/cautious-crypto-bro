@@ -320,9 +320,13 @@ async def prepare(
     mode=ApprovalMode.MANUAL,
     relation: OpenRelation | None = None,
     entry: Entry | None = None,
+    verified_demo_uid: int | None = None,
 ):
     store = IntentStore(path)
-    await store.initialize()
+    if verified_demo_uid is None:
+        await store.initialize()
+    else:
+        await store.initialize_isolated_demo(verified_demo_uid)
     intent = make_intent(side, tp, mode)
     if entry is not None:
         intent = intent.model_copy(update={"entry": entry})

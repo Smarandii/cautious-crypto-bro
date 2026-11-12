@@ -8,7 +8,13 @@ import pytest
 from test_remaining_concerns import Exchange, executor_for, prepare, state_for
 
 from cautious_crypto_bro.bybit import BybitDemoExecutor
-from cautious_crypto_bro.domain import ApprovalMode, Entry, EntryType, IntentStatus
+from cautious_crypto_bro.domain import (
+    ApprovalMode,
+    Entry,
+    EntryType,
+    IntentStatus,
+    StoreError,
+)
 from cautious_crypto_bro.portfolio_risk import (
     PortfolioRiskUnavailable,
     open_stop_risk_usdt,
@@ -51,12 +57,14 @@ def test_isolated_zones_share_capacity_and_keep_independent_protection(tmp_path)
                 first_account,
                 first,
                 entry=Entry(type=EntryType.RANGE, range_low=94, range_high=96),
+                verified_demo_uid=101,
             )
             sibling_zone = await prepare(
                 paths[1],
                 sibling_account,
                 sibling,
                 entry=Entry(type=EntryType.RANGE, range_low=97, range_high=98),
+                verified_demo_uid=202,
             )
             zones = (first_zone, sibling_zone)
             assert all(
@@ -129,6 +137,7 @@ def test_isolated_zones_share_capacity_and_keep_independent_protection(tmp_path)
             ):
                 protection = (account.stop, account.trail)
                 reopened = IntentStore(path)
+                await reopened.initialize_isolated_demo(account.uid)
                 await PositionSupervisor(
                     store=reopened, executor=executor, mutation_lock=asyncio.Lock()
                 ).reconcile_once()
@@ -151,5 +160,40 @@ def test_isolated_zones_share_capacity_and_keep_independent_protection(tmp_path)
                 sibling_account.trail,
             )
             assert len(sibling_account.requests) == sibling_requests
+
+    asyncio.run(run())
+
+
+def test_isolated_store_binding_rejects_wrong_account_and_ordinary_startup(tmp_path):
+    async def run():
+        path = tmp_path / "isolated.db"
+        await IntentStore(path).initialize_isolated_demo(101)
+        await IntentStore(path).initialize_isolated_demo(101)
+        with pytest.raises(StoreError, match="identity does not match"):
+            await IntentStore(path).initialize_isolated_demo(202)
+        with pytest.raises(RuntimeError, match="Unsupported database schema version"):
+            await IntentStore(path).initialize()
+        legacy = IntentStore(tmp_path / "legacy.db")
+        await legacy.initialize()
+        with pytest.raises(StoreError, match="fresh or bound"):
+            await legacy.initialize_isolated_demo(101)
+        await legacy.initialize()
+
+    asyncio.run(run())
+
+
+def test_isolated_store_first_binding_serializes_competing_accounts(tmp_path):
+    async def run():
+        path = tmp_path / "contended.db"
+        outcomes = await asyncio.gather(
+            IntentStore(path).initialize_isolated_demo(101),
+            IntentStore(path).initialize_isolated_demo(202),
+            return_exceptions=True,
+        )
+        assert outcomes.count(None) == 1
+        denied = next(result for result in outcomes if result is not None)
+        assert isinstance(denied, StoreError)
+        winner = 101 if outcomes[0] is None else 202
+        await IntentStore(path).initialize_isolated_demo(winner)
 
     asyncio.run(run())

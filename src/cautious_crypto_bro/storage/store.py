@@ -8,7 +8,7 @@ from .execution_policy import ExecutionPolicyRepositoryImpl
 from .guidance import GuidanceRepositoryImpl
 from .intent import IntentRepositoryImpl
 from .manual_delivery import ManualDeliveryRepositoryImpl
-from .migrations import initialize_database
+from .migrations import initialize_database, initialize_isolated_demo_database
 from .planning_candidate import PlanningCandidateRepositoryImpl
 from .pnl import PnlRepositoryImpl
 from .position_action import PositionActionRepositoryImpl
@@ -37,3 +37,6 @@ class SQLiteStore(
 ):
     async def initialize(self) -> None:
         await initialize_database(self._database_path)
+
+    async def initialize_isolated_demo(self, verified_uid: int) -> None:
+        await initialize_isolated_demo_database(self._database_path, verified_uid)

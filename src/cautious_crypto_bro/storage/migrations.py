@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..domain import StoreError
 from ._connection import sqlite_connection
 from .schema import (
     ENTRY_REVIEW_SCHEMA_SQL,
@@ -56,6 +57,44 @@ INSERT INTO zone_orders_v14 SELECT order_id,zone_id,order_link_id,payload_json F
 DROP TABLE zone_orders;
 ALTER TABLE zone_orders_v14 RENAME TO zone_orders;
 """
+
+
+ISOLATED_DEMO_SCHEMA_VERSION = 18
+
+
+async def initialize_isolated_demo_database(database_path: Path, uid: int) -> None:
+    """Create or reopen isolated state after the caller verifies the Demo UID."""
+    if type(uid) is not int or uid <= 0:
+        raise ValueError("A verified Demo account identity is required")
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    async with sqlite_connection(database_path) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cursor = await db.execute("PRAGMA user_version")
+        row = await cursor.fetchone()
+        version = int(row[0]) if row is not None else 0
+        if version == ISOLATED_DEMO_SCHEMA_VERSION:
+            cursor = await db.execute("SELECT uid FROM demo_account_binding WHERE id=1")
+            if await cursor.fetchone() != (str(uid),):
+                raise StoreError("Isolated Demo store account identity does not match")
+            return
+        cursor = await db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1"
+        )
+        if version != 0 or await cursor.fetchone() is not None:
+            raise StoreError("Isolated Demo state requires a fresh or bound database")
+
+        # The baseline schema consists of individual DDL and seed statements.
+        # executescript would implicitly commit and release the acquisition lock.
+        for statement in LATEST_SCHEMA_SQL.split(";"):
+            if statement.strip():
+                await db.execute(statement)
+        await db.execute(
+            "CREATE TABLE demo_account_binding "
+            "(id INTEGER PRIMARY KEY CHECK(id = 1), uid TEXT NOT NULL)"
+        )
+        await db.execute("INSERT INTO demo_account_binding VALUES (1, ?)", (str(uid),))
+        await db.execute(f"PRAGMA user_version = {ISOLATED_DEMO_SCHEMA_VERSION}")
+        await db.commit()
 
 
 async def initialize_database(database_path: Path) -> None:
