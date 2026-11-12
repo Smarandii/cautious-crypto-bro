@@ -18,6 +18,10 @@ from test_remaining_concerns import (
 
 from cautious_crypto_bro.domain import (
     ApprovalMode,
+    Entry,
+    EntryType,
+    ExecutionPolicy,
+    InstrumentContext,
     IntentStatus,
     OpenRelation,
     PositionActionIntent,
@@ -39,6 +43,83 @@ class ObservedLock(asyncio.Lock):
     async def acquire(self):
         self.waiting.set()
         return await super().acquire()
+
+
+def test_same_source_zones_preserve_budgets_but_share_one_exchange_owner(tmp_path):
+    async def run():
+        database = tmp_path / "state.db"
+        store = IntentStore(database)
+        await store.initialize()
+        planner = ExecutionPlanner()
+        policy = ExecutionPolicy(
+            trading_capital_usdt=Decimal("6800"), risk_per_trade_pct=Decimal("3")
+        )
+        context = InstrumentContext(
+            Decimal("100"),
+            Decimal("0.1"),
+            Decimal("0.001"),
+            Decimal("0.001"),
+            Decimal("5"),
+        )
+        post = source(text="BTC long zones 94-96 and 97-98")
+        zones = [
+            make_intent().model_copy(
+                update={
+                    "source": post,
+                    "relation": OpenRelation.NEW,
+                    "entry": Entry(
+                        type=EntryType.RANGE, range_low=low, range_high=high
+                    ),
+                }
+            )
+            for low, high in ((94, 96), (97, 98))
+        ]
+        plans = [planner.plan(zone, policy, context) for zone in zones]
+        claim = await store.claim_source(post, lease_seconds=300)
+        await store.create_signal_batch_and_complete_source(
+            tuple(zip(zones, plans, strict=True)), (), claim
+        )
+        first, sibling = zones
+        assert [plan.policy.risk_budget_usdt for plan in plans] == [Decimal("204")] * 2
+        assert plans[0].orders[0].price != plans[1].orders[0].price
+
+        exchange = Exchange()
+        with executor_for(exchange) as executor:
+            coordinator = ExecutionCoordinator(
+                store=store,
+                executor=executor,
+                planner=planner,
+                max_age_seconds=3600,
+                execution_lock=asyncio.Lock(),
+            )
+            result = await coordinator.execute_intent(
+                first.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert result.status is IntentStatus.EXECUTED
+            accepted_orders = set(exchange.orders)
+            assert accepted_orders
+
+            reopened = IntentStore(database)
+            coordinator = ExecutionCoordinator(
+                store=reopened,
+                executor=executor,
+                planner=planner,
+                max_age_seconds=3600,
+                execution_lock=asyncio.Lock(),
+            )
+            before = len(exchange.requests)
+            result = await coordinator.execute_intent(
+                sibling.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert result.status is IntentStatus.FAILED
+            assert "Existing strategy owns BTCUSDT" in result.message
+            assert len(exchange.requests) == before
+            assert set(exchange.orders) == accepted_orders
+            active = await reopened.get_active_position_strategies()
+            assert len(active) == 1
+            assert active[0][1].intent_id == first.intent_id
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("mode", [ApprovalMode.MANUAL, ApprovalMode.AUTO])
