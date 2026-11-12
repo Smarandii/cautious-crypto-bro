@@ -26,6 +26,7 @@ from .domain import (
 )
 from .entry_ownership import recover_entry_bindings
 from .execution import ExecutionPlanner
+from .isolated_demo_risk import IsolatedDemoPortfolio
 from .portfolio_risk import open_stop_risk_usdt
 from .ports import AccountGateway, ExecutionCoordinatorStore
 from .zone_ledger import ZoneOrder, zone_group_id
@@ -51,6 +52,7 @@ class ExecutionCoordinator:
         max_age_seconds: int,
         execution_lock: asyncio.Lock | None = None,
         portfolio_stop_risk_cap_usdt: Decimal | None = None,
+        isolated_demo_portfolio: IsolatedDemoPortfolio | None = None,
     ) -> None:
         if max_age_seconds <= 0:
             raise ValueError("max_age_seconds must be positive")
@@ -64,6 +66,16 @@ class ExecutionCoordinator:
         self._executor = executor
         self._planner = planner
         self._max_age_seconds = max_age_seconds
+        self._isolated_demo_portfolio = isolated_demo_portfolio
+        if isolated_demo_portfolio is not None:
+            if not isolated_demo_portfolio.includes(executor, store):
+                raise ValueError("Coordinator is outside the isolated Demo portfolio")
+            if portfolio_stop_risk_cap_usdt is not None or execution_lock is not None:
+                raise ValueError(
+                    "Isolated Demo portfolio owns the cap and mutation lock"
+                )
+            execution_lock = isolated_demo_portfolio.mutation_lock
+            portfolio_stop_risk_cap_usdt = isolated_demo_portfolio.cap_usdt
         self._portfolio_stop_risk_cap_usdt = portfolio_stop_risk_cap_usdt
 
         # Serialize every account mutation, including
@@ -561,7 +573,11 @@ class ExecutionCoordinator:
         live_state = await self._executor.account_state()
         if self._portfolio_stop_risk_cap_usdt is not None:
             try:
-                open_risk = open_stop_risk_usdt(live_state, active)
+                open_risk = (
+                    await self._isolated_demo_portfolio.open_risk_usdt()
+                    if self._isolated_demo_portfolio is not None
+                    else open_stop_risk_usdt(live_state, active)
+                )
             except ValueError as exc:
                 raise EntryPreflightError(
                     f"Portfolio stop-risk cap cannot be verified: {exc}"
