@@ -10,6 +10,7 @@ import math
 import re
 from datetime import datetime
 
+from .dashboard_cohorts import LONG_EXIT_ARMS
 from .dashboard_metrics import ENTRY_FAILURE_REASONS
 
 MAX_PUBLIC_FEED_BYTES = 60_000
@@ -377,7 +378,10 @@ def _validate_exit_cohorts(cohorts: object) -> None:
         raise ValueError("Invalid public exit cohorts")
     seen: set[str] = set()
     for item in cohorts:
-        row = _fields(item, EXIT_COHORT_FIELDS)
+        fields = EXIT_COHORT_FIELDS
+        if isinstance(item, dict) and "current_risk_terminal" in item:
+            fields = (*fields, "current_risk_terminal")
+        row = _fields(item, fields)
         profile = row["exit_profile"]
         if (
             not isinstance(profile, str)
@@ -387,6 +391,27 @@ def _validate_exit_cohorts(cohorts: object) -> None:
             raise ValueError("Invalid or duplicate public exit profile cohort")
         seen.add(profile)
         _validate_cohort_numbers(row)
+        if "current_risk_terminal" in row:
+            _validate_current_risk_terminal(row)
+
+
+def _validate_current_risk_terminal(row: dict) -> None:
+    terminal = _fields(
+        row["current_risk_terminal"],
+        ("trades", "net_pnl_usdt", "net_r", "review_target"),
+    )
+    count = terminal["trades"]
+    if (
+        row["exit_profile"] not in LONG_EXIT_ARMS
+        or type(count) is not int
+        or not 0 <= count <= min(row["completed_trades"], row["current_risk_trades"])
+    ):
+        raise ValueError("Invalid terminal-certified current-risk count")
+    target = terminal["review_target"]
+    if type(target) is not int or target <= 0:
+        raise ValueError("Invalid LONG exit review target")
+    _number(terminal["net_pnl_usdt"])
+    _number(terminal["net_r"])
 
 
 def _validate_ladder_cohorts(cohorts: object) -> None:

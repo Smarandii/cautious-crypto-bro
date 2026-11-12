@@ -308,7 +308,7 @@ function renderTradeHistory(data, refreshFailed = false) {
       add("h3", "Exit profile & LONG A/B arm meta-analysis", channelSection);
       add(
         "p",
-        "Compares active LONG A/B exit arms (0.20R control vs 0.15R treatment) and historical exit profiles across current-risk, all-time size-reconciled, and terminal-certified cohorts.",
+        "The LONG exit review counts terminal-certified trades at the current risk in each arm. The target is shown beside each count.",
         channelSection,
       );
       const exitScroll = add("div", "", channelSection);
@@ -321,6 +321,7 @@ function renderTradeHistory(data, refreshFailed = false) {
       const exitHead = add("tr", "", add("thead", "", exitTable));
       for (const col of [
         "Exit profile",
+        "LONG exit review · trades / target · net PnL",
         "Current risk (W / L · WR)",
         "Current risk Net PnL · R · PF",
         "Current risk Avg Win / Loss · USDT",
@@ -336,8 +337,12 @@ function renderTradeHistory(data, refreshFailed = false) {
         const tr = add("tr", "", exitBody);
         const curN = ex.current_risk_trades ?? 0;
         const sizeN = ex.size_reconciled_trades ?? 0;
+        const review = ex.current_risk_terminal;
         for (const cell of [
           ex.exit_profile,
+          review
+            ? `${review.trades} / ${review.review_target} · ${signed(review.net_pnl_usdt, 2)} USDT · ${signed(review.net_r, 2)}R`
+            : "—",
           `${curN} (${ex.current_risk_winning_trades ?? 0}W / ${ex.current_risk_losing_trades ?? 0}L · ${pct(ex.current_risk_win_rate_pct)})`,
           curN
             ? `${signed(ex.current_risk_net_pnl_usdt, 2)} USDT · ${signed(ex.current_risk_net_r, 2)}R · ${Number.isFinite(ex.current_risk_profit_factor) ? `${number(ex.current_risk_profit_factor, 2)}×` : "—"}`
