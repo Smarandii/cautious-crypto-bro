@@ -132,6 +132,15 @@ function renderTradeHistory(data, refreshFailed = false) {
       : "Unknown";
   const settings = add("dl", "");
   settings.className = "trade-settings";
+  const controlFraction = risk.long_exit_control_fraction;
+  let longExitSplit = "Unknown";
+  if (risk.exit_profile && risk.exit_profile !== "payoff_early_tight_trail_long_015") {
+    longExitSplit = "Off for this profile";
+  } else if (risk.exit_profile && Number.isFinite(controlFraction)) {
+    longExitSplit = controlFraction === 0
+      ? "Off"
+      : `${number(controlFraction * 100)}% control (0.20R) · ${number((1 - controlFraction) * 100)}% treatment (0.15R)`;
+  }
   for (const [label, value] of [
     [
       "Base risk · new plans",
@@ -160,7 +169,8 @@ function renderTradeHistory(data, refreshFailed = false) {
         ? "Unknown"
         : `${number(risk.portfolio_stop_risk_cap_usdt)} USDT`,
     ],
-    ["Exit profile", risk.exit_profile ?? "Unknown"],
+    ["Base exit profile", risk.exit_profile ?? "Unknown"],
+    ["LONG exit split", longExitSplit],
   ]) {
     const pair = add("div", "", settings);
     add("dt", label, pair);

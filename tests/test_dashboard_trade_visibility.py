@@ -455,3 +455,21 @@ def test_entry_failure_reasons_agree_across_dashboard_reports():
     assert sum(row["failed_intents"] for row in analytics["rows"]) == len(failures)
     for row in analytics["rows"]:
         assert sum(row["failed_by_reason"].values()) == row["failed_intents"]
+
+
+@pytest.mark.parametrize("fraction", [None, 0, 0.5, 1, -0.1, 1.1, True])
+def test_public_feed_validates_optional_long_exit_control_fraction(fraction):
+    timestamp = "2026-11-12T00:00:00+00:00"
+    history = public_trade_history([], available=True) | {"as_of": timestamp}
+    snapshot = {"generated_at": timestamp, "trade_history": history, "risk": {}}
+    legacy = public_feed_from_snapshot(snapshot)
+    assert "long_exit_control_fraction" not in validate_public_feed(legacy)["risk"]
+    snapshot["risk"]["long_exit_control_fraction"] = fraction
+    if fraction is True or fraction in (-0.1, 1.1):
+        with pytest.raises(ValueError):
+            public_feed_from_snapshot(snapshot)
+    else:
+        assert (
+            public_feed_from_snapshot(snapshot)["risk"]["long_exit_control_fraction"]
+            == fraction
+        )

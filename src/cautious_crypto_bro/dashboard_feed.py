@@ -524,7 +524,10 @@ def _validate_channel_analytics(value: object) -> None:
 
 
 def _validate_risk(value: object) -> None:
-    risk = _fields(value, RISK_FIELDS)
+    fields = RISK_FIELDS
+    if isinstance(value, dict) and "long_exit_control_fraction" in value:
+        fields = (*fields, "long_exit_control_fraction")
+    risk = _fields(value, fields)
     for field in RISK_FIELDS[:2] + RISK_FIELDS[3:5]:
         _number(risk[field], nonnegative=True)
     if (
@@ -537,6 +540,10 @@ def _validate_risk(value: object) -> None:
     skip = risk["long_participation_skip_fraction"]
     if skip is not None and skip > 1:
         raise ValueError("Invalid participation fraction")
+    control = risk.get("long_exit_control_fraction")
+    _number(control, nonnegative=True)
+    if control is not None and control > 1:
+        raise ValueError("Invalid LONG exit control fraction")
 
 
 def _validate_history(value: object) -> None:
@@ -583,10 +590,13 @@ def _validate_trade(value: object) -> None:
 def public_feed_from_snapshot(snapshot: dict) -> dict:
     """Project private/local aggregate context down to the explicit public contract."""
     risk = snapshot.get("risk") or {}
+    public_risk = {field: risk.get(field) for field in RISK_FIELDS}
+    if "long_exit_control_fraction" in risk:
+        public_risk["long_exit_control_fraction"] = risk["long_exit_control_fraction"]
     payload: dict[str, object] = {
         "schema_version": 1,
         "generated_at": snapshot["generated_at"],
-        "risk": {field: risk.get(field) for field in RISK_FIELDS},
+        "risk": public_risk,
         "trade_history": snapshot["trade_history"],
     }
     if snapshot.get("channel_analytics") is not None:

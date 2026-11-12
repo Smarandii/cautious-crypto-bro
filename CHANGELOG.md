@@ -10,6 +10,19 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.128] - 2026-11-12
+
+### Fixed
+
+- Show the configured LONG exit control split alongside the base Demo exit
+  profile. Retained feeds continue to render with an unknown split (#489).
+
+### Delivery and rollback
+
+- Schema 17 and trading configuration remain compatible with v2.2.127.
+  Roll back both Demo services together using the retained images and state.
+  Profit magnitude verification (#248) and independent zones (#123) remain open.
+
 ## [2.2.127] - 2026-11-12
 
 ### Fixed
