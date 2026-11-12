@@ -16,8 +16,8 @@ pytestmark = pytest.mark.integration
 
 
 @contextmanager
-def broker(handler):
-    executor = BybitDemoExecutor(api_key="synthetic-key", api_secret="synthetic-secret")
+def broker(handler, *, api_key="synthetic-key"):
+    executor = BybitDemoExecutor(api_key=api_key, api_secret="synthetic-secret")
     executor._client.close()
     executor._client._http_client = httpx.Client(
         base_url="https://api-demo.bybit.com", transport=httpx.MockTransport(handler)
@@ -38,6 +38,55 @@ def clock_response():
     return httpx.Response(
         200, json={"retCode": 0, "time": int(datetime.now(UTC).timestamp() * 1000)}
     )
+
+
+@pytest.mark.parametrize(
+    ("second_result", "error"),
+    [
+        ({"userID": 202}, None),
+        ({"userID": 101}, "Demo accounts are not isolated"),
+        ({"userID": 303}, "Demo account identity does not match configuration"),
+        ({"userID": True}, "Demo account identity is invalid"),
+        ({}, "Demo account identity is invalid"),
+        (None, "Demo account identity is unavailable"),
+    ],
+)
+def test_demo_account_isolation_uses_authenticated_uids(second_result, error):
+    queried = []
+
+    def handle(result, api_key):
+        def handler(request):
+            assert request.url.host == "api-demo.bybit.com"
+            assert request.method == "GET"
+            if request.url.path == "/v5/market/time":
+                return clock_response()
+            assert request.url.path == "/v5/user/query-api"
+            assert request.headers["X-BAPI-API-KEY"] == api_key
+            assert request.headers["X-BAPI-SIGN"]
+            queried.append(result)
+            payload = (
+                {"retCode": 10003, "retMsg": "private key metadata"}
+                if result is None
+                else {"retCode": 0, "result": result | {"apiKey": "private metadata"}}
+            )
+            return httpx.Response(200, json=payload)
+
+        return handler
+
+    with (
+        broker(handle({"userID": 101}, "first-key"), api_key="first-key") as first,
+        broker(handle(second_result, "second-key"), api_key="second-key") as second,
+    ):
+        preflight = BybitDemoExecutor.verify_account_isolation(
+            ((101, first), (202, second))
+        )
+        if error is None:
+            assert asyncio.run(preflight) is None
+        else:
+            with pytest.raises(TradeExecutionError) as failure:
+                asyncio.run(preflight)
+            assert str(failure.value) == error
+    assert queried == [{"userID": 101}, second_result]
 
 
 def pnl_row(order_id, updated, amount):

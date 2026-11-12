@@ -62,6 +62,41 @@ class BybitDemoExecutor:
         )
         self._planner = planner if planner is not None else ExecutionPlanner()
 
+    async def _authenticated_uid(self) -> int:
+        try:
+            response = await _run_sync(
+                self._client.private_request, "GET", "/v5/user/query-api", {}
+            )
+        except TradeExecutionError:
+            raise TradeExecutionError("Demo account identity is unavailable") from None
+        uid = response.get("result", {}).get("userID")
+        if type(uid) is not int or uid <= 0:
+            raise TradeExecutionError("Demo account identity is invalid")
+        return uid
+
+    @staticmethod
+    async def verify_account_isolation(
+        accounts: tuple[tuple[int, BybitDemoExecutor], ...],
+    ) -> None:
+        """Verify the expected UID for each Demo executor before routing."""
+        expected = tuple(uid for uid, _ in accounts)
+        if len(expected) < 2 or any(
+            type(uid) is not int or uid <= 0 for uid in expected
+        ):
+            raise ValueError("At least two valid Demo account identities are required")
+        if len(set(expected)) != len(expected):
+            raise ValueError("Expected Demo account identities must be distinct")
+
+        observed = []
+        for _, executor in accounts:
+            observed.append(await executor._authenticated_uid())
+        if len(set(observed)) != len(observed):
+            raise TradeExecutionError("Demo accounts are not isolated")
+        if tuple(observed) != expected:
+            raise TradeExecutionError(
+                "Demo account identity does not match configuration"
+            )
+
     async def market_context(
         self,
         symbol: str,
