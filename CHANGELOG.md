@@ -10,6 +10,29 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.132] - 2026-11-13
+
+### Added
+
+- Exercise the isolated Demo zone lifecycle with separate simulated accounts,
+  shared admission, late fills, restart and sibling protection (#498).
+- Bind isolated worker state to one verified Demo account and preserve that
+  binding across restart (#505).
+- Enforce a shared portfolio stop-risk cap across isolated coordinators and
+  retain the frozen reservation while an order may be missing from the exchange
+  snapshot (#507).
+- Persist immutable Demo intent assignments and import them idempotently into
+  the bound worker without resetting execution status (#509).
+
+### Delivery and rollback
+
+- The ordinary Demo deployment remains on schema 17. Roll back both services
+  together using the retained images and verified state backup.
+- Dedicated isolated worker and intake state use schemas 18 and 19. Keep those
+  databases paired with the corresponding isolated-aware code and account.
+- Live isolated routing, exchange lifecycle verification and profitability
+  verification remain open (#123, #248).
+
 ## [2.2.131] - 2026-11-13
 
 ### Added
