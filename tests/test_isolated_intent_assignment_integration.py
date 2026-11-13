@@ -5,7 +5,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 import pytest
-from test_remaining_concerns import Exchange, executor_for, prepare
+from test_remaining_concerns import Exchange, executor_for, make_intent, prepare
 
 from cautious_crypto_bro.domain import ApprovalMode, IntentStatus, StoreError
 from cautious_crypto_bro.execution import ExecutionPlanner
@@ -19,6 +19,66 @@ from cautious_crypto_bro.storage.isolated_intake import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_source_completion_commits_all_account_assignments(tmp_path, conflict):
+    async def run():
+        exchange = Exchange()
+        with executor_for(exchange) as executor:
+            _, first, plan, _, _ = await prepare(
+                tmp_path / "ordinary.db", exchange, executor
+            )
+        sibling = make_intent().model_copy(update={"source": first.source})
+        sibling_plan = plan.model_copy(update={"intent_id": sibling.intent_id})
+        assignments = (
+            DemoIntentAssignment(101, first, plan),
+            DemoIntentAssignment(202, sibling, sibling_plan),
+        )
+        path = tmp_path / "intake.db"
+        intake = IsolatedDemoIntake(path)
+        await intake.initialize()
+        store = IntentStore(path)
+        claim = await store.claim_source(first.source, lease_seconds=300)
+        assert claim is not None
+        items = ((first, plan), (sibling, sibling_plan))
+        assert not await store.create_signal_batch_and_complete_source(
+            items, (), "stale-claim", isolated_assignments=assignments
+        )
+        assert await intake.get_assignment(first.intent_id) is None
+
+        if conflict:
+            await intake.assign(replace(assignments[1], uid=101))
+            with pytest.raises(StoreError, match="cannot be replaced"):
+                await store.create_signal_batch_and_complete_source(
+                    items, (), claim, isolated_assignments=assignments
+                )
+            assert await intake.get_assignment(first.intent_id) is None
+            assert await store.get_intent(first.intent_id) is None
+            assert not await store.source_completed(
+                first.source.channel_id, first.source.message_id
+            )
+            return
+
+        assert await store.create_signal_batch_and_complete_source(
+            items, (), claim, isolated_assignments=assignments
+        )
+        assert not await store.create_signal_batch_and_complete_source(
+            items, (), claim, isolated_assignments=assignments
+        )
+        reopened = IsolatedDemoIntake(path)
+        for assignment in assignments:
+            saved = await reopened.get_assignment(assignment.intent.intent_id)
+            assert saved == assignment and saved is not None
+            worker = IntentStore(tmp_path / f"worker-{assignment.uid}.db")
+            await worker.initialize_isolated_demo(assignment.uid)
+            await worker.import_isolated_intent(saved)
+            assert await worker.get_execution_plan(saved.intent.intent_id) == saved.plan
+        assert await store.source_completed(
+            first.source.channel_id, first.source.message_id
+        )
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("scenario", ["skip_first", "execute_first", "race"])
