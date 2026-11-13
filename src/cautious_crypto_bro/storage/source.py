@@ -17,6 +17,11 @@ from ..domain import (
     TradingIntent,
 )
 from ._connection import _Store, sqlite_connection
+from .isolated_intake import (
+    ISOLATED_INTAKE_SCHEMA_VERSION,
+    DemoIntentAssignment,
+    insert_assignment,
+)
 from .position_action import CONTRACT_REVIEW_PREFIX
 
 
@@ -271,6 +276,7 @@ class SourceRepositoryImpl(_Store):
         claim_token: str,
         *,
         planning_candidates: Sequence[PlanningCandidate] = (),
+        isolated_assignments: Sequence[DemoIntentAssignment] | None = None,
     ) -> bool:
         if planning_candidates and not (items or position_actions):
             source = planning_candidates[0].intent.source
@@ -282,6 +288,9 @@ class SourceRepositoryImpl(_Store):
             await db.execute("BEGIN IMMEDIATE")
 
             try:
+                await self._validate_isolated_assignments(
+                    db, items, isolated_assignments
+                )
                 cursor = await db.execute(
                     """
                     SELECT 1
@@ -309,6 +318,8 @@ class SourceRepositoryImpl(_Store):
                         intent,
                         plan,
                     )
+                for assignment in isolated_assignments or ():
+                    await insert_assignment(db, assignment)
 
                 for action in position_actions:
                     await self._insert_position_action(
@@ -364,6 +375,23 @@ class SourceRepositoryImpl(_Store):
             except Exception:
                 await db.rollback()
                 raise
+
+    @staticmethod
+    async def _validate_isolated_assignments(
+        db: aiosqlite.Connection,
+        items: Sequence[tuple[TradingIntent, ExecutionPlan]],
+        assignments: Sequence[DemoIntentAssignment] | None,
+    ) -> None:
+        async with db.execute("PRAGMA user_version") as cursor:
+            isolated = await cursor.fetchone() == (ISOLATED_INTAKE_SCHEMA_VERSION,)
+        if isolated != (assignments is not None):
+            raise ValueError("Account assignments require the isolated intake path")
+        if assignments is not None and tuple(items) != tuple(
+            (assignment.intent, assignment.plan) for assignment in assignments
+        ):
+            raise ValueError(
+                "Every isolated source plan requires its matching assignment"
+            )
 
     @staticmethod
     def _validate_planning_candidates(
