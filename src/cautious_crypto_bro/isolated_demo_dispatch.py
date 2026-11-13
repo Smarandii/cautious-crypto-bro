@@ -3,10 +3,17 @@
 from collections.abc import Callable
 from uuid import UUID
 
-from .domain import ApprovalMode, IntentExecutionOutcome, IntentStatus, StoreError
+from .domain import (
+    ApprovalMode,
+    IntentExecutionOutcome,
+    IntentStatus,
+    PositionActionIntent,
+    StoreError,
+)
 from .execution import ExecutionPlanner
 from .execution_coordinator import ExecutionCoordinator
 from .isolated_demo_risk import IsolatedDemoPortfolio
+from .isolated_lifecycle import find_lifecycle_targets
 from .ports import AccountGateway
 from .storage import SQLiteStore
 from .storage.isolated_intake import IsolatedDemoIntake
@@ -38,6 +45,17 @@ class IsolatedDemoDispatcher:
             )
             for uid, (executor, store) in workers.items()
         }
+
+    async def lifecycle_targets(
+        self, action: PositionActionIntent
+    ) -> tuple[tuple[int, UUID], ...]:
+        if self._worker_ready is not None and not all(
+            self._worker_ready(uid) for uid in self._workers
+        ):
+            raise StoreError("Demo lifecycle ownership is unavailable")
+        return await find_lifecycle_targets(
+            action, {uid: store for uid, (store, _) in self._workers.items()}
+        )
 
     async def _import(
         self, intent_id: UUID
