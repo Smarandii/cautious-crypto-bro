@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 
-from ..domain import StoreError
+import aiosqlite
+
+from ..domain import IntentStatus, PositionActionIntent, StoreError
 from ._connection import SQLiteConnectionMixin, sqlite_connection
 from .attention import OperatorAttentionRepositoryImpl
 from .auto_outcome import AutoOutcomeRepositoryImpl
@@ -56,14 +58,7 @@ class SQLiteStore(
         digest = hashlib.sha256(json.dumps(assignment.payload()).encode()).hexdigest()
         async with sqlite_connection(self._database_path) as db:
             await db.execute("BEGIN IMMEDIATE")
-            async with db.execute("PRAGMA user_version") as cursor:
-                if await cursor.fetchone() != (ISOLATED_DEMO_SCHEMA_VERSION,):
-                    raise StoreError("Intent import requires an isolated Demo worker")
-            async with db.execute(
-                "SELECT uid FROM demo_account_binding WHERE id=1"
-            ) as cursor:
-                if await cursor.fetchone() != (str(assignment.uid),):
-                    raise StoreError("Assignment does not match the Demo worker")
+            await self._verify_worker_binding(db, assignment.uid)
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS demo_intent_imports ("
                 "intent_id TEXT PRIMARY KEY, digest TEXT NOT NULL)"
@@ -84,3 +79,41 @@ class SQLiteStore(
                 "INSERT INTO demo_intent_imports VALUES (?, ?)", (key, digest)
             )
             await db.commit()
+
+    async def import_isolated_position_action(
+        self, uid: int, action: PositionActionIntent
+    ) -> None:
+        if (
+            action.target_strategy_id is None
+            or action.status is not IntentStatus.PENDING
+            or action.contract_review_reason is not None
+        ):
+            raise StoreError(
+                "Worker import requires a pending action with a saved target"
+            )
+        payload = action.model_dump_json()
+        async with sqlite_connection(self._database_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await self._verify_worker_binding(db, uid)
+            async with db.execute(
+                "SELECT payload_json, approval_mode FROM position_actions WHERE action_id=?",
+                (str(action.action_id),),
+            ) as cursor:
+                existing = await cursor.fetchone()
+            if existing is not None:
+                if tuple(existing) != (payload, action.approval_mode.value):
+                    raise StoreError("Frozen Demo lifecycle action cannot be replaced")
+                return
+            await self._insert_position_action(db, action)
+            await db.commit()
+
+    @staticmethod
+    async def _verify_worker_binding(db: aiosqlite.Connection, uid: int) -> None:
+        async with db.execute("PRAGMA user_version") as cursor:
+            if await cursor.fetchone() != (ISOLATED_DEMO_SCHEMA_VERSION,):
+                raise StoreError("Import requires an isolated Demo worker")
+        async with db.execute(
+            "SELECT uid FROM demo_account_binding WHERE id=1"
+        ) as cursor:
+            if await cursor.fetchone() != (str(uid),):
+                raise StoreError("Assignment does not match the Demo worker")

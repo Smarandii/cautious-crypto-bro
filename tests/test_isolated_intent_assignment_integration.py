@@ -35,6 +35,37 @@ from cautious_crypto_bro.storage.isolated_intake import (
 pytestmark = pytest.mark.integration
 
 
+def test_worker_action_import_preserves_decision_after_restart(tmp_path):
+    async def run():
+        path = tmp_path / "worker.db"
+        store = IntentStore(path)
+        await store.initialize_isolated_demo(101)
+        intent = make_intent()
+        action = PositionActionIntent(
+            source=intent.source,
+            symbol=intent.symbol,
+            action=PositionActionType.CLOSE,
+            expected_side=intent.side,
+            target_strategy_id=intent.intent_id,
+            summary="Close saved target",
+            confidence=1,
+        )
+        with pytest.raises(StoreError, match="does not match"):
+            await store.import_isolated_position_action(202, action)
+        await store.import_isolated_position_action(101, action)
+        assert await store.mark_position_action_skipped(action.action_id, 42)
+        reopened = IntentStore(path)
+        await reopened.import_isolated_position_action(101, action)
+        saved = await reopened.get_position_action(action.action_id)
+        assert saved is not None and saved.status is IntentStatus.SKIPPED
+        with pytest.raises(StoreError, match="cannot be replaced"):
+            await reopened.import_isolated_position_action(
+                101, action.model_copy(update={"target_strategy_id": uuid4()})
+            )
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "action_type", [PositionActionType.CLOSE, PositionActionType.CANCEL_ENTRIES]
 )
