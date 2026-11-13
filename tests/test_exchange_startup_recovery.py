@@ -159,6 +159,7 @@ def test_exchange_rejection_keeps_status_but_blocks_trading(
                 service=service,
                 supervisor=supervisor,
                 source_recovery=SimpleNamespace(run=source_run),
+                isolated_workers=None,
             )
             exchange.armed = True
             task = asyncio.create_task(app._run_application(runtime))

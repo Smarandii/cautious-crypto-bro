@@ -2,12 +2,15 @@
 
 import asyncio
 from decimal import Decimal
+from types import SimpleNamespace
+from typing import cast
 
 import httpx
 import pytest
 from test_remaining_concerns import Exchange, executor_for, prepare, state_for
 
 from cautious_crypto_bro.bybit import BybitDemoExecutor
+from cautious_crypto_bro.config import IsolatedDemoWorkerSettings, Settings
 from cautious_crypto_bro.domain import (
     ApprovalMode,
     Entry,
@@ -18,6 +21,7 @@ from cautious_crypto_bro.domain import (
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.isolated_demo_risk import IsolatedDemoPortfolio
+from cautious_crypto_bro.isolated_demo_runtime import run_isolated_demo_workers
 from cautious_crypto_bro.position_supervisor import PositionSupervisor
 from cautious_crypto_bro.storage import IntentStore
 
@@ -43,6 +47,94 @@ class DemoAccount(Exchange):
         if request.url.path == "/v5/order/realtime" and self.hide_entries:
             return httpx.Response(200, json={"retCode": 0, "result": {"list": []}})
         return super().handle(request)
+
+
+@pytest.mark.parametrize("scenario", ["restart", "wrong_uid", "unavailable", "alias"])
+def test_configured_demo_workers_reconcile_before_supervision(
+    tmp_path, monkeypatch, scenario
+):
+    async def run():
+        first_path = tmp_path / "first.db"
+        second_path = tmp_path / "second.db"
+        if scenario == "restart":
+            await IntentStore(first_path).initialize_isolated_demo(101)
+        first_account = DemoAccount(999 if scenario == "wrong_uid" else 101)
+        first_account.unavailable = scenario == "unavailable"
+        supervised = []
+        first_ready = asyncio.Event()
+        first_retry = asyncio.Event()
+        second_ready = asyncio.Event()
+
+        async def supervisor_run(self):
+            supervised.append(self._executor)
+            if self._executor is second:
+                second_ready.set()
+            else:
+                first_ready.set()
+            await asyncio.Future()
+
+        async def wait_for_retry(seconds):
+            assert seconds == 30
+            first_retry.set()
+            await asyncio.Future()
+
+        with (
+            executor_for(DemoAccount(303)) as primary,
+            executor_for(first_account) as first,
+            executor_for(DemoAccount(202)) as second,
+        ):
+            executors = iter((first, second))
+            monkeypatch.setattr(
+                "cautious_crypto_bro.isolated_demo_runtime.BybitDemoExecutor",
+                lambda **kwargs: next(executors),
+            )
+            monkeypatch.setattr(PositionSupervisor, "run", supervisor_run)
+            monkeypatch.setattr(
+                "cautious_crypto_bro.isolated_demo_runtime.asyncio.sleep",
+                wait_for_retry,
+            )
+            settings = cast(
+                Settings,
+                SimpleNamespace(
+                    isolated_demo_workers=tuple(
+                        IsolatedDemoWorkerSettings(
+                            uid=uid,
+                            database_path=path,
+                            api_key="test",
+                            api_secret="test",
+                        )
+                        for uid, path in (
+                            (101, first_path),
+                            (202, first_path if scenario == "alias" else second_path),
+                        )
+                    ),
+                    database_path=tmp_path / "primary.db",
+                    demo_portfolio_stop_risk_cap_usdt=Decimal("140"),
+                    demo_entry_order_ttl_minutes=0,
+                ),
+            )
+            if scenario == "alias":
+                await run_isolated_demo_workers(settings, primary)
+                assert not first_path.exists()
+                assert not supervised
+                return
+            task = asyncio.create_task(run_isolated_demo_workers(settings, primary))
+            try:
+                await asyncio.wait_for(second_ready.wait(), timeout=10)
+                if scenario == "unavailable":
+                    await asyncio.wait_for(first_retry.wait(), timeout=10)
+                if scenario == "restart":
+                    await asyncio.wait_for(first_ready.wait(), timeout=10)
+                    assert first in supervised
+                else:
+                    assert first not in supervised
+            finally:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            assert first_path.exists() == (scenario != "wrong_uid")
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(

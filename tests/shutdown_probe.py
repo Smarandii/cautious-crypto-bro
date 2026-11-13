@@ -137,6 +137,7 @@ async def owned(settings):
             start=AsyncMock(), run_until_disconnected=forever, run_catchup=forever
         ),
         source_recovery=SimpleNamespace(run=source_worker),
+        isolated_workers=None,
     )
     async with AsyncExitStack() as stack:
         stack.callback(cleanup)

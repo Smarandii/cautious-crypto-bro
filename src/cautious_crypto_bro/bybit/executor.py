@@ -62,7 +62,7 @@ class BybitDemoExecutor:
         )
         self._planner = planner if planner is not None else ExecutionPlanner()
 
-    async def _authenticated_uid(self) -> int:
+    async def authenticated_uid(self) -> int:
         try:
             response = await _run_sync(
                 self._client.private_request, "GET", "/v5/user/query-api", {}
@@ -89,7 +89,7 @@ class BybitDemoExecutor:
 
         observed = []
         for _, executor in accounts:
-            observed.append(await executor._authenticated_uid())
+            observed.append(await executor.authenticated_uid())
         if len(set(observed)) != len(observed):
             raise TradeExecutionError("Demo accounts are not isolated")
         if tuple(observed) != expected:

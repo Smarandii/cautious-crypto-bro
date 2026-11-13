@@ -5,10 +5,17 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .domain import AutoApprovalMode
+
+
+class IsolatedDemoWorkerSettings(BaseModel):
+    uid: int = Field(gt=0, strict=True, repr=False)
+    database_path: Path
+    api_key: SecretStr
+    api_secret: SecretStr
 
 
 class Settings(BaseSettings):
@@ -16,6 +23,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     telegram_api_id: int
@@ -109,6 +117,7 @@ class Settings(BaseSettings):
 
     bybit_api_key: str
     bybit_api_secret: str
+    isolated_demo_workers: tuple[IsolatedDemoWorkerSettings, ...] = ()
 
     database_path: Path = Path("data/cautious_crypto_bro.sqlite3")
     source_processing_lease_seconds: int = Field(

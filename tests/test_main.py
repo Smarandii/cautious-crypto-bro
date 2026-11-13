@@ -107,6 +107,7 @@ def _fake_application(monkeypatch, tmp_path, failed_reconciliation=None):
         redis_pool_timeout_seconds=1,
         bybit_api_key="demo-key",
         bybit_api_secret="demo-secret",
+        isolated_demo_workers=(),
         intent_max_age_seconds=300,
         telegram_bot_token="test-token",
         telegram_approval_chat_id=1,
