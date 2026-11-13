@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from decimal import Decimal
 from pathlib import Path
@@ -10,12 +11,14 @@ from .bybit import BybitDemoExecutor
 from .config import Settings
 from .domain import TradeExecutionError
 from .execution import ExecutionPlanner
+from .isolated_demo_dispatch import IsolatedDemoDispatcher
 from .isolated_demo_risk import IsolatedDemoPortfolio
 from .portfolio_risk import PortfolioRiskUnavailable
 from .ports import ExecutionCoordinatorStore
 from .position_supervisor import PositionSupervisor
 from .state_ownership import state_ownership
 from .storage import SQLiteStore
+from .storage.isolated_intake import IsolatedDemoIntake
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,7 @@ async def run_isolated_demo_workers(
     primary: BybitDemoExecutor,
     primary_store: ExecutionCoordinatorStore,
     admission: DemoAdmission,
+    bind_dispatcher: Callable[[IsolatedDemoDispatcher | None], None] | None = None,
 ) -> None:
     configs = settings.isolated_demo_workers
     if not configs:
@@ -94,6 +98,34 @@ async def run_isolated_demo_workers(
                 "An isolated Demo worker is configured for the primary account"
             )
             return
+
+        if bind_dispatcher is not None:
+            intake = IsolatedDemoIntake(
+                settings.database_path.with_suffix(".isolated-intake.sqlite3")
+            )
+            await intake.initialize()
+            cleanup.callback(bind_dispatcher, None)
+            portfolio = admission.portfolio
+            assert portfolio is not None
+            worker_indices = {
+                config.uid: index for index, config in enumerate(configs, start=1)
+            }
+            bind_dispatcher(
+                IsolatedDemoDispatcher(
+                    intake,
+                    {
+                        config.uid: worker
+                        for config, worker in zip(configs, workers, strict=True)
+                    },
+                    portfolio,
+                    planner,
+                    settings.intent_max_age_seconds,
+                    worker_ready=lambda uid: (
+                        worker_indices[uid] in admission.ready
+                        and len(admission.ready) == admission.worker_count
+                    ),
+                )
+            )
 
         async with asyncio.TaskGroup() as tasks:
             for index, (config, path, worker) in enumerate(
