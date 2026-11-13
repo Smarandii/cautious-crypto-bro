@@ -102,6 +102,16 @@ The binding and schema 18 are committed together. Ordinary startup and older
 app versions reject schema 18. Keep bound state with its account when restoring
 a backup and use an isolated-aware version to reopen it.
 
+To start supervision for provisioned accounts, set `ISOLATED_DEMO_WORKERS`
+to a JSON array. Each object requires a numeric `uid`, a dedicated
+`database_path`, and Demo `api_key` and `api_secret` values. Supply this
+array through the runtime's secret configuration. Configure at least two
+workers and a positive `DEMO_PORTFOLIO_STOP_RISK_CAP_USDT`. Each worker must
+have a UID and database path distinct from the primary account and its peers.
+Keep each database on persistent storage. A worker logs reconciliation by
+its configuration index after verifying its UID and recovering its state.
+Telegram continues to use the primary account until isolated routing is wired.
+
 The ordinary single-account path continues to use schema 17. Isolated state
 binding does not enable live multi-account routing.
 

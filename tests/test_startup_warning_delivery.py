@@ -125,6 +125,7 @@ def test_interrupted_execution_warning_is_retried_without_blocking_startup(
                 service=service,
                 supervisor=supervisor,
                 source_recovery=SimpleNamespace(run=source_run),
+                isolated_workers=None,
             )
             before = len(exchange.requests)
             task = asyncio.create_task(app._run_application(runtime))

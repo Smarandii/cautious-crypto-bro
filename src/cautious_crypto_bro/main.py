@@ -14,6 +14,7 @@ from .config import Settings, get_settings
 from .domain import TradeExecutionError
 from .execution import ExecutionPlanner
 from .execution_coordinator import ExecutionCoordinator
+from .isolated_demo_runtime import run_isolated_demo_workers
 from .llm_factory import build_intent_extractor
 from .position_supervisor import PositionSupervisor
 from .runtime_store import RedisRuntimeStore
@@ -107,6 +108,7 @@ class _Runtime:
     service: SignalService
     source: TelegramSource
     source_recovery: SourceRecovery
+    isolated_workers: tuple[Settings, BybitDemoExecutor] | None = None
 
 
 async def _build_runtime_store(
@@ -246,6 +248,9 @@ async def _build_runtime(
         service=service,
         source=source,
         source_recovery=source_recovery,
+        isolated_workers=(settings, executor)
+        if settings.isolated_demo_workers
+        else None,
     )
 
 
@@ -257,6 +262,8 @@ async def _run_application(runtime: _Runtime) -> None:
     async with asyncio.TaskGroup() as tg:
         tg.create_task(_deliver_recovery_warning(runtime))
         tg.create_task(runtime.bot.run())
+        if runtime.isolated_workers is not None:
+            tg.create_task(_run_optional_workers(*runtime.isolated_workers))
         # Operator polling is live, but every trading callback remains gated.
         # Grug, Chesterton's Fence (faithful paraphrase): preserve the existing
         # reconciliation-before-ingestion boundary while restoring operator access.
@@ -279,6 +286,17 @@ async def _run_application(runtime: _Runtime) -> None:
         tg.create_task(runtime.service.run_periodic_account_pnl_sync())
 
         tg.create_task(runtime.source_recovery.run())
+
+
+async def _run_optional_workers(
+    settings: Settings, executor: BybitDemoExecutor
+) -> None:
+    try:
+        await run_isolated_demo_workers(settings, executor)
+    except Exception as exc:
+        logging.getLogger(__name__).error(
+            "Isolated Demo worker startup stopped (%s)", type(exc).__name__
+        )
 
 
 async def _deliver_recovery_warning(
