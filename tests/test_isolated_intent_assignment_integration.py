@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import replace
+from decimal import Decimal
 
 import pytest
 from test_remaining_concerns import Exchange, executor_for, prepare
@@ -9,6 +10,8 @@ from test_remaining_concerns import Exchange, executor_for, prepare
 from cautious_crypto_bro.domain import ApprovalMode, IntentStatus, StoreError
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
+from cautious_crypto_bro.isolated_demo_dispatch import IsolatedDemoDispatcher
+from cautious_crypto_bro.isolated_demo_risk import IsolatedDemoPortfolio
 from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.storage.isolated_intake import (
     DemoIntentAssignment,
@@ -16,6 +19,69 @@ from cautious_crypto_bro.storage.isolated_intake import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize("scenario", ["skip_first", "execute_first", "race"])
+def test_dispatch_reopens_assignment_and_serializes_approval_outcomes(
+    tmp_path, scenario
+):
+    async def run():
+        assigned_exchange, other_exchange = Exchange(), Exchange()
+        with (
+            executor_for(assigned_exchange) as assigned,
+            executor_for(other_exchange) as other,
+        ):
+            _, intent, plan, _, _ = await prepare(
+                tmp_path / "ordinary.db", assigned_exchange, assigned
+            )
+            intake_path = tmp_path / "intake.db"
+            intake = IsolatedDemoIntake(intake_path)
+            await intake.initialize()
+            await intake.assign(DemoIntentAssignment(101, intent, plan))
+            worker = IntentStore(tmp_path / "assigned.db")
+            sibling = IntentStore(tmp_path / "other.db")
+            await worker.initialize_isolated_demo(101)
+            await sibling.initialize_isolated_demo(202)
+            portfolio = IsolatedDemoPortfolio(
+                ((assigned, worker), (other, sibling)), Decimal("400")
+            )
+            dispatcher = IsolatedDemoDispatcher(
+                IsolatedDemoIntake(intake_path),
+                {101: (assigned, worker), 202: (other, sibling)},
+                portfolio,
+                ExecutionPlanner(),
+                900,
+            )
+            unavailable = IsolatedDemoDispatcher(
+                intake, {202: (other, sibling)}, portfolio, ExecutionPlanner(), 900
+            )
+            result = await unavailable.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert result.message == "Assigned Demo worker is unavailable"
+            assert not assigned_exchange.requests and not other_exchange.requests
+
+            async def execute():
+                return await dispatcher.execute_intent(
+                    intent.intent_id, approval_mode=ApprovalMode.MANUAL
+                )
+
+            if scenario == "skip_first":
+                assert await dispatcher.mark_skipped(intent.intent_id, 42)
+            if scenario == "race":
+                first, second, skipped = await asyncio.gather(
+                    execute(), execute(), dispatcher.mark_skipped(intent.intent_id, 42)
+                )
+            else:
+                first, second = await asyncio.gather(execute(), execute())
+                skipped = scenario == "skip_first"
+            expected = IntentStatus.SKIPPED if skipped else IntentStatus.EXECUTED
+            assert first.status is second.status is expected
+            assert not await dispatcher.mark_skipped(intent.intent_id, 42)
+            assert len(assigned_exchange.orders) == (0 if skipped else 3)
+            assert not other_exchange.orders
+
+    asyncio.run(run())
 
 
 def test_frozen_assignment_survives_restart_and_duplicate_delivery(tmp_path):
