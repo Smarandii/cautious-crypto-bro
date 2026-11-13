@@ -101,9 +101,11 @@ async def run_isolated_demo_workers(
 
         if bind_dispatcher is not None:
             intake = IsolatedDemoIntake(
-                settings.database_path.with_suffix(".isolated-intake.sqlite3")
+                settings.database_path,
+                legacy_path=settings.database_path.with_suffix(
+                    ".isolated-intake.sqlite3"
+                ),
             )
-            await intake.initialize()
             cleanup.callback(bind_dispatcher, None)
             portfolio = admission.portfolio
             assert portfolio is not None

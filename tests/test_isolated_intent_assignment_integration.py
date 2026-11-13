@@ -15,6 +15,7 @@ from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.isolated_demo_dispatch import IsolatedDemoDispatcher
 from cautious_crypto_bro.isolated_demo_risk import IsolatedDemoPortfolio
+from cautious_crypto_bro.signals.delivery import SignalDelivery
 from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.storage._connection import sqlite_connection
 from cautious_crypto_bro.storage.isolated_intake import (
@@ -94,6 +95,20 @@ def test_source_completion_commits_all_account_assignments(tmp_path, conflict, p
             (first.intent_id, "OPEN"),
             (sibling.intent_id, "OPEN"),
         }
+        sender = SimpleNamespace(send_intent=AsyncMock())
+        delivery = SignalDelivery(
+            store=IntentStore(path),
+            executor=executor,
+            approval_bot=sender,
+            isolated_intake=reopened,
+        )
+        await delivery.recover_manual()
+        assert sender.send_intent.await_count == 2
+        assert all(
+            call.kwargs == {"isolated": True}
+            for call in sender.send_intent.await_args_list
+        )
+        assert not await store.pending_manual_deliveries()
 
     asyncio.run(run())
 
