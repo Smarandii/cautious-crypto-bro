@@ -5,12 +5,19 @@ from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from test_remaining_concerns import Exchange, executor_for, make_intent, prepare
 
 from cautious_crypto_bro.approval_bot import ApprovalBot, IntentAction
-from cautious_crypto_bro.domain import ApprovalMode, IntentStatus, StoreError
+from cautious_crypto_bro.domain import (
+    ApprovalMode,
+    IntentStatus,
+    PositionActionIntent,
+    PositionActionType,
+    StoreError,
+)
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.isolated_demo_dispatch import IsolatedDemoDispatcher
@@ -25,6 +32,48 @@ from cautious_crypto_bro.storage.isolated_intake import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize(
+    "action_type", [PositionActionType.CLOSE, PositionActionType.CANCEL_ENTRIES]
+)
+def test_saved_lifecycle_target_rejects_replaced_owner(tmp_path, action_type):
+    async def run():
+        exchange = Exchange()
+        with executor_for(exchange) as executor:
+            store, intent, _, coordinator, _ = await prepare(
+                tmp_path / "worker.db", exchange, executor
+            )
+            outcome = await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert outcome.status is IntentStatus.EXECUTED
+            source = intent.source.model_copy(
+                update={"message_id": intent.source.message_id + 1}
+            )
+            action = PositionActionIntent(
+                source=source,
+                symbol=intent.symbol,
+                action=action_type,
+                expected_side=intent.side,
+                target_strategy_id=uuid4(),
+                summary="Manage the saved target",
+                confidence=1,
+            )
+            claim = await store.claim_source(source, lease_seconds=300)
+            assert claim is not None
+            assert await store.create_signal_batch_and_complete_source(
+                (), (action,), claim
+            )
+            before = len(exchange.requests)
+            result = await coordinator.execute_position_action(
+                action.action_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert result.status is IntentStatus.FAILED
+            assert "Saved lifecycle target" in result.message
+            assert len(exchange.requests) == before
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("conflict", [False, True])

@@ -297,6 +297,7 @@ class PositionActionRepositoryImpl(SharedRepositoryMixin, _Store):
             i.intent_id
             for i in intents
             if i.symbol == action.symbol
+            and action.target_strategy_id in (None, i.intent_id)
             and i.source.published_at <= action.source.published_at
             and (action.expected_side is None or i.side is action.expected_side)
         )

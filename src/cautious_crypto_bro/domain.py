@@ -842,6 +842,9 @@ class PositionActionIntent(BaseModel):
         lt=100,
     )
     expected_side: Side | None = None
+    target_strategy_id: UUID | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
 
