@@ -21,7 +21,11 @@ from cautious_crypto_bro.domain import (
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.isolated_demo_risk import IsolatedDemoPortfolio
-from cautious_crypto_bro.isolated_demo_runtime import run_isolated_demo_workers
+from cautious_crypto_bro.isolated_demo_runtime import (
+    DemoAdmission,
+    run_isolated_demo_workers,
+)
+from cautious_crypto_bro.portfolio_risk import PortfolioRiskUnavailable
 from cautious_crypto_bro.position_supervisor import PositionSupervisor
 from cautious_crypto_bro.storage import IntentStore
 
@@ -113,12 +117,18 @@ def test_configured_demo_workers_reconcile_before_supervision(
                     demo_entry_order_ttl_minutes=0,
                 ),
             )
+            primary_store = IntentStore(settings.database_path)
+            await primary_store.initialize()
+            admission = DemoAdmission(asyncio.Lock(), 2)
+            workers = run_isolated_demo_workers(
+                settings, primary, primary_store, admission
+            )
             if scenario == "alias":
-                await run_isolated_demo_workers(settings, primary)
+                await workers
                 assert not first_path.exists()
                 assert not supervised
                 return
-            task = asyncio.create_task(run_isolated_demo_workers(settings, primary))
+            task = asyncio.create_task(workers)
             try:
                 await asyncio.wait_for(second_ready.wait(), timeout=10)
                 if scenario == "unavailable":
@@ -126,8 +136,16 @@ def test_configured_demo_workers_reconcile_before_supervision(
                 if scenario == "restart":
                     await asyncio.wait_for(first_ready.wait(), timeout=10)
                     assert first in supervised
+                    assert admission.portfolio is not None
+                    assert admission.portfolio.includes(primary, primary_store)
+                    assert admission.portfolio.mutation_lock is admission.mutation_lock
+                    assert await admission.open_risk_usdt() == 0
                 else:
                     assert first not in supervised
+                    with pytest.raises(
+                        PortfolioRiskUnavailable, match="not reconciled"
+                    ):
+                        await admission.open_risk_usdt()
             finally:
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
@@ -159,7 +177,6 @@ def test_isolated_zones_share_capacity_and_keep_independent_protection(
                 first_account,
                 first,
                 entry=Entry(type=EntryType.RANGE, range_low=94, range_high=96),
-                verified_demo_uid=101,
             )
             sibling_zone = await prepare(
                 paths[1],
@@ -182,16 +199,27 @@ def test_isolated_zones_share_capacity_and_keep_independent_protection(
                 accounts,
                 Decimal("100" if scenario in {"capacity", "hidden"} else "140"),
             )
-            coordinators = [
+            admission = DemoAdmission(portfolio.mutation_lock, 1)
+            admission.portfolio = portfolio
+            admission.ready.add(1)
+            coordinators = (
                 ExecutionCoordinator(
-                    store=store,
-                    executor=executor,
+                    store=first_zone[0],
+                    executor=first,
+                    planner=ExecutionPlanner(),
+                    max_age_seconds=3600,
+                    execution_lock=admission.mutation_lock,
+                    portfolio_stop_risk_cap_usdt=portfolio.cap_usdt,
+                    shared_open_risk=admission.open_risk_usdt,
+                ),
+                ExecutionCoordinator(
+                    store=sibling_zone[0],
+                    executor=sibling,
                     planner=ExecutionPlanner(),
                     max_age_seconds=3600,
                     isolated_demo_portfolio=portfolio,
-                )
-                for executor, store in accounts
-            ]
+                ),
+            )
 
             async def submit(index):
                 return await coordinators[index].execute_intent(
@@ -252,7 +280,10 @@ def test_isolated_zones_share_capacity_and_keep_independent_protection(
             ):
                 protection = (account.stop, account.trail)
                 reopened = IntentStore(path)
-                await reopened.initialize_isolated_demo(account.uid)
+                if account is first_account:
+                    await reopened.initialize()
+                else:
+                    await reopened.initialize_isolated_demo(account.uid)
                 await PositionSupervisor(
                     store=reopened,
                     executor=executor,

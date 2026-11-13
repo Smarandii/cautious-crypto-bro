@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from contextlib import AsyncExitStack
+from decimal import Decimal
 from pathlib import Path
 
 from .bybit import BybitDemoExecutor
@@ -10,6 +11,8 @@ from .config import Settings
 from .domain import TradeExecutionError
 from .execution import ExecutionPlanner
 from .isolated_demo_risk import IsolatedDemoPortfolio
+from .portfolio_risk import PortfolioRiskUnavailable
+from .ports import ExecutionCoordinatorStore
 from .position_supervisor import PositionSupervisor
 from .state_ownership import state_ownership
 from .storage import SQLiteStore
@@ -17,8 +20,29 @@ from .storage import SQLiteStore
 logger = logging.getLogger(__name__)
 
 
+class DemoAdmission:
+    def __init__(self, mutation_lock: asyncio.Lock, worker_count: int) -> None:
+        self.mutation_lock = mutation_lock
+        self.worker_count = worker_count
+        self.ready: set[int] = set()
+        self.portfolio: IsolatedDemoPortfolio | None = None
+
+    async def open_risk_usdt(self) -> Decimal:
+        if self.portfolio is None or len(self.ready) != self.worker_count:
+            raise PortfolioRiskUnavailable("Isolated Demo workers are not reconciled")
+        try:
+            return await self.portfolio.open_risk_usdt()
+        except TradeExecutionError:
+            raise PortfolioRiskUnavailable(
+                "Combined Demo account risk is unavailable"
+            ) from None
+
+
 async def run_isolated_demo_workers(
-    settings: Settings, primary: BybitDemoExecutor
+    settings: Settings,
+    primary: BybitDemoExecutor,
+    primary_store: ExecutionCoordinatorStore,
+    admission: DemoAdmission,
 ) -> None:
     configs = settings.isolated_demo_workers
     if not configs:
@@ -50,7 +74,11 @@ async def run_isolated_demo_workers(
             )
             cleanup.callback(executor.close)
             workers.append((executor, SQLiteStore(path)))
-        portfolio = IsolatedDemoPortfolio(tuple(workers), cap)
+        admission.portfolio = IsolatedDemoPortfolio(
+            ((primary, primary_store), *workers),
+            cap,
+            mutation_lock=admission.mutation_lock,
+        )
 
         while True:
             try:
@@ -75,11 +103,19 @@ async def run_isolated_demo_workers(
                 supervisor = PositionSupervisor(
                     store=store,
                     executor=executor,
-                    mutation_lock=portfolio.mutation_lock,
+                    mutation_lock=admission.mutation_lock,
                     legacy_entry_ttl_minutes=settings.demo_entry_order_ttl_minutes,
                 )
                 tasks.create_task(
-                    _run_worker(index, config.uid, path, executor, store, supervisor)
+                    _run_worker(
+                        index,
+                        config.uid,
+                        path,
+                        executor,
+                        store,
+                        supervisor,
+                        admission.ready,
+                    )
                 )
 
 
@@ -90,6 +126,7 @@ async def _run_worker(
     executor: BybitDemoExecutor,
     store: SQLiteStore,
     supervisor: PositionSupervisor,
+    ready: set[int],
 ) -> None:
     try:
         with state_ownership(path):
@@ -115,6 +152,9 @@ async def _run_worker(
                     )
                     await asyncio.sleep(30)
             logger.info("Isolated Demo worker %d reconciled", index)
+            ready.add(index)
             await supervisor.run()
     except Exception as exc:
         logger.error("Isolated Demo worker %d stopped (%s)", index, type(exc).__name__)
+    finally:
+        ready.discard(index)

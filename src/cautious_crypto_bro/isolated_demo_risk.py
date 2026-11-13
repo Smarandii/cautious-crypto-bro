@@ -16,6 +16,8 @@ class IsolatedDemoPortfolio:
         self,
         accounts: tuple[tuple[AccountGateway, ExecutionCoordinatorStore], ...],
         cap_usdt: Decimal,
+        *,
+        mutation_lock: asyncio.Lock | None = None,
     ) -> None:
         if len(accounts) < 2 or len({id(executor) for executor, _ in accounts}) != len(
             accounts
@@ -27,7 +29,9 @@ class IsolatedDemoPortfolio:
             raise ValueError("Portfolio stop-risk cap must be positive and finite")
         self._accounts = accounts
         self.cap_usdt = cap_usdt
-        self.mutation_lock = asyncio.Lock()
+        self.mutation_lock = (
+            mutation_lock if mutation_lock is not None else asyncio.Lock()
+        )
 
     def includes(
         self, executor: AccountGateway, store: ExecutionCoordinatorStore
