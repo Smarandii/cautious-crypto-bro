@@ -690,6 +690,10 @@ class ExecutionCoordinator:
             return terminal
         action_id = action.action_id
         result: PositionActionExecutionResult | None = None
+        try:
+            await self._verify_position_action_target(action)
+        except PositionActionPreflightError as exc:
+            return await self._preflight_failure_outcome(action_id, action, exc)
         if action.action is PositionActionType.CANCEL_ENTRIES:
             return await self._cancel_entries(action)
         try:
@@ -816,6 +820,39 @@ class ExecutionCoordinator:
             action=action,
             result=result,
         )
+
+    async def _verify_position_action_target(
+        self, action: PositionActionIntent
+    ) -> None:
+        if action.target_strategy_id is None:
+            return
+        owner = await self._store.get_intent(action.target_strategy_id)
+        if (
+            owner is None
+            or owner.source.channel_id != action.source.channel_id
+            or owner.source.published_at > action.source.published_at
+            or owner.symbol != action.symbol
+            or owner.side is not action.expected_side
+        ):
+            raise PositionActionPreflightError(
+                "Saved lifecycle target does not match its source"
+            )
+        active = await self._store.get_active_position_strategies()
+        matches = [state for state, _ in active if state.symbol == action.symbol]
+        if (
+            len(matches) != 1
+            or matches[0].strategy_id != action.target_strategy_id
+            or matches[0].side is not action.expected_side
+            or matches[0].status
+            in {
+                StrategyStatus.MANUAL_OVERRIDE,
+                StrategyStatus.UNCERTAIN,
+                StrategyStatus.CLOSING,
+            }
+        ):
+            raise PositionActionPreflightError(
+                "Saved lifecycle target no longer owns the symbol"
+            )
 
     async def _cancel_entries(
         self, action: PositionActionIntent
