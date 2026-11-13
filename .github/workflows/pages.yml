@@ -27,12 +27,15 @@ jobs:
     name: Deploy / landing page
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      PAGES_ARTIFACT_NAME: github-pages-${{ github.run_attempt }}
 
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
 
     permissions:
+      actions: read
       contents: read
       pages: write
       id-token: write
@@ -54,10 +57,32 @@ jobs:
       # No build step on purpose. docs/ is plain HTML and CSS with no bundler,
       # so there is no toolchain to pin and nothing that can drift from source.
       - name: Upload artifact
+        id: upload
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
+          name: ${{ env.PAGES_ARTIFACT_NAME }}
           path: docs
+
+      - name: Wait for the uploaded artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGES_ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+        run: |
+          endpoint="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=$PAGES_ARTIFACT_NAME"
+          for attempt in {1..6}; do
+            if ids=$(gh api "$endpoint" --jq '.artifacts[] | select(.expired == false) | .id') &&
+               [[ -n "$PAGES_ARTIFACT_ID" && "$ids" == "$PAGES_ARTIFACT_ID" ]]; then
+              exit 0
+            fi
+            if [[ "$attempt" != 6 ]]; then
+              sleep 5
+            fi
+          done
+          echo "::error::Uploaded Pages artifact $PAGES_ARTIFACT_NAME ($PAGES_ARTIFACT_ID) was not uniquely visible after six checks"
+          exit 1
 
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        with:
+          artifact_name: ${{ env.PAGES_ARTIFACT_NAME }}
