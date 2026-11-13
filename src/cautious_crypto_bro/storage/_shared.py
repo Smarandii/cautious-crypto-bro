@@ -32,6 +32,18 @@ class SharedRepositoryMixin(_Store):
             parameters.append(expected_approval_mode.value)
 
         async with sqlite_connection(self._database_path) as db:
+            ownership_filter = ""
+            if table == "intents":
+                await db.execute("BEGIN IMMEDIATE")
+                async with db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='demo_intent_assignments'"
+                ) as cursor:
+                    if await cursor.fetchone() is not None:
+                        ownership_filter = (
+                            "AND NOT EXISTS (SELECT 1 FROM demo_intent_assignments "
+                            "WHERE intent_id = intents.intent_id)"
+                        )
             cursor = await db.execute(
                 f"""
                 UPDATE {table}
@@ -43,6 +55,7 @@ class SharedRepositoryMixin(_Store):
                     {id_column} = ?
                     AND status = ?
                     {approval_filter}
+                    {ownership_filter}
                 """,
                 parameters,
             )
