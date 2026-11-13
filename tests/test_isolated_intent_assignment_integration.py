@@ -133,10 +133,13 @@ def test_source_completion_commits_all_account_assignments(tmp_path, conflict, p
         for assignment in assignments:
             saved = await reopened.get_assignment(assignment.intent.intent_id)
             assert saved == assignment and saved is not None
+            assert not await store.claim_for_execution(saved.intent.intent_id, 42)
+            assert not await store.mark_skipped(saved.intent.intent_id, 42)
             worker = IntentStore(tmp_path / f"worker-{assignment.uid}.db")
             await worker.initialize_isolated_demo(assignment.uid)
             await worker.import_isolated_intent(saved)
             assert await worker.get_execution_plan(saved.intent.intent_id) == saved.plan
+            assert await worker.mark_skipped(saved.intent.intent_id, 42)
         assert await store.source_completed(
             first.source.channel_id, first.source.message_id
         )
