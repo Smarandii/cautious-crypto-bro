@@ -1,5 +1,6 @@
 """Dispatch an isolated OPEN using its durable intake assignment."""
 
+from collections.abc import Callable
 from uuid import UUID
 
 from .domain import ApprovalMode, IntentExecutionOutcome, IntentStatus, StoreError
@@ -19,8 +20,11 @@ class IsolatedDemoDispatcher:
         portfolio: IsolatedDemoPortfolio,
         planner: ExecutionPlanner,
         max_age_seconds: int,
+        *,
+        worker_ready: Callable[[int], bool] | None = None,
     ) -> None:
         self._intake = intake
+        self._worker_ready = worker_ready
         self._workers = {
             uid: (
                 store,
@@ -42,7 +46,9 @@ class IsolatedDemoDispatcher:
         if assignment is None:
             raise StoreError("Isolated Demo intent has no account assignment")
         worker = self._workers.get(assignment.uid)
-        if worker is None:
+        if worker is None or (
+            self._worker_ready is not None and not self._worker_ready(assignment.uid)
+        ):
             raise StoreError("Assigned Demo worker is unavailable")
         store, _ = worker
         await store.import_isolated_intent(assignment)

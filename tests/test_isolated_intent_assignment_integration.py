@@ -3,10 +3,13 @@
 import asyncio
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from test_remaining_concerns import Exchange, executor_for, make_intent, prepare
 
+from cautious_crypto_bro.approval_bot import ApprovalBot, IntentAction
 from cautious_crypto_bro.domain import ApprovalMode, IntentStatus, StoreError
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
@@ -140,6 +143,58 @@ def test_dispatch_reopens_assignment_and_serializes_approval_outcomes(
             assert not await dispatcher.mark_skipped(intent.intent_id, 42)
             assert len(assigned_exchange.orders) == (0 if skipped else 3)
             assert not other_exchange.orders
+
+    asyncio.run(run())
+
+
+def test_telegram_isolated_skip_and_execute_use_the_same_worker(tmp_path):
+    async def run():
+        exchange = Exchange()
+        with executor_for(exchange) as executor, executor_for(Exchange()) as sibling:
+            primary_store, intent, plan, primary, _ = await prepare(
+                tmp_path / "primary.db", exchange, executor
+            )
+            worker = IntentStore(tmp_path / "worker.db")
+            await worker.initialize_isolated_demo(101)
+            intake = IsolatedDemoIntake(tmp_path / "intake.db")
+            await intake.initialize()
+            await intake.assign(DemoIntentAssignment(101, intent, plan))
+            portfolio = IsolatedDemoPortfolio(
+                ((executor, worker), (sibling, primary_store)), Decimal("400")
+            )
+            dispatcher = IsolatedDemoDispatcher(
+                intake, {101: (executor, worker)}, portfolio, ExecutionPlanner(), 900
+            )
+            bot = ApprovalBot(
+                token="123456:offline",
+                approval_chat_id=1,
+                approver_user_id=42,
+                store=primary_store,
+                executor=primary,
+            )
+            bot._edit_message = AsyncMock()
+            callback = SimpleNamespace(
+                from_user=SimpleNamespace(id=42), answer=AsyncMock()
+            )
+            execute = IntentAction(
+                action="iso_execute", intent_id=str(intent.intent_id)
+            )
+            skip = IntentAction(action="iso_skip", intent_id=str(intent.intent_id))
+            try:
+                await bot._execute(callback, execute)
+                assert await worker.get_intent(intent.intent_id) is None
+                bot.bind_isolated_dispatcher(dispatcher)
+                await bot._skip(callback, skip)
+                await bot._execute(callback, execute)
+                assert (
+                    await worker.get_intent(intent.intent_id)
+                ).status is IntentStatus.SKIPPED
+                assert (
+                    await primary_store.get_intent(intent.intent_id)
+                ).status is IntentStatus.PENDING
+                assert not exchange.orders
+            finally:
+                await bot.close()
 
     asyncio.run(run())
 

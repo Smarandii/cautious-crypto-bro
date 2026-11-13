@@ -271,7 +271,9 @@ async def _run_application(runtime: _Runtime) -> None:
         tg.create_task(_deliver_recovery_warning(runtime))
         tg.create_task(runtime.bot.run())
         if runtime.isolated_workers is not None:
-            tg.create_task(_run_optional_workers(*runtime.isolated_workers))
+            tg.create_task(
+                _run_optional_workers(runtime.bot, *runtime.isolated_workers)
+            )
         # Operator polling is live, but every trading callback remains gated.
         # Grug, Chesterton's Fence (faithful paraphrase): preserve the existing
         # reconciliation-before-ingestion boundary while restoring operator access.
@@ -297,13 +299,16 @@ async def _run_application(runtime: _Runtime) -> None:
 
 
 async def _run_optional_workers(
+    bot: ApprovalBot,
     settings: Settings,
     executor: BybitDemoExecutor,
     store: IntentStore,
     admission: DemoAdmission,
 ) -> None:
     try:
-        await run_isolated_demo_workers(settings, executor, store, admission)
+        await run_isolated_demo_workers(
+            settings, executor, store, admission, bot.bind_isolated_dispatcher
+        )
     except Exception as exc:
         logging.getLogger(__name__).error(
             "Isolated Demo worker startup stopped (%s)", type(exc).__name__

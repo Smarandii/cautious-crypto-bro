@@ -64,6 +64,7 @@ from .domain import (
     PositionActionExecutionOutcome,
     PositionActionIntent,
     PositionActionType,
+    StoreError,
     SymbolExposure,
     TradingIntent,
 )
@@ -75,6 +76,7 @@ from .ports import (
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from .isolated_demo_dispatch import IsolatedDemoDispatcher
     from .source_recovery import SourceRecovery
 
 ATTENTION_PAGE_SIZE = 5
@@ -131,6 +133,7 @@ class ApprovalBot:
         self._approver_user_id = approver_user_id
         self._store = store
         self._executor = executor
+        self._isolated_dispatcher: IsolatedDemoDispatcher | None = None
         self._source_recovery: SourceRecovery | None = None
         self._startup_blocked: str | None = None
         self._supervision_warning: str | None = None
@@ -144,11 +147,13 @@ class ApprovalBot:
         self._router.message(Command("source"))(self._source_status)
         self._router.message(Command("source_login"))(self._source_login)
 
-        self._router.callback_query(IntentAction.filter(F.action == "execute"))(
-            self._execute
-        )
+        self._router.callback_query(
+            IntentAction.filter(F.action.in_({"execute", "iso_execute"}))
+        )(self._execute)
 
-        self._router.callback_query(IntentAction.filter(F.action == "skip"))(self._skip)
+        self._router.callback_query(
+            IntentAction.filter(F.action.in_({"skip", "iso_skip"}))
+        )(self._skip)
 
         self._router.callback_query(
             PositionActionCallback.filter(F.action == "execute")
@@ -160,6 +165,11 @@ class ApprovalBot:
 
     def bind_source_recovery(self, recovery: SourceRecovery) -> None:
         self._source_recovery = recovery
+
+    def bind_isolated_dispatcher(
+        self, dispatcher: IsolatedDemoDispatcher | None
+    ) -> None:
+        self._isolated_dispatcher = dispatcher
 
     def set_startup_blocked(self, reason: str | None) -> None:
         self._startup_blocked = reason
@@ -515,6 +525,7 @@ class ApprovalBot:
         exposure: SymbolExposure | None = None,
         exposure_error: str | None = None,
         snapshot: AccountSnapshotDelivery | None = None,
+        isolated: bool = False,
     ) -> None:
         if snapshot is not None:
             await self.send_account_snapshot(
@@ -531,7 +542,7 @@ class ApprovalBot:
                         text="Execute",
                         callback_data=(
                             IntentAction(
-                                action="execute",
+                                action="iso_execute" if isolated else "execute",
                                 intent_id=str(intent.intent_id),
                             ).pack()
                         ),
@@ -541,7 +552,7 @@ class ApprovalBot:
                         text="Skip",
                         callback_data=(
                             IntentAction(
-                                action="skip",
+                                action="iso_skip" if isolated else "skip",
                                 intent_id=str(intent.intent_id),
                             ).pack()
                         ),
@@ -648,7 +659,16 @@ class ApprovalBot:
 
         await callback.answer("Executing on Bybit Demo…")
 
-        outcome = await self._executor.execute_intent(
+        executor = self._executor.execute_intent
+        if callback_data.action == "iso_execute":
+            dispatcher = self._isolated_dispatcher
+            if dispatcher is None:
+                await callback.answer(
+                    "Isolated Demo workers are unavailable", show_alert=True
+                )
+                return
+            executor = dispatcher.execute_intent
+        outcome = await executor(
             intent_id,
             approval_mode=(ApprovalMode.MANUAL),
             user_id=(callback.from_user.id),
@@ -745,6 +765,27 @@ class ApprovalBot:
             return
 
         intent_id = UUID(callback_data.intent_id)
+
+        if callback_data.action == "iso_skip":
+            dispatcher = self._isolated_dispatcher
+            if dispatcher is None:
+                await callback.answer(
+                    "Isolated Demo workers are unavailable", show_alert=True
+                )
+                return
+            try:
+                skipped = await dispatcher.mark_skipped(
+                    intent_id, callback.from_user.id
+                )
+            except StoreError as exc:
+                await callback.answer(str(exc), show_alert=True)
+                return
+            if skipped:
+                await callback.answer("Skipped")
+                await self._edit_message(callback, "<b>SKIPPED</b>")
+            else:
+                await callback.answer("Intent was already handled", show_alert=True)
+            return
 
         intent = await self._store.get_intent(intent_id)
 
