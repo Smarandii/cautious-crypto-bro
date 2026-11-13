@@ -16,7 +16,9 @@ from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.isolated_demo_dispatch import IsolatedDemoDispatcher
 from cautious_crypto_bro.isolated_demo_risk import IsolatedDemoPortfolio
 from cautious_crypto_bro.storage import IntentStore
+from cautious_crypto_bro.storage._connection import sqlite_connection
 from cautious_crypto_bro.storage.isolated_intake import (
+    ASSIGNMENT_SCHEMA,
     DemoIntentAssignment,
     IsolatedDemoIntake,
 )
@@ -25,7 +27,8 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.parametrize("conflict", [False, True])
-def test_source_completion_commits_all_account_assignments(tmp_path, conflict):
+@pytest.mark.parametrize("primary", [False, True])
+def test_source_completion_commits_all_account_assignments(tmp_path, conflict, primary):
     async def run():
         exchange = Exchange()
         with executor_for(exchange) as executor:
@@ -40,8 +43,11 @@ def test_source_completion_commits_all_account_assignments(tmp_path, conflict):
         )
         path = tmp_path / "intake.db"
         intake = IsolatedDemoIntake(path)
-        await intake.initialize()
         store = IntentStore(path)
+        if primary:
+            await store.initialize()
+        else:
+            await intake.initialize()
         claim = await store.claim_source(first.source, lease_seconds=300)
         assert claim is not None
         items = ((first, plan), (sibling, sibling_plan))
@@ -51,6 +57,10 @@ def test_source_completion_commits_all_account_assignments(tmp_path, conflict):
         assert await intake.get_assignment(first.intent_id) is None
 
         if conflict:
+            if primary:
+                async with sqlite_connection(path) as db:
+                    await db.execute(ASSIGNMENT_SCHEMA)
+                    await db.commit()
             await intake.assign(replace(assignments[1], uid=101))
             with pytest.raises(StoreError, match="cannot be replaced"):
                 await store.create_signal_batch_and_complete_source(
@@ -80,6 +90,10 @@ def test_source_completion_commits_all_account_assignments(tmp_path, conflict):
         assert await store.source_completed(
             first.source.channel_id, first.source.message_id
         )
+        assert set(await store.pending_manual_deliveries()) == {
+            (first.intent_id, "OPEN"),
+            (sibling.intent_id, "OPEN"),
+        }
 
     asyncio.run(run())
 

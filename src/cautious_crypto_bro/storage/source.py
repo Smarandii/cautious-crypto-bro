@@ -18,11 +18,13 @@ from ..domain import (
 )
 from ._connection import _Store, sqlite_connection
 from .isolated_intake import (
+    ASSIGNMENT_SCHEMA,
     ISOLATED_INTAKE_SCHEMA_VERSION,
     DemoIntentAssignment,
     insert_assignment,
 )
 from .position_action import CONTRACT_REVIEW_PREFIX
+from .schema import LATEST_SCHEMA_VERSION
 
 
 class SourceRepositoryImpl(_Store):
@@ -383,15 +385,31 @@ class SourceRepositoryImpl(_Store):
         assignments: Sequence[DemoIntentAssignment] | None,
     ) -> None:
         async with db.execute("PRAGMA user_version") as cursor:
-            isolated = await cursor.fetchone() == (ISOLATED_INTAKE_SCHEMA_VERSION,)
-        if isolated != (assignments is not None):
+            version = await cursor.fetchone()
+        if (version == (ISOLATED_INTAKE_SCHEMA_VERSION,) and assignments is None) or (
+            assignments is not None
+            and version
+            not in {(ISOLATED_INTAKE_SCHEMA_VERSION,), (LATEST_SCHEMA_VERSION,)}
+        ):
             raise ValueError("Account assignments require the isolated intake path")
-        if assignments is not None and tuple(items) != tuple(
-            (assignment.intent, assignment.plan) for assignment in assignments
+        if assignments is None:
+            return
+        assigned_items = tuple((a.intent, a.plan) for a in assignments)
+        if (
+            version == (ISOLATED_INTAKE_SCHEMA_VERSION,)
+            and tuple(items) != assigned_items
         ):
             raise ValueError(
                 "Every isolated source plan requires its matching assignment"
             )
+        if version == (LATEST_SCHEMA_VERSION,):
+            if any(
+                item not in items or item[0].approval_mode is not ApprovalMode.MANUAL
+                for item in assigned_items
+            ):
+                raise ValueError("Isolated assignments require matching manual plans")
+            if assignments:
+                await db.execute(ASSIGNMENT_SCHEMA)
 
     @staticmethod
     def _validate_planning_candidates(

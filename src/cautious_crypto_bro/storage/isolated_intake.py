@@ -11,6 +11,11 @@ from ._connection import sqlite_connection
 from .schema import LATEST_SCHEMA_SQL
 
 ISOLATED_INTAKE_SCHEMA_VERSION = 19
+ASSIGNMENT_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS demo_intent_assignments ("
+    "intent_id TEXT PRIMARY KEY, uid TEXT NOT NULL, "
+    "intent_json TEXT NOT NULL, plan_json TEXT NOT NULL)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,11 +62,7 @@ class IsolatedDemoIntake:
                 has_schema = await cursor.fetchone() is not None
             if version != (0,) or has_schema:
                 raise StoreError("Isolated Demo intake requires a dedicated database")
-            await db.execute(
-                "CREATE TABLE demo_intent_assignments ("
-                "intent_id TEXT PRIMARY KEY, uid TEXT NOT NULL, "
-                "intent_json TEXT NOT NULL, plan_json TEXT NOT NULL)"
-            )
+            await db.execute(ASSIGNMENT_SCHEMA)
             await self._initialize_source_schema(db)
             await db.execute(f"PRAGMA user_version = {ISOLATED_INTAKE_SCHEMA_VERSION}")
             await db.commit()
@@ -85,15 +86,19 @@ class IsolatedDemoIntake:
             await db.commit()
 
     async def get_assignment(self, intent_id: UUID) -> DemoIntentAssignment | None:
-        async with (
-            sqlite_connection(self._database_path) as db,
-            db.execute(
+        async with sqlite_connection(self._database_path) as db:
+            async with db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='demo_intent_assignments'"
+            ) as cursor:
+                if await cursor.fetchone() is None:
+                    return None
+            async with db.execute(
                 "SELECT uid, intent_json, plan_json FROM demo_intent_assignments "
                 "WHERE intent_id=?",
                 (str(intent_id),),
-            ) as cursor,
-        ):
-            row = await cursor.fetchone()
+            ) as cursor:
+                row = await cursor.fetchone()
         if row is None:
             return None
         uid, intent_json, plan_json = row
