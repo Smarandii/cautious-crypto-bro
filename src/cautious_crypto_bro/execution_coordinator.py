@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -53,6 +54,7 @@ class ExecutionCoordinator:
         execution_lock: asyncio.Lock | None = None,
         portfolio_stop_risk_cap_usdt: Decimal | None = None,
         isolated_demo_portfolio: IsolatedDemoPortfolio | None = None,
+        shared_open_risk: Callable[[], Awaitable[Decimal]] | None = None,
     ) -> None:
         if max_age_seconds <= 0:
             raise ValueError("max_age_seconds must be positive")
@@ -66,7 +68,6 @@ class ExecutionCoordinator:
         self._executor = executor
         self._planner = planner
         self._max_age_seconds = max_age_seconds
-        self._isolated_demo_portfolio = isolated_demo_portfolio
         if isolated_demo_portfolio is not None:
             if not isolated_demo_portfolio.includes(executor, store):
                 raise ValueError("Coordinator is outside the isolated Demo portfolio")
@@ -76,6 +77,8 @@ class ExecutionCoordinator:
                 )
             execution_lock = isolated_demo_portfolio.mutation_lock
             portfolio_stop_risk_cap_usdt = isolated_demo_portfolio.cap_usdt
+            shared_open_risk = isolated_demo_portfolio.open_risk_usdt
+        self._shared_open_risk = shared_open_risk
         self._portfolio_stop_risk_cap_usdt = portfolio_stop_risk_cap_usdt
 
         # Serialize every account mutation, including
@@ -571,11 +574,18 @@ class ExecutionCoordinator:
                 f"Existing strategy owns {plan.symbol}; resolve it before opening another"
             )
         live_state = await self._executor.account_state()
+        if (
+            self._shared_open_risk is not None
+            and self._portfolio_stop_risk_cap_usdt is None
+        ):
+            raise EntryPreflightError(
+                "Shared Demo admission requires a portfolio stop-risk cap"
+            )
         if self._portfolio_stop_risk_cap_usdt is not None:
             try:
                 open_risk = (
-                    await self._isolated_demo_portfolio.open_risk_usdt()
-                    if self._isolated_demo_portfolio is not None
+                    await self._shared_open_risk()
+                    if self._shared_open_risk is not None
                     else open_stop_risk_usdt(live_state, active)
                 )
             except ValueError as exc:

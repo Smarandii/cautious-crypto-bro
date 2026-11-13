@@ -14,7 +14,7 @@ from .config import Settings, get_settings
 from .domain import TradeExecutionError
 from .execution import ExecutionPlanner
 from .execution_coordinator import ExecutionCoordinator
-from .isolated_demo_runtime import run_isolated_demo_workers
+from .isolated_demo_runtime import DemoAdmission, run_isolated_demo_workers
 from .llm_factory import build_intent_extractor
 from .position_supervisor import PositionSupervisor
 from .runtime_store import RedisRuntimeStore
@@ -108,7 +108,9 @@ class _Runtime:
     service: SignalService
     source: TelegramSource
     source_recovery: SourceRecovery
-    isolated_workers: tuple[Settings, BybitDemoExecutor] | None = None
+    isolated_workers: (
+        tuple[Settings, BybitDemoExecutor, IntentStore, DemoAdmission] | None
+    ) = None
 
 
 async def _build_runtime_store(
@@ -148,6 +150,11 @@ async def _build_runtime(
     cleanup.callback(executor.close)
 
     account_mutation_lock = asyncio.Lock()
+    admission = (
+        DemoAdmission(account_mutation_lock, len(settings.isolated_demo_workers))
+        if settings.isolated_demo_workers
+        else None
+    )
 
     coordinator = ExecutionCoordinator(
         store=store,
@@ -156,6 +163,7 @@ async def _build_runtime(
         max_age_seconds=(settings.intent_max_age_seconds),
         execution_lock=(account_mutation_lock),
         portfolio_stop_risk_cap_usdt=(settings.demo_portfolio_stop_risk_cap_usdt),
+        shared_open_risk=admission.open_risk_usdt if admission is not None else None,
     )
 
     bot = ApprovalBot(
@@ -248,8 +256,8 @@ async def _build_runtime(
         service=service,
         source=source,
         source_recovery=source_recovery,
-        isolated_workers=(settings, executor)
-        if settings.isolated_demo_workers
+        isolated_workers=(settings, executor, store, admission)
+        if admission is not None
         else None,
     )
 
@@ -289,10 +297,13 @@ async def _run_application(runtime: _Runtime) -> None:
 
 
 async def _run_optional_workers(
-    settings: Settings, executor: BybitDemoExecutor
+    settings: Settings,
+    executor: BybitDemoExecutor,
+    store: IntentStore,
+    admission: DemoAdmission,
 ) -> None:
     try:
-        await run_isolated_demo_workers(settings, executor)
+        await run_isolated_demo_workers(settings, executor, store, admission)
     except Exception as exc:
         logging.getLogger(__name__).error(
             "Isolated Demo worker startup stopped (%s)", type(exc).__name__
