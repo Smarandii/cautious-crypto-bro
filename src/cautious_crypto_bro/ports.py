@@ -163,6 +163,7 @@ class ApprovalSender(Protocol):
         exposure: SymbolExposure | None = None,
         exposure_error: str | None = None,
         snapshot: AccountSnapshotDelivery | None = None,
+        isolated: bool = False,
     ) -> None: ...
 
     async def send_position_action(

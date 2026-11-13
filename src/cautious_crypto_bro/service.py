@@ -39,6 +39,7 @@ from .signals.delivery import SignalDelivery
 from .signals.planning import SignalPlanning
 from .signals.queued_open import QueuedOpenExecution
 from .signals.recovery import SignalRecovery
+from .storage.isolated_intake import IsolatedDemoIntake
 
 logger = logging.getLogger(__name__)
 ACCOUNT_PNL_SYNC_INTERVAL_SECONDS = 15 * 60
@@ -101,6 +102,7 @@ class SignalService:
         demo_exit_profile: str = "baseline",
         demo_portfolio_stop_risk_cap_usdt: Decimal | None = None,
         demo_entry_order_ttl_minutes: int = 0,
+        isolated_intake: IsolatedDemoIntake | None = None,
     ) -> None:
         if source_processing_lease_seconds <= 0:
             raise ValueError("Source processing lease must be positive")
@@ -127,6 +129,7 @@ class SignalService:
             executor=executor,
             approval_bot=approval_bot,
             lifecycle_max_age_seconds=intent_max_age_seconds,
+            isolated_intake=isolated_intake,
         )
         self._coordinator = coordinator
         self._context_provider = context_provider

@@ -43,8 +43,9 @@ class DemoIntentAssignment:
 
 
 class IsolatedDemoIntake:
-    def __init__(self, database_path: Path) -> None:
+    def __init__(self, database_path: Path, *, legacy_path: Path | None = None) -> None:
         self._database_path = database_path
+        self._legacy_path = legacy_path
 
     async def initialize(self) -> None:
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,6 +87,18 @@ class IsolatedDemoIntake:
             await db.commit()
 
     async def get_assignment(self, intent_id: UUID) -> DemoIntentAssignment | None:
+        assignment = await self._read_assignment(intent_id)
+        if (
+            assignment is None
+            and self._legacy_path is not None
+            and self._legacy_path.is_file()
+        ):
+            return await IsolatedDemoIntake(self._legacy_path)._read_assignment(
+                intent_id
+            )
+        return assignment
+
+    async def _read_assignment(self, intent_id: UUID) -> DemoIntentAssignment | None:
         async with sqlite_connection(self._database_path) as db:
             async with db.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "

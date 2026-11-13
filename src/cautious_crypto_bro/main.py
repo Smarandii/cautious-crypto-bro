@@ -24,6 +24,7 @@ from .source_recovery import SourceRecovery
 from .state_ownership import state_ownership
 from .storage import IntentStore
 from .storage._connection import keep_wal_readable
+from .storage.isolated_intake import IsolatedDemoIntake
 from .supervision_health import supervision_health_lifecycle, supervision_health_path
 from .telegram_source import TelegramSource
 
@@ -190,6 +191,7 @@ async def _build_runtime(
     )
 
     service = SignalService(
+        isolated_intake=IsolatedDemoIntake(settings.database_path),
         store=store,
         extractor=extractor,
         planner=planner,

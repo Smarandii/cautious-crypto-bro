@@ -22,6 +22,7 @@ from ..ports import (
     EntryReviewRepository,
     ManualDeliveryRepository,
 )
+from ..storage.isolated_intake import IsolatedDemoIntake
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class SignalDelivery:
         executor: DeliveryExchange,
         approval_bot: ApprovalSender,
         lifecycle_max_age_seconds: int = 900,
+        isolated_intake: IsolatedDemoIntake | None = None,
     ) -> None:
         if lifecycle_max_age_seconds <= 0:
             raise ValueError("Lifecycle age limit must be positive")
@@ -63,6 +65,7 @@ class SignalDelivery:
         self._executor = executor
         self._approval_bot = approval_bot
         self._lifecycle_max_age_seconds = lifecycle_max_age_seconds
+        self._isolated_intake = isolated_intake
 
     async def manual(
         self,
@@ -82,7 +85,14 @@ class SignalDelivery:
             if isinstance(signal, TradingIntent):
                 if plan is None:
                     raise ValueError("Manual OPEN delivery requires its persisted plan")
-                await self._approval_bot.send_intent(signal, plan, **kwargs)
+                if (
+                    self._isolated_intake is not None
+                    and await self._isolated_intake.get_assignment(record_id)
+                    is not None
+                ):
+                    await self._approval_bot.send_intent(signal, plan, isolated=True)
+                else:
+                    await self._approval_bot.send_intent(signal, plan, **kwargs)
             else:
                 action = await self._store.prepare_manual_action_delivery(
                     signal.action_id, max_age_seconds=self._lifecycle_max_age_seconds
