@@ -23,7 +23,7 @@ from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.isolated_demo_dispatch import IsolatedDemoDispatcher
 from cautious_crypto_bro.isolated_demo_risk import IsolatedDemoPortfolio
 from cautious_crypto_bro.isolated_lifecycle import (
-    bind_lifecycle_target,
+    bind_lifecycle_targets,
     find_lifecycle_targets,
 )
 from cautious_crypto_bro.signals.delivery import SignalDelivery
@@ -107,12 +107,24 @@ def test_saved_lifecycle_target_rejects_replaced_owner(tmp_path, action_type):
                 }
             )
             assert not await find_lifecycle_targets(unrelated, {101: store})
-            bound = bind_lifecycle_target(action, ((101, intent.intent_id),))
+            (bound,) = bind_lifecycle_targets(action, ((101, intent.intent_id),))
             assert bound.target_demo_uid == 101
             assert bound.target_strategy_id == intent.intent_id
             assert bound.approval_mode is ApprovalMode.MANUAL
-            assert bind_lifecycle_target(action, None).status is IntentStatus.SKIPPED
-            assert bind_lifecycle_target(action, ()) is action
+            targets = ((101, intent.intent_id), (202, intent.intent_id))
+            split = bind_lifecycle_targets(action, targets)
+            assert (
+                tuple((item.target_demo_uid, item.target_strategy_id) for item in split)
+                == targets
+            )
+            assert len({item.action_id for item in split}) == 2
+            assert (
+                bind_lifecycle_targets(action, tuple(reversed(targets))) == split[::-1]
+            )
+            assert (
+                bind_lifecycle_targets(action, None)[0].status is IntentStatus.SKIPPED
+            )
+            assert bind_lifecycle_targets(action, ()) == (action,)
             claim = await store.claim_source(source, lease_seconds=300)
             assert claim is not None
             assert await store.create_signal_batch_and_complete_source(

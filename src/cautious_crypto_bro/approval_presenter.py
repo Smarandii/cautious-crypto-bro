@@ -138,12 +138,20 @@ def render_position_action(
     account_state_error: str | None = None,
 ) -> str:
     action_source_line = source_line(action.source.telegram_url)
+    scope = "⚠️ <b>ACCOUNT-WIDE POSITION ACTION</b>\n\n"
+    worker = ""
+    if action.target_demo_uid is not None:
+        account_state = None
+        account_state_error = None
+        worker = f"Assigned Demo account: <b>{action.target_demo_uid}</b>\n"
+        scope = "⚠️ <b>ISOLATED DEMO POSITION ACTION</b>\n\n"
 
     if action.action is PositionActionType.CANCEL_ENTRIES:
         return (
             recovery_review_line(action.source)
             + f"<b>CANCEL ENTRIES {html.escape(action.symbol)}</b>\n\n"
-            "Cancel pending CCB entries from this source only.\n"
+            + worker
+            + "Cancel pending CCB entries from this source only.\n"
             "Positions, stops, exits and other sources are preserved.\n"
             "Ownership is rechecked on Execute.\n\n"
             f"Trader: <b>{html.escape(action.source.channel_title)}</b>\n{action_source_line}"
@@ -206,12 +214,13 @@ def render_position_action(
 
     return (
         recovery_review_line(action.source)
-        + "⚠️ <b>ACCOUNT-WIDE POSITION ACTION</b>\n\n"
-        f"<b>{html.escape(action.action.value)} "
+        + scope
+        + f"<b>{html.escape(action.action.value)} "
         f"{html.escape(action.symbol)}</b>"
         f" — {html.escape(instruction)}\n\n"
         + "\n".join(context_lines)
         + "\n"
+        + worker
         + "Expected side: "
         f"<b>{html.escape(expected)}</b>\n" + "CCB entries cancelled on Execute: "
         f"<b>{pending_entries}</b>\n" + "Position is re-read from live Bybit "
