@@ -3,8 +3,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from .storage.isolated_intake import DemoIntentAssignment
 
 from .domain import (
     AccountOrder,
@@ -328,6 +331,8 @@ class SourceRepository(Protocol):
         claim_token: str,
         *,
         planning_candidates: Sequence[PlanningCandidate] = (),
+        isolated_assignments: Sequence[DemoIntentAssignment] | None = None,
+        completion_reason: str | None = None,
     ) -> bool: ...
 
     async def reset_stale_processing_sources(

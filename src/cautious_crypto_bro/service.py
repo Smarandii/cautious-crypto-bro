@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import (
@@ -12,6 +13,7 @@ from datetime import (
 )
 from decimal import Decimal
 
+from .contract_symbols import BYBIT_CONTRACT_ALIASES
 from .domain import (
     AccountSnapshotDelivery,
     AccountStateSummary,
@@ -41,7 +43,7 @@ from .signals.delivery import SignalDelivery
 from .signals.planning import SignalPlanning
 from .signals.queued_open import QueuedOpenExecution
 from .signals.recovery import SignalRecovery
-from .storage.isolated_intake import IsolatedDemoIntake
+from .storage.isolated_intake import DemoIntentAssignment, IsolatedDemoIntake
 
 logger = logging.getLogger(__name__)
 ACCOUNT_PNL_SYNC_INTERVAL_SECONDS = 15 * 60
@@ -62,6 +64,8 @@ class _PlannedBatch:
     retry_candidates: tuple[PlanningCandidate, ...]
     account_state: AccountStateSummary | None
     account_state_error: str | None
+    isolated_assignments: tuple[DemoIntentAssignment, ...]
+    routing_rejections: tuple[str, ...]
 
     def __init__(
         self,
@@ -73,6 +77,8 @@ class _PlannedBatch:
         retry_candidates: Sequence[PlanningCandidate],
         account_state: AccountStateSummary | None,
         account_state_error: str | None,
+        isolated_assignments: tuple[DemoIntentAssignment, ...] = (),
+        routing_rejections: tuple[str, ...] = (),
     ) -> None:
         object.__setattr__(self, "planned", tuple(planned))
         object.__setattr__(self, "position_actions", tuple(position_actions))
@@ -81,6 +87,8 @@ class _PlannedBatch:
         object.__setattr__(self, "retry_candidates", tuple(retry_candidates))
         object.__setattr__(self, "account_state", account_state)
         object.__setattr__(self, "account_state_error", account_state_error)
+        object.__setattr__(self, "isolated_assignments", isolated_assignments)
+        object.__setattr__(self, "routing_rejections", routing_rejections)
 
 
 class SignalService:
@@ -238,7 +246,7 @@ class SignalService:
             await self._complete_or_fail_source(
                 source,
                 claim_token,
-                batch.planning_errors,
+                () if batch.routing_rejections else batch.planning_errors,
                 batch.planning_rejections,
             )
             return
@@ -262,6 +270,8 @@ class SignalService:
             batch.planned,
             batch.position_actions,
             batch.retry_candidates,
+            isolated_assignments=batch.isolated_assignments,
+            routing_rejections=batch.routing_rejections,
         )
         if not finalized:
             return
@@ -384,6 +394,14 @@ class SignalService:
                 routed_actions.extend(await self._bind_worker_action(action))
             position_actions = tuple(routed_actions)
 
+        (
+            planned,
+            retry_candidates,
+            assignments,
+            routing_rejections,
+        ) = await self._route_isolated_zones(signals, planned, retry_candidates)
+        planning_rejections += routing_rejections
+
         if not await self._record_source_decision(
             source,
             claim_token,
@@ -425,7 +443,60 @@ class SignalService:
             retry_candidates=retry_candidates,
             account_state=context_snapshot.account_state,
             account_state_error=context_snapshot.account_state_error,
+            isolated_assignments=assignments,
+            routing_rejections=routing_rejections,
         )
+
+    async def _route_isolated_zones(
+        self,
+        signals: SignalExtraction,
+        planned: tuple[tuple[TradingIntent, ExecutionPlan], ...],
+        retry_candidates: tuple[PlanningCandidate, ...],
+    ) -> tuple[
+        tuple[tuple[TradingIntent, ExecutionPlan], ...],
+        tuple[PlanningCandidate, ...],
+        tuple[DemoIntentAssignment, ...],
+        tuple[str, ...],
+    ]:
+        if not self._isolated_lifecycle_enabled:
+            return planned, retry_candidates, (), ()
+        assignments: tuple[DemoIntentAssignment, ...] = ()
+        counts = Counter(
+            BYBIT_CONTRACT_ALIASES.get(intent.symbol, intent.symbol)
+            for intent in signals.open_intents
+        )
+        isolated_ids = {
+            intent.intent_id
+            for intent in signals.open_intents
+            if counts[BYBIT_CONTRACT_ALIASES.get(intent.symbol, intent.symbol)] > 1
+        }
+        eligible = tuple(
+            (intent, plan)
+            for intent, plan in planned
+            if intent.intent_id in isolated_ids
+            and intent.approval_mode is ApprovalMode.MANUAL
+            and plan.strategy_version == 2
+        )
+        if self._isolated_dispatcher is not None:
+            selection = await self._isolated_dispatcher.select_workers(eligible)
+            assignments = selection.assignments
+        assigned_ids = {item.intent.intent_id for item in assignments}
+        routing_rejections = tuple(
+            f"{intent.symbol} {intent.intent_id}: isolated Demo zone unresolved"
+            for intent in signals.open_intents
+            if intent.intent_id in isolated_ids - assigned_ids
+        )
+        planned = tuple(
+            (intent, plan)
+            for intent, plan in planned
+            if intent.intent_id not in isolated_ids or intent.intent_id in assigned_ids
+        )
+        retry_candidates = tuple(
+            candidate
+            for candidate in retry_candidates
+            if candidate.intent.intent_id not in isolated_ids
+        )
+        return planned, retry_candidates, assignments, routing_rejections
 
     async def _record_source_decision(
         self,
@@ -540,6 +611,9 @@ class SignalService:
         ],
         position_actions: tuple[PositionActionIntent, ...],
         retry_candidates: Sequence[PlanningCandidate],
+        *,
+        isolated_assignments: Sequence[DemoIntentAssignment] = (),
+        routing_rejections: Sequence[str] = (),
     ) -> bool:
         try:
             finalized = await self._store.create_signal_batch_and_complete_source(
@@ -547,6 +621,8 @@ class SignalService:
                 position_actions,
                 claim_token,
                 planning_candidates=retry_candidates,
+                isolated_assignments=isolated_assignments or None,
+                completion_reason=" | ".join(routing_rejections) or None,
             )
 
         except Exception as exc:
