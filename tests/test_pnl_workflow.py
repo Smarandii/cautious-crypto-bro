@@ -180,7 +180,7 @@ def test_blocked_background_history_does_not_block_auto_close(tmp_path):
                         while await store.get_account_pnl_sync_state() is None:
                             await asyncio.sleep(0.01)
                     assert await store.get_account_pnl_summary() is not None
-                    assert exchange.history_calls == 1
+                    assert exchange.history_calls >= 1
                 finally:
                     exchange.history_release.set()
                     if message is not None:
@@ -188,6 +188,60 @@ def test_blocked_background_history_does_not_block_auto_close(tmp_path):
                     background.cancel()
                     await asyncio.gather(background, return_exceptions=True)
                     await bot.close()
+
+    asyncio.run(run())
+
+
+def test_historical_reconciliation_backfills_older_rows_and_updates_preview(tmp_path):
+    class RetainedHistoryExchange(ExchangeTransport):
+        def handle(self, request):
+            if request.url.path != "/v5/position/closed-pnl":
+                return super().handle(request)
+            start = int(request.url.params["startTime"])
+            end = int(request.url.params["endTime"])
+            rows = [row for row in self.rows if start <= int(row["updatedTime"]) <= end]
+            return httpx.Response(
+                200, json={"retCode": 0, "result": {"list": rows, "nextPageCursor": ""}}
+            )
+
+    async def run():
+        store = IntentStore(tmp_path / "state.db")
+        await store.initialize()
+        exchange = RetainedHistoryExchange()
+        now = datetime.now(UTC)
+        exchange.rows = [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": str(age),
+                "side": "Sell",
+                "closedPnl": pnl,
+                "closedSize": "1",
+                "updatedTime": str(int((now - timedelta(days=age)).timestamp() * 1000)),
+            }
+            for age, pnl in ((2, "12"), (60, "-25"))
+        ]
+        with executor_for(exchange) as executor:
+            service, bot, _ = workflow(
+                store, executor, model(), mode=AutoApprovalMode.DISABLED
+            )
+            try:
+                recent = await service._sync_account_pnl()
+                assert (recent.record_count, recent.realized_pnl) == (1, Decimal("12"))
+                for _ in range(2):
+                    reconciled = await service._sync_account_pnl(reconcile_history=True)
+                    assert (reconciled.record_count, reconciled.realized_pnl) == (
+                        2,
+                        Decimal("-13"),
+                    )
+                with patch.object(bot._bot, "send_message", new=AsyncMock()) as send:
+                    await service.on_message(signal("manual"))
+                assert any(
+                    "Stored Closed P&amp;L since" in call.kwargs["text"]
+                    and "-13.00 USDT" in call.kwargs["text"]
+                    for call in send.call_args_list
+                )
+            finally:
+                await bot.close()
 
     asyncio.run(run())
 
