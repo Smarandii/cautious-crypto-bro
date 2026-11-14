@@ -27,6 +27,8 @@ from .domain import (
     TradingIntent,
 )
 from .execution import ExecutionPlanner
+from .isolated_demo_dispatch import IsolatedDemoDispatcher
+from .isolated_lifecycle import bind_lifecycle_target, find_lifecycle_targets
 from .ports import (
     AccountGateway,
     ApprovalSender,
@@ -122,6 +124,8 @@ class SignalService:
             demo_entry_order_ttl_minutes=demo_entry_order_ttl_minutes,
         )
         self._store = store
+        self._isolated_dispatcher: IsolatedDemoDispatcher | None = None
+        self._isolated_lifecycle_enabled = False
         self._extractor = extractor
         self._executor = executor
         self.delivery = SignalDelivery(
@@ -374,6 +378,12 @@ class SignalService:
             position_context=context_snapshot.position_context,
         )
 
+        if self._isolated_lifecycle_enabled:
+            routed_actions = []
+            for action in position_actions:
+                routed_actions.append(await self._bind_worker_action(action))
+            position_actions = tuple(routed_actions)
+
         if not await self._record_source_decision(
             source,
             claim_token,
@@ -494,6 +504,29 @@ class SignalService:
                 source,
                 claim_token,
             )
+
+    def bind_isolated_lifecycle(
+        self, dispatcher: IsolatedDemoDispatcher | None
+    ) -> None:
+        self._isolated_lifecycle_enabled = True
+        self._isolated_dispatcher = dispatcher
+
+    async def _bind_worker_action(
+        self, action: PositionActionIntent
+    ) -> PositionActionIntent:
+        dispatcher = self._isolated_dispatcher
+        targets = None
+        if dispatcher is not None:
+            try:
+                targets = await dispatcher.lifecycle_targets(action)
+                if targets and await find_lifecycle_targets(action, {0: self._store}):
+                    targets = None
+            except Exception as exc:
+                targets = None
+                logger.warning(
+                    "Demo lifecycle ownership unavailable (%s)", type(exc).__name__
+                )
+        return bind_lifecycle_target(action, targets)
 
     async def _persist_batch(
         self,
