@@ -284,6 +284,15 @@ def test_dispatch_reopens_assignment_and_serializes_approval_outcomes(
 
             if scenario == "skip_first":
                 assert await dispatcher.mark_skipped(intent.intent_id, 42)
+                replacement = intent.model_copy(update={"intent_id": uuid4()})
+                await intake.assign(
+                    DemoIntentAssignment(
+                        101,
+                        replacement,
+                        plan.model_copy(update={"intent_id": replacement.intent_id}),
+                    )
+                )
+                await intake.assign(DemoIntentAssignment(101, intent, plan))
             if scenario == "race":
                 first, second, skipped = await asyncio.gather(
                     execute(), execute(), dispatcher.mark_skipped(intent.intent_id, 42)
