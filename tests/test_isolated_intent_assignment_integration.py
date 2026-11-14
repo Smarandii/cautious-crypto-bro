@@ -184,7 +184,7 @@ def test_source_completion_commits_all_account_assignments(tmp_path, conflict, p
                     await db.execute(ASSIGNMENT_SCHEMA)
                     await db.commit()
             await intake.assign(replace(assignments[1], uid=101))
-            with pytest.raises(StoreError, match="cannot be replaced"):
+            with pytest.raises(StoreError, match="already has an assignment"):
                 await store.create_signal_batch_and_complete_source(
                     items, (), claim, isolated_assignments=assignments
                 )
@@ -442,5 +442,34 @@ def test_competing_intake_assignments_cannot_replace_the_winner(tmp_path):
         winner = candidates[outcomes.index(None)]
         await intake.assign(winner)
         assert await intake.get_assignment(intent.intent_id) == winner
+
+    asyncio.run(run())
+
+
+def test_concurrent_intents_reserve_worker_symbol_once(tmp_path):
+    async def run():
+        with executor_for(Exchange()) as executor:
+            _, intent, plan, _, _ = await prepare(
+                tmp_path / "ordinary.db", Exchange(), executor
+            )
+        path = tmp_path / "intake.db"
+        intake = IsolatedDemoIntake(path)
+        await intake.initialize()
+        sibling = intent.model_copy(update={"intent_id": uuid4()})
+        candidates = (
+            DemoIntentAssignment(101, intent, plan),
+            DemoIntentAssignment(
+                101, sibling, plan.model_copy(update={"intent_id": sibling.intent_id})
+            ),
+        )
+        results = await asyncio.gather(
+            *(IsolatedDemoIntake(path).assign(candidate) for candidate in candidates),
+            return_exceptions=True,
+        )
+        assert results.count(None) == 1
+        winner = results.index(None)
+        assert isinstance(results[1 - winner], StoreError)
+        await intake.assign(candidates[winner])
+        await intake.assign(replace(candidates[1 - winner], uid=202))
 
     asyncio.run(run())
