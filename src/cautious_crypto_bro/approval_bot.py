@@ -698,11 +698,22 @@ class ApprovalBot:
 
         await callback.answer("Executing on Bybit Demo…")
 
-        outcome = await self._executor.execute_position_action(
-            action_id,
-            approval_mode=(ApprovalMode.MANUAL),
-            user_id=(callback.from_user.id),
-        )
+        action = await self._store.get_position_action(action_id)
+        if action is not None and action.target_demo_uid is not None:
+            if self._isolated_dispatcher is None:
+                await callback.answer(
+                    "Isolated Demo workers are unavailable", show_alert=True
+                )
+                return
+            outcome = await self._isolated_dispatcher.execute_position_action(
+                action, callback.from_user.id
+            )
+        else:
+            outcome = await self._executor.execute_position_action(
+                action_id,
+                approval_mode=ApprovalMode.MANUAL,
+                user_id=callback.from_user.id,
+            )
 
         if outcome.action is None:
             await callback.answer(
@@ -737,10 +748,23 @@ class ApprovalBot:
             )
             return
 
-        skipped = await self._store.mark_position_action_skipped(
-            action_id,
-            callback.from_user.id,
-        )
+        if action.target_demo_uid is not None:
+            if self._isolated_dispatcher is None:
+                await callback.answer(
+                    "Isolated Demo workers are unavailable", show_alert=True
+                )
+                return
+            try:
+                skipped = await self._isolated_dispatcher.skip_position_action(
+                    action, callback.from_user.id
+                )
+            except StoreError as exc:
+                await callback.answer(str(exc), show_alert=True)
+                return
+        else:
+            skipped = await self._store.mark_position_action_skipped(
+                action_id, callback.from_user.id
+            )
 
         if not skipped:
             await callback.answer(

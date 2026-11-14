@@ -47,10 +47,11 @@ def test_worker_action_import_preserves_decision_after_restart(tmp_path):
             action=PositionActionType.CLOSE,
             expected_side=intent.side,
             target_strategy_id=intent.intent_id,
+            target_demo_uid=101,
             summary="Close saved target",
             confidence=1,
         )
-        with pytest.raises(StoreError, match="does not match"):
+        with pytest.raises(StoreError, match="pending action"):
             await store.import_isolated_position_action(202, action)
         await store.import_isolated_position_action(101, action)
         assert await store.mark_position_action_skipped(action.action_id, 42)

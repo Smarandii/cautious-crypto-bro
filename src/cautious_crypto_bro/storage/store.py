@@ -85,6 +85,7 @@ class SQLiteStore(
     ) -> None:
         if (
             action.target_strategy_id is None
+            or (action.target_demo_uid is not None and action.target_demo_uid != uid)
             or action.status is not IntentStatus.PENDING
             or action.contract_review_reason is not None
         ):
