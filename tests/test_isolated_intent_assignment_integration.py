@@ -17,11 +17,13 @@ from cautious_crypto_bro.domain import (
     PositionActionIntent,
     PositionActionType,
     StoreError,
+    StrategyStatus,
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.isolated_demo_dispatch import IsolatedDemoDispatcher
 from cautious_crypto_bro.isolated_demo_risk import IsolatedDemoPortfolio
+from cautious_crypto_bro.isolated_demo_runtime import release_settled_reservations
 from cautious_crypto_bro.isolated_lifecycle import (
     bind_lifecycle_targets,
     find_lifecycle_targets,
@@ -36,6 +38,87 @@ from cautious_crypto_bro.storage.isolated_intake import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def test_settled_reservation_releases_after_restart_when_exchange_is_flat(tmp_path):
+    async def run():
+        exchange = Exchange()
+        with executor_for(exchange) as executor:
+            _, intent, plan, _, _ = await prepare(
+                tmp_path / "ordinary.db", exchange, executor
+            )
+            path = tmp_path / "intake.db"
+            intake = IsolatedDemoIntake(path)
+            await intake.initialize()
+            saved = DemoIntentAssignment(101, intent, plan)
+            await intake.assign(saved)
+            worker_path = tmp_path / "worker.db"
+            worker = IntentStore(worker_path)
+            await worker.initialize_isolated_demo(101)
+            await worker.import_isolated_intent(saved)
+            coordinator = ExecutionCoordinator(
+                store=worker,
+                executor=executor,
+                planner=ExecutionPlanner(),
+                max_age_seconds=900,
+            )
+            outcome = await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert outcome.status is IntentStatus.EXECUTED
+            await worker.set_position_strategy_status(
+                intent.intent_id, StrategyStatus.CLOSED
+            )
+
+            reopened = IsolatedDemoIntake(path)
+            restarted = IntentStore(worker_path)
+            lock = asyncio.Lock()
+
+            async def reconcile(reason=None):
+                await release_settled_reservations(
+                    reason,
+                    intake=reopened,
+                    uid=101,
+                    store=restarted,
+                    executor=executor,
+                    mutation_lock=lock,
+                )
+
+            assert exchange.orders
+            await reconcile()
+            assert await reopened.reserved_symbols(101) == (
+                (intent.intent_id, intent.symbol),
+            )
+            exchange.orders.clear()
+            exchange.size = Decimal("0.01")
+            await reconcile()
+            assert await reopened.reserved_symbols(101)
+            exchange.size = Decimal("0")
+            await reconcile("exchange unavailable")
+            assert await reopened.reserved_symbols(101)
+            await reconcile()
+            assert await reopened.reserved_symbols(101) == ()
+            assert await reopened.get_assignment(intent.intent_id) == saved
+
+            new_id = uuid4()
+            await reopened.assign(
+                DemoIntentAssignment(
+                    101,
+                    intent.model_copy(update={"intent_id": new_id}),
+                    plan.model_copy(update={"intent_id": new_id}),
+                )
+            )
+            await reconcile()
+            assert await reopened.reserved_symbols(101) == ((new_id, intent.symbol),)
+            request_count = len(exchange.requests)
+            await restarted.import_isolated_intent(saved)
+            outcome = await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert outcome.status is IntentStatus.EXECUTED
+            assert len(exchange.requests) == request_count
+
+    asyncio.run(run())
 
 
 def test_worker_action_import_preserves_decision_after_restart(tmp_path):

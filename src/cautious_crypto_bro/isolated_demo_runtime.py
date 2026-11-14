@@ -5,11 +5,12 @@ import logging
 from collections.abc import Callable
 from contextlib import AsyncExitStack
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
 
 from .bybit import BybitDemoExecutor
 from .config import Settings
-from .domain import TradeExecutionError
+from .domain import IntentStatus, TradeExecutionError
 from .execution import ExecutionPlanner
 from .isolated_demo_dispatch import IsolatedDemoDispatcher
 from .isolated_demo_risk import IsolatedDemoPortfolio
@@ -99,13 +100,11 @@ async def run_isolated_demo_workers(
             )
             return
 
+        intake = IsolatedDemoIntake(
+            settings.database_path,
+            legacy_path=settings.database_path.with_suffix(".isolated-intake.sqlite3"),
+        )
         if bind_dispatcher is not None:
-            intake = IsolatedDemoIntake(
-                settings.database_path,
-                legacy_path=settings.database_path.with_suffix(
-                    ".isolated-intake.sqlite3"
-                ),
-            )
             cleanup.callback(bind_dispatcher, None)
             portfolio = admission.portfolio
             assert portfolio is not None
@@ -139,6 +138,14 @@ async def run_isolated_demo_workers(
                     executor=executor,
                     mutation_lock=admission.mutation_lock,
                     legacy_entry_ttl_minutes=settings.demo_entry_order_ttl_minutes,
+                    report_state=partial(
+                        release_settled_reservations,
+                        intake=intake,
+                        uid=config.uid,
+                        store=store,
+                        executor=executor,
+                        mutation_lock=admission.mutation_lock,
+                    ),
                 )
                 tasks.create_task(
                     _run_worker(
@@ -151,6 +158,34 @@ async def run_isolated_demo_workers(
                         admission.ready,
                     )
                 )
+
+
+async def release_settled_reservations(
+    reason: str | None,
+    *,
+    intake: IsolatedDemoIntake,
+    uid: int,
+    store: SQLiteStore,
+    executor: BybitDemoExecutor,
+    mutation_lock: asyncio.Lock,
+) -> None:
+    if reason is not None:
+        return
+    async with mutation_lock:
+        settled = []
+        for intent_id, symbol in await intake.reserved_symbols(uid):
+            if await store.position_strategy_is_closed(intent_id, symbol):
+                intent = await store.get_intent(intent_id)
+                if intent is not None and intent.status is IntentStatus.EXECUTED:
+                    settled.append((intent_id, symbol))
+        if not settled:
+            return
+        account = await executor.account_state()
+        occupied = {position.symbol for position in account.positions}
+        occupied.update(order.symbol for order in account.open_orders)
+        for intent_id, symbol in settled:
+            if symbol not in occupied:
+                await intake.release(intent_id)
 
 
 async def _run_worker(
