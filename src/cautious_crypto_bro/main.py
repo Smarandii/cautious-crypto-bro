@@ -14,6 +14,7 @@ from .config import Settings, get_settings
 from .domain import TradeExecutionError
 from .execution import ExecutionPlanner
 from .execution_coordinator import ExecutionCoordinator
+from .isolated_demo_dispatch import IsolatedDemoDispatcher
 from .isolated_demo_runtime import DemoAdmission, run_isolated_demo_workers
 from .llm_factory import build_intent_extractor
 from .position_supervisor import PositionSupervisor
@@ -274,7 +275,9 @@ async def _run_application(runtime: _Runtime) -> None:
         tg.create_task(runtime.bot.run())
         if runtime.isolated_workers is not None:
             tg.create_task(
-                _run_optional_workers(runtime.bot, *runtime.isolated_workers)
+                _run_optional_workers(
+                    runtime.bot, runtime.service, *runtime.isolated_workers
+                )
             )
         # Operator polling is live, but every trading callback remains gated.
         # Grug, Chesterton's Fence (faithful paraphrase): preserve the existing
@@ -302,14 +305,20 @@ async def _run_application(runtime: _Runtime) -> None:
 
 async def _run_optional_workers(
     bot: ApprovalBot,
+    service: SignalService,
     settings: Settings,
     executor: BybitDemoExecutor,
     store: IntentStore,
     admission: DemoAdmission,
 ) -> None:
+    def bind_dispatcher(dispatcher: IsolatedDemoDispatcher | None) -> None:
+        bot.bind_isolated_dispatcher(dispatcher)
+        service.bind_isolated_lifecycle(dispatcher)
+
+    bind_dispatcher(None)
     try:
         await run_isolated_demo_workers(
-            settings, executor, store, admission, bot.bind_isolated_dispatcher
+            settings, executor, store, admission, bind_dispatcher
         )
     except Exception as exc:
         logging.getLogger(__name__).error(
