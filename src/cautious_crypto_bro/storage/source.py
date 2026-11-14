@@ -279,6 +279,7 @@ class SourceRepositoryImpl(_Store):
         *,
         planning_candidates: Sequence[PlanningCandidate] = (),
         isolated_assignments: Sequence[DemoIntentAssignment] | None = None,
+        completion_reason: str | None = None,
     ) -> bool:
         if planning_candidates and not (items or position_actions):
             source = planning_candidates[0].intent.source
@@ -366,7 +367,7 @@ class SourceRepositoryImpl(_Store):
                     source,
                     claim_token,
                     status="COMPLETED",
-                    error=None,
+                    error=completion_reason,
                 ):
                     await db.rollback()
                     return False

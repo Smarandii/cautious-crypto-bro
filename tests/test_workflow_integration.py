@@ -26,12 +26,15 @@ from cautious_crypto_bro.domain import (
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
+from cautious_crypto_bro.isolated_demo_dispatch import IsolatedDemoDispatcher
+from cautious_crypto_bro.isolated_demo_risk import IsolatedDemoPortfolio
 from cautious_crypto_bro.llm_provider import LLMResponse
 from cautious_crypto_bro.position_supervisor import PositionSupervisor
 from cautious_crypto_bro.service import SignalService
 from cautious_crypto_bro.signal_context import SignalContextProvider
 from cautious_crypto_bro.signals.extraction import IntentExtractor
 from cautious_crypto_bro.storage import IntentStore
+from cautious_crypto_bro.storage.isolated_intake import IsolatedDemoIntake
 
 pytestmark = pytest.mark.integration
 
@@ -115,6 +118,7 @@ def workflow(
     mode=AutoApprovalMode.OPEN_ONLY,
     max_age=900,
     portfolio_cap=None,
+    isolated_intake=None,
 ):
     planner = ExecutionPlanner()
     lock = asyncio.Lock()
@@ -144,9 +148,123 @@ def workflow(
         auto_approval_mode=mode,
         intent_max_age_seconds=max_age,
         demo_portfolio_stop_risk_cap_usdt=portfolio_cap,
+        isolated_intake=isolated_intake,
     )
     supervisor = PositionSupervisor(store=store, executor=executor, mutation_lock=lock)
     return service, bot, supervisor
+
+
+@pytest.mark.parametrize("worker_count", [0, 2])
+def test_telegram_same_symbol_zones_persist_routing_before_card_delivery(
+    tmp_path, worker_count
+):
+    async def run():
+        path = tmp_path / "state.sqlite3"
+        store = IntentStore(path)
+        await store.initialize()
+        source = make_intent().source.model_copy(
+            update={"text": "Long BTCUSDT at 100 and 98, stop at 90"}
+        )
+        provider = ModelTransport()
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                json.dumps(
+                    {
+                        "actionable": True,
+                        "reason": "Separate entry zones",
+                        "intents": [
+                            {
+                                "symbol": "BTCUSDT",
+                                "side": "LONG",
+                                "entry": {"type": "LIMIT", "price": price},
+                                "stop_loss": 90,
+                                "relation": "NEW",
+                                "summary": f"Limit entry at {price}",
+                                "confidence": 1,
+                            }
+                            for price in (100, 98)
+                        ],
+                    }
+                )
+            )
+        )
+        intake = IsolatedDemoIntake(path)
+        with (
+            executor_for(ExchangeTransport()) as primary,
+            executor_for(ExchangeTransport()) as first,
+            executor_for(ExchangeTransport()) as second,
+        ):
+            workers = {
+                101: (first, IntentStore(tmp_path / "first.db")),
+                102: (second, IntentStore(tmp_path / "second.db")),
+            }
+            dispatcher = IsolatedDemoDispatcher(
+                intake,
+                workers,
+                IsolatedDemoPortfolio(tuple(workers.values()), Decimal("1000")),
+                ExecutionPlanner(),
+                900,
+                worker_ready=lambda _: worker_count > 0,
+            )
+            service, bot, _ = workflow(
+                store,
+                primary,
+                provider,
+                mode=AutoApprovalMode.DISABLED,
+                isolated_intake=intake,
+            )
+            service.bind_isolated_lifecycle(dispatcher)
+            try:
+                with patch.object(
+                    bot,
+                    "send_intent",
+                    new=AsyncMock(
+                        side_effect=RuntimeError("Telegram temporarily unavailable")
+                    ),
+                ):
+                    await service.on_message(IncomingPost(source=source))
+                    await service.on_message(IncomingPost(source=source))
+                async with aiosqlite.connect(path) as db:
+                    async with db.execute(
+                        "SELECT status, attempt_count, last_error FROM source_messages"
+                    ) as cursor:
+                        status, attempts, reason = await cursor.fetchone()
+                    assert (status, attempts) == ("COMPLETED", 1)
+                    assert ("isolated Demo zone unresolved" in (reason or "")) == (
+                        worker_count == 0
+                    )
+                    await db.execute(
+                        "UPDATE manual_deliveries SET retry_after = CURRENT_TIMESTAMP"
+                    )
+                    await db.commit()
+                restarted, restarted_bot, _ = workflow(
+                    IntentStore(path),
+                    primary,
+                    provider,
+                    mode=AutoApprovalMode.DISABLED,
+                    isolated_intake=IsolatedDemoIntake(path),
+                )
+                try:
+                    with patch.object(
+                        restarted_bot, "send_intent", new=AsyncMock()
+                    ) as send:
+                        await restarted.delivery.recover_manual()
+                    assert send.await_count == worker_count
+                    assigned_workers = set()
+                    for call in send.await_args_list:
+                        intent, plan = call.args
+                        assignment = await intake.get_assignment(intent.intent_id)
+                        assert assignment is not None
+                        assert assignment.plan == plan
+                        assigned_workers.add(assignment.uid)
+                        assert call.kwargs["isolated"] is True
+                    assert assigned_workers == (set(workers) if worker_count else set())
+                finally:
+                    await restarted_bot.close()
+            finally:
+                await bot.close()
+
+    asyncio.run(run())
 
 
 def test_invalid_limit_preserves_valid_sibling_and_original_decision(tmp_path):
