@@ -91,7 +91,11 @@ class IsolatedDemoDispatcher:
 
     async def mark_skipped(self, intent_id: UUID, user_id: int) -> bool:
         store, _ = await self._import(intent_id)
-        return await store.mark_skipped(intent_id, user_id)
+        skipped = await store.mark_skipped(intent_id, user_id)
+        current = await store.get_intent(intent_id)
+        if current is not None and current.status is IntentStatus.SKIPPED:
+            await self._intake.release_skipped(intent_id)
+        return skipped
 
     async def _import_action(
         self, action: PositionActionIntent

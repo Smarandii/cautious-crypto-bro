@@ -16,6 +16,9 @@ ASSIGNMENT_SCHEMA = (
     "intent_id TEXT PRIMARY KEY, uid TEXT NOT NULL, "
     "intent_json TEXT NOT NULL, plan_json TEXT NOT NULL)"
 )
+RELEASE_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS demo_assignment_releases (intent_id TEXT PRIMARY KEY)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +101,35 @@ class IsolatedDemoIntake:
             )
         return assignment
 
+    async def release_skipped(self, intent_id: UUID) -> None:
+        if await self._release_assignment(intent_id):
+            return
+        if self._legacy_path is not None and self._legacy_path.is_file():
+            await IsolatedDemoIntake(self._legacy_path)._release_assignment(intent_id)
+
+    async def _release_assignment(self, intent_id: UUID) -> bool:
+        async with sqlite_connection(self._database_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='demo_intent_assignments'"
+            ) as cursor:
+                if await cursor.fetchone() is None:
+                    return False
+            await db.execute(RELEASE_SCHEMA)
+            await db.execute(
+                "INSERT OR IGNORE INTO demo_assignment_releases "
+                "SELECT intent_id FROM demo_intent_assignments WHERE intent_id=?",
+                (str(intent_id),),
+            )
+            async with db.execute(
+                "SELECT 1 FROM demo_assignment_releases WHERE intent_id=?",
+                (str(intent_id),),
+            ) as cursor:
+                released = await cursor.fetchone() is not None
+            await db.commit()
+            return released
+
     async def _read_assignment(self, intent_id: UUID) -> DemoIntentAssignment | None:
         async with sqlite_connection(self._database_path) as db:
             async with db.execute(
@@ -127,10 +159,14 @@ async def insert_assignment(
 ) -> None:
     key = str(assignment.intent.intent_id)
     payload = assignment.payload()
+    await db.execute(RELEASE_SCHEMA)
     async with db.execute(
-        "SELECT 1 FROM demo_intent_assignments "
-        "WHERE uid=? AND intent_id<>? AND json_extract(intent_json, '$.symbol')=? LIMIT 1",
-        (str(assignment.uid), key, assignment.intent.symbol),
+        "SELECT 1 FROM demo_intent_assignments a "
+        "WHERE uid=? AND json_extract(intent_json, '$.symbol')=? "
+        "AND NOT EXISTS (SELECT 1 FROM demo_intent_assignments old WHERE old.intent_id=?) "
+        "AND NOT EXISTS (SELECT 1 FROM demo_assignment_releases r "
+        "WHERE r.intent_id=a.intent_id) LIMIT 1",
+        (str(assignment.uid), assignment.intent.symbol, key),
     ) as cursor:
         if await cursor.fetchone() is not None:
             raise StoreError("Demo worker already has an assignment for this symbol")
