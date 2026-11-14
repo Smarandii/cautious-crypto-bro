@@ -616,14 +616,23 @@ class SignalService:
         routing_rejections: Sequence[str] = (),
     ) -> bool:
         try:
-            finalized = await self._store.create_signal_batch_and_complete_source(
-                planned,
-                position_actions,
-                claim_token,
-                planning_candidates=retry_candidates,
-                isolated_assignments=isolated_assignments or None,
-                completion_reason=" | ".join(routing_rejections) or None,
-            )
+            persist = self._store.create_signal_batch_and_complete_source
+            if isolated_assignments or routing_rejections:
+                finalized = await persist(
+                    planned,
+                    position_actions,
+                    claim_token,
+                    planning_candidates=retry_candidates,
+                    isolated_assignments=isolated_assignments or None,
+                    completion_reason=" | ".join(routing_rejections) or None,
+                )
+            else:
+                finalized = await persist(
+                    planned,
+                    position_actions,
+                    claim_token,
+                    planning_candidates=retry_candidates,
+                )
 
         except Exception as exc:
             await self._store.mark_source_failed(
