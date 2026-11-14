@@ -45,6 +45,9 @@ from .storage.isolated_intake import IsolatedDemoIntake
 
 logger = logging.getLogger(__name__)
 ACCOUNT_PNL_SYNC_INTERVAL_SECONDS = 15 * 60
+ACCOUNT_PNL_RECONCILE_INTERVAL = timedelta(days=7)
+# Leave a day of margin at the documented two-year exchange retention boundary.
+ACCOUNT_PNL_RETAINED_LOOKBACK = timedelta(days=729)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,21 +163,35 @@ class SignalService:
         await self.recovery.run_delivery_recovery()
 
     async def run_periodic_account_pnl_sync(self) -> None:
+        next_reconciliation = datetime.min.replace(tzinfo=UTC)
         while True:
             try:
-                await self._sync_account_pnl()
+                now = datetime.now(UTC)
+                reconcile_history = now >= next_reconciliation
+                await self._sync_account_pnl(reconcile_history=reconcile_history)
+                if reconcile_history:
+                    next_reconciliation = now + ACCOUNT_PNL_RECONCILE_INTERVAL
             except Exception:
                 logger.exception("Periodic account P&L sync failed")
             await asyncio.sleep(ACCOUNT_PNL_SYNC_INTERVAL_SECONDS)
 
     async def _sync_account_pnl(
         self,
+        *,
+        reconcile_history: bool = False,
     ):
         now = datetime.now(UTC)
 
         sync_state = await self._store.get_account_pnl_sync_state()
 
-        if sync_state is None:
+        if reconcile_history:
+            sync_start = now - ACCOUNT_PNL_RETAINED_LOOKBACK
+            history_start = (
+                min(sync_state.history_start_at, sync_start)
+                if sync_state is not None
+                else sync_start
+            )
+        elif sync_state is None:
             history_start = now - timedelta(days=7)
             sync_start = history_start
 

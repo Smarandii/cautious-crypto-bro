@@ -486,7 +486,7 @@ def _account_pnl_lines(
                 "</b>"
             ),
             (
-                "History: since "
+                "Stored Closed P&amp;L since "
                 f"<b>{pnl.history_start_at.date().isoformat()}</b>"
                 " · "
                 f"{pnl.record_count} realized record(s)"
