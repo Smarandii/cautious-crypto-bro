@@ -118,6 +118,13 @@ def test_saved_lifecycle_target_rejects_replaced_owner(tmp_path, action_type):
                 == targets
             )
             assert len({item.action_id for item in split}) == 2
+            primary, worker = bind_lifecycle_targets(
+                action, ((0, intent.intent_id), targets[1])
+            )
+            assert primary.target_demo_uid is None
+            assert primary.target_strategy_id == intent.intent_id
+            assert worker.target_demo_uid == 202
+            assert primary.action_id != worker.action_id
             assert (
                 bind_lifecycle_targets(action, tuple(reversed(targets))) == split[::-1]
             )
