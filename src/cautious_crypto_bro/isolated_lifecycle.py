@@ -34,7 +34,7 @@ def bind_lifecycle_targets(
                     "action_id": action.action_id
                     if len(targets) == 1
                     else uuid5(action.action_id, f"{uid}/{strategy_id}"),
-                    "target_demo_uid": uid,
+                    "target_demo_uid": uid or None,
                     "target_strategy_id": strategy_id,
                     "approval_mode": ApprovalMode.MANUAL,
                     "status": IntentStatus.PENDING,

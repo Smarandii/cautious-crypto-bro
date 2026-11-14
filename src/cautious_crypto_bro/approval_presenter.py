@@ -145,6 +145,9 @@ def render_position_action(
         account_state_error = None
         worker = f"Assigned Demo account: <b>{action.target_demo_uid}</b>\n"
         scope = "⚠️ <b>ISOLATED DEMO POSITION ACTION</b>\n\n"
+    elif action.target_strategy_id is not None:
+        worker = "Assigned Demo account: <b>Primary</b>\n"
+        scope = "⚠️ <b>PRIMARY DEMO POSITION ACTION</b>\n\n"
 
     if action.action is PositionActionType.CANCEL_ENTRIES:
         return (

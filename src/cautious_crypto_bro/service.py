@@ -519,8 +519,8 @@ class SignalService:
         if dispatcher is not None:
             try:
                 targets = await dispatcher.lifecycle_targets(action)
-                if targets and await find_lifecycle_targets(action, {0: self._store}):
-                    targets = None
+                if targets:
+                    targets += await find_lifecycle_targets(action, {0: self._store})
             except Exception as exc:
                 targets = None
                 logger.warning(
