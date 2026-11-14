@@ -1,15 +1,20 @@
 """Dispatch an isolated OPEN using its durable intake assignment."""
 
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from uuid import UUID
 
 from .domain import (
     ApprovalMode,
+    ExecutionPlan,
     IntentExecutionOutcome,
     IntentStatus,
     PositionActionExecutionOutcome,
     PositionActionIntent,
     StoreError,
+    TradeExecutionError,
+    TradingIntent,
 )
 from .execution import ExecutionPlanner
 from .execution_coordinator import ExecutionCoordinator
@@ -17,7 +22,15 @@ from .isolated_demo_risk import IsolatedDemoPortfolio
 from .isolated_lifecycle import find_lifecycle_targets
 from .ports import AccountGateway
 from .storage import SQLiteStore
-from .storage.isolated_intake import IsolatedDemoIntake
+from .storage.isolated_intake import DemoIntentAssignment, IsolatedDemoIntake
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class DemoWorkerSelection:
+    assignments: tuple[DemoIntentAssignment, ...]
+    unresolved_intent_ids: tuple[UUID, ...]
 
 
 class IsolatedDemoDispatcher:
@@ -33,6 +46,7 @@ class IsolatedDemoDispatcher:
     ) -> None:
         self._intake = intake
         self._worker_ready = worker_ready
+        self._accounts = {uid: executor for uid, (executor, _) in workers.items()}
         self._workers = {
             uid: (
                 store,
@@ -47,6 +61,42 @@ class IsolatedDemoDispatcher:
             )
             for uid, (executor, store) in workers.items()
         }
+
+    async def select_workers(
+        self, plans: Sequence[tuple[TradingIntent, ExecutionPlan]]
+    ) -> DemoWorkerSelection:
+        """Select accounts for eligible manual plans before transactional reservation."""
+        if not plans:
+            return DemoWorkerSelection((), ())
+
+        occupied_by_worker: dict[int, set[str]] = {}
+        for uid, executor in sorted(self._accounts.items()):
+            if self._worker_ready is not None and not self._worker_ready(uid):
+                continue
+            try:
+                account = await executor.account_state()
+            except TradeExecutionError:
+                logger.warning("Demo worker account state unavailable during selection")
+                continue
+            occupied = {position.symbol for position in account.positions}
+            occupied.update(order.symbol for order in account.open_orders)
+            occupied.update(
+                symbol for _, symbol in await self._intake.reserved_symbols(uid)
+            )
+            if self._worker_ready is None or self._worker_ready(uid):
+                occupied_by_worker[uid] = occupied
+
+        assignments = []
+        unresolved = []
+        for intent, plan in plans:
+            for uid, occupied in occupied_by_worker.items():
+                if intent.symbol not in occupied:
+                    assignments.append(DemoIntentAssignment(uid, intent, plan))
+                    occupied.add(intent.symbol)
+                    break
+            else:
+                unresolved.append(intent.intent_id)
+        return DemoWorkerSelection(tuple(assignments), tuple(unresolved))
 
     async def lifecycle_targets(
         self, action: PositionActionIntent

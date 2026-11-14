@@ -18,6 +18,7 @@ from cautious_crypto_bro.domain import (
     PositionActionType,
     StoreError,
     StrategyStatus,
+    TradeExecutionError,
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
 from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
@@ -38,6 +39,58 @@ from cautious_crypto_bro.storage.isolated_intake import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def test_select_workers_preserves_zone_plans_and_reports_exhaustion(tmp_path):
+    async def run():
+        exchange = Exchange()
+        occupied = Exchange()
+        occupied.size = Decimal("1")
+        with executor_for(exchange) as flat, executor_for(occupied) as busy:
+            _, intent, plan, _, _ = await prepare(
+                tmp_path / "primary.db", exchange, flat
+            )
+            intake = IsolatedDemoIntake(tmp_path / "intake.db")
+            await intake.initialize()
+            await intake.assign(DemoIntentAssignment(101, intent, plan))
+            zones = tuple(
+                (
+                    intent.model_copy(update={"intent_id": key}),
+                    plan.model_copy(update={"intent_id": key}),
+                )
+                for key in (uuid4(), uuid4(), uuid4())
+            )
+            unavailable = SimpleNamespace(
+                account_state=AsyncMock(side_effect=TradeExecutionError("offline"))
+            )
+            workers = {
+                uid: (account, IntentStore(tmp_path / f"worker-{uid}.db"))
+                for uid, account in (
+                    (106, SimpleNamespace(account_state=flat.account_state)),
+                    (101, flat),
+                    (102, busy),
+                    (103, unavailable),
+                    (104, SimpleNamespace(account_state=flat.account_state)),
+                    (105, SimpleNamespace(account_state=flat.account_state)),
+                )
+            }
+            dispatcher = IsolatedDemoDispatcher(
+                intake,
+                workers,
+                IsolatedDemoPortfolio(tuple(workers.values()), Decimal("100")),
+                ExecutionPlanner(),
+                900,
+                worker_ready=lambda uid: uid != 104,
+            )
+            selection = await dispatcher.select_workers(zones)
+            assert selection.assignments == (
+                DemoIntentAssignment(105, *zones[0]),
+                DemoIntentAssignment(106, *zones[1]),
+            )
+            assert selection.unresolved_intent_ids == (zones[2][0].intent_id,)
+            assert await intake.reserved_symbols(105) == ()
+
+    asyncio.run(run())
 
 
 def test_settled_reservation_releases_after_restart_when_exchange_is_flat(tmp_path):
