@@ -28,7 +28,7 @@ from .domain import (
 )
 from .execution import ExecutionPlanner
 from .isolated_demo_dispatch import IsolatedDemoDispatcher
-from .isolated_lifecycle import bind_lifecycle_target, find_lifecycle_targets
+from .isolated_lifecycle import bind_lifecycle_targets, find_lifecycle_targets
 from .ports import (
     AccountGateway,
     ApprovalSender,
@@ -381,7 +381,7 @@ class SignalService:
         if self._isolated_lifecycle_enabled:
             routed_actions = []
             for action in position_actions:
-                routed_actions.append(await self._bind_worker_action(action))
+                routed_actions.extend(await self._bind_worker_action(action))
             position_actions = tuple(routed_actions)
 
         if not await self._record_source_decision(
@@ -513,7 +513,7 @@ class SignalService:
 
     async def _bind_worker_action(
         self, action: PositionActionIntent
-    ) -> PositionActionIntent:
+    ) -> tuple[PositionActionIntent, ...]:
         dispatcher = self._isolated_dispatcher
         targets = None
         if dispatcher is not None:
@@ -526,7 +526,7 @@ class SignalService:
                 logger.warning(
                     "Demo lifecycle ownership unavailable (%s)", type(exc).__name__
                 )
-        return bind_lifecycle_target(action, targets)
+        return bind_lifecycle_targets(action, targets)
 
     async def _persist_batch(
         self,

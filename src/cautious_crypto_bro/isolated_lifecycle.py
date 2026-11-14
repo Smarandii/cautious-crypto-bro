@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from .domain import (
     ApprovalMode,
@@ -22,28 +22,35 @@ class LifecycleOwnerStore(Protocol):
     async def get_intent(self, intent_id: UUID) -> TradingIntent | None: ...
 
 
-def bind_lifecycle_target(
+def bind_lifecycle_targets(
     action: PositionActionIntent, targets: tuple[tuple[int, UUID], ...] | None
-) -> PositionActionIntent:
+) -> tuple[PositionActionIntent, ...]:
     if targets == ():
-        return action
-    if targets is not None and len(targets) == 1 and action.expected_side is not None:
-        uid, strategy_id = targets[0]
-        return action.model_copy(
-            update={
-                "target_demo_uid": uid,
-                "target_strategy_id": strategy_id,
-                "approval_mode": ApprovalMode.MANUAL,
-                "status": IntentStatus.PENDING,
-                "contract_review_reason": None,
-            }
+        return (action,)
+    if targets and action.expected_side is not None:
+        return tuple(
+            action.model_copy(
+                update={
+                    "action_id": action.action_id
+                    if len(targets) == 1
+                    else uuid5(action.action_id, f"{uid}/{strategy_id}"),
+                    "target_demo_uid": uid,
+                    "target_strategy_id": strategy_id,
+                    "approval_mode": ApprovalMode.MANUAL,
+                    "status": IntentStatus.PENDING,
+                    "contract_review_reason": None,
+                }
+            )
+            for uid, strategy_id in targets
         )
-    return action.model_copy(
-        update={
-            "approval_mode": ApprovalMode.MANUAL,
-            "status": IntentStatus.SKIPPED,
-            "contract_review_reason": "Demo worker ownership is unavailable or ambiguous. Review the source and account before acting.",
-        }
+    return (
+        action.model_copy(
+            update={
+                "approval_mode": ApprovalMode.MANUAL,
+                "status": IntentStatus.SKIPPED,
+                "contract_review_reason": "Demo worker ownership is unavailable or ambiguous. Review the source and account before acting.",
+            }
+        ),
     )
 
 
