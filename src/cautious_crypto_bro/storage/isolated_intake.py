@@ -127,6 +127,13 @@ async def insert_assignment(
 ) -> None:
     key = str(assignment.intent.intent_id)
     payload = assignment.payload()
+    async with db.execute(
+        "SELECT 1 FROM demo_intent_assignments "
+        "WHERE uid=? AND intent_id<>? AND json_extract(intent_json, '$.symbol')=? LIMIT 1",
+        (str(assignment.uid), key, assignment.intent.symbol),
+    ) as cursor:
+        if await cursor.fetchone() is not None:
+            raise StoreError("Demo worker already has an assignment for this symbol")
     await db.execute(
         "INSERT INTO demo_intent_assignments VALUES (?, ?, ?, ?) "
         "ON CONFLICT(intent_id) DO NOTHING",
