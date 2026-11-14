@@ -845,6 +845,9 @@ class PositionActionIntent(BaseModel):
     target_strategy_id: UUID | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    target_demo_uid: int | None = Field(
+        default=None, gt=0, repr=False, exclude_if=lambda value: value is None
+    )
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0, le=1)
 
@@ -866,6 +869,10 @@ class PositionActionIntent(BaseModel):
         self,
     ) -> PositionActionIntent:
         self.symbol = _normalize_usdt_symbol(self.symbol)
+        if self.target_demo_uid is not None and (
+            self.target_strategy_id is None or self.expected_side is None
+        ):
+            raise ValueError("A Demo account target requires a strategy and side")
 
         if self.action is PositionActionType.REDUCE and self.close_pct is None:
             raise ValueError("REDUCE requires close_pct")

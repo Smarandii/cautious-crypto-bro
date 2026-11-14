@@ -55,6 +55,7 @@ class ExecutionCoordinator:
         portfolio_stop_risk_cap_usdt: Decimal | None = None,
         isolated_demo_portfolio: IsolatedDemoPortfolio | None = None,
         shared_open_risk: Callable[[], Awaitable[Decimal]] | None = None,
+        worker_uid: int | None = None,
     ) -> None:
         if max_age_seconds <= 0:
             raise ValueError("max_age_seconds must be positive")
@@ -79,6 +80,7 @@ class ExecutionCoordinator:
             portfolio_stop_risk_cap_usdt = isolated_demo_portfolio.cap_usdt
             shared_open_risk = isolated_demo_portfolio.open_risk_usdt
         self._shared_open_risk = shared_open_risk
+        self._worker_uid = worker_uid
         self._portfolio_stop_risk_cap_usdt = portfolio_stop_risk_cap_usdt
 
         # Serialize every account mutation, including
@@ -658,6 +660,12 @@ class ExecutionCoordinator:
             return PositionActionExecutionOutcome(
                 status=IntentStatus.FAILED,
                 message=("Position action no longer exists"),
+            )
+
+        if action.target_demo_uid != self._worker_uid:
+            return PositionActionExecutionOutcome(
+                status=IntentStatus.FAILED,
+                message="Position action belongs to a different Demo account",
             )
 
         if action.status is not IntentStatus.PENDING:

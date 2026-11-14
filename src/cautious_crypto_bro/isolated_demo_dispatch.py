@@ -7,6 +7,7 @@ from .domain import (
     ApprovalMode,
     IntentExecutionOutcome,
     IntentStatus,
+    PositionActionExecutionOutcome,
     PositionActionIntent,
     StoreError,
 )
@@ -41,6 +42,7 @@ class IsolatedDemoDispatcher:
                     planner=planner,
                     max_age_seconds=max_age_seconds,
                     isolated_demo_portfolio=portfolio,
+                    worker_uid=uid,
                 ),
             )
             for uid, (executor, store) in workers.items()
@@ -90,3 +92,37 @@ class IsolatedDemoDispatcher:
     async def mark_skipped(self, intent_id: UUID, user_id: int) -> bool:
         store, _ = await self._import(intent_id)
         return await store.mark_skipped(intent_id, user_id)
+
+    async def _import_action(
+        self, action: PositionActionIntent
+    ) -> tuple[SQLiteStore, ExecutionCoordinator]:
+        uid = action.target_demo_uid
+        if uid is None:
+            raise StoreError("Position action has no Demo account target")
+        worker = self._workers.get(uid)
+        if worker is None or (
+            self._worker_ready is not None and not self._worker_ready(uid)
+        ):
+            raise StoreError("Assigned Demo worker is unavailable")
+        store, _ = worker
+        await store.import_isolated_position_action(uid, action)
+        return worker
+
+    async def execute_position_action(
+        self, action: PositionActionIntent, user_id: int
+    ) -> PositionActionExecutionOutcome:
+        try:
+            _, coordinator = await self._import_action(action)
+        except StoreError as exc:
+            return PositionActionExecutionOutcome(
+                status=IntentStatus.FAILED, message=str(exc)
+            )
+        return await coordinator.execute_position_action(
+            action.action_id, approval_mode=ApprovalMode.MANUAL, user_id=user_id
+        )
+
+    async def skip_position_action(
+        self, action: PositionActionIntent, user_id: int
+    ) -> bool:
+        store, _ = await self._import_action(action)
+        return await store.mark_position_action_skipped(action.action_id, user_id)
