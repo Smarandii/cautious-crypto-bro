@@ -101,11 +101,43 @@ class IsolatedDemoIntake:
             )
         return assignment
 
-    async def release_skipped(self, intent_id: UUID) -> None:
+    async def release(self, intent_id: UUID) -> None:
         if await self._release_assignment(intent_id):
             return
         if self._legacy_path is not None and self._legacy_path.is_file():
             await IsolatedDemoIntake(self._legacy_path)._release_assignment(intent_id)
+
+    async def reserved_symbols(self, uid: int) -> tuple[tuple[UUID, str], ...]:
+        reservations = await self._read_reserved_symbols(uid)
+        if self._legacy_path is not None and self._legacy_path.is_file():
+            legacy = await IsolatedDemoIntake(self._legacy_path)._read_reserved_symbols(
+                uid
+            )
+            return (*reservations, *legacy)
+        return reservations
+
+    async def _read_reserved_symbols(self, uid: int) -> tuple[tuple[UUID, str], ...]:
+        async with sqlite_connection(self._database_path) as db:
+            async with db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name IN ('demo_intent_assignments', 'demo_assignment_releases')"
+            ) as cursor:
+                tables = {row[0] for row in await cursor.fetchall()}
+            if "demo_intent_assignments" not in tables:
+                return ()
+            sql = (
+                "SELECT a.intent_id, json_extract(a.intent_json, '$.symbol') "
+                "FROM demo_intent_assignments a WHERE a.uid=?"
+            )
+            if "demo_assignment_releases" in tables:
+                sql += (
+                    " AND NOT EXISTS (SELECT 1 FROM demo_assignment_releases r "
+                    "WHERE r.intent_id=a.intent_id)"
+                )
+            async with db.execute(sql, (str(uid),)) as cursor:
+                return tuple(
+                    (UUID(key), symbol) for key, symbol in await cursor.fetchall()
+                )
 
     async def _release_assignment(self, intent_id: UUID) -> bool:
         async with sqlite_connection(self._database_path) as db:

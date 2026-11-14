@@ -13,6 +13,13 @@ from ._plan_payload import load_strategy_plan
 
 
 class PositionStrategyRepositoryImpl(_Store):
+    async def position_strategy_is_closed(self, strategy_id: UUID, symbol: str) -> bool:
+        row = await self._fetch(
+            "SELECT 1 FROM position_strategies WHERE strategy_id=? AND symbol=? AND status=?",
+            (str(strategy_id), symbol, StrategyStatus.CLOSED.value),
+        )
+        return row is not None
+
     async def ensure_position_strategy(
         self,
         plan: ExecutionPlan,
