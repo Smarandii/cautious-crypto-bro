@@ -310,20 +310,47 @@ def _market_candles(
 
 
 def _mirror_comparisons(
-    rows: list[sqlite3.Row], originals: dict[str, str]
+    rows: list[sqlite3.Row],
+    originals: dict[str, str],
+    *,
+    historical_since_ms: int | None = None,
 ) -> list[dict]:
     comparisons = []
     for row in rows:
         intent_id = row["intent_id"]
         selected = json.loads(row["payload_json"])
-        if selected.get("mirror_source_side") is None:
-            continue
         original = json.loads(originals[intent_id]) if intent_id in originals else None
+        source_side = selected.get("mirror_source_side")
+        if source_side is None:
+            if (
+                historical_since_ms is None
+                or int(datetime.fromisoformat(row["created_at"]).timestamp() * 1000)
+                < historical_since_ms
+                or not original
+                or original.get("strategy_version") != 2
+                or original.get("entry_slices")
+                or not original.get("take_profit_targets")
+            ):
+                continue
+            comparisons.append(
+                {
+                    "intent_id": intent_id,
+                    "planned_at": row["created_at"],
+                    "status": row["status"],
+                    "kind": "historical",
+                    "source_side": original["side"],
+                    "mirror_plan": None,
+                    "standard_plan": original,
+                }
+            )
+            continue
         comparisons.append(
             {
                 "intent_id": intent_id,
                 "planned_at": row["created_at"],
                 "status": row["status"],
+                "kind": "saved",
+                "source_side": source_side,
                 "mirror_plan": original,
                 "standard_plan": original.get("standard_comparison_plan")
                 if original
@@ -368,6 +395,7 @@ def export_bundle(
     skip_market_candles: bool = False,
     access: ForensicAccess | None = None,
     terminal_evidence_path: Path | None = None,
+    historical_mirror_days: int | None = None,
 ) -> dict[str, int | str]:
     if output_path.exists():
         raise FileExistsError(output_path)
@@ -744,7 +772,15 @@ def export_bundle(
     ]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     now_ms = int(datetime.now(UTC).timestamp() * 1000)
-    mirror_comparisons = _mirror_comparisons(plan_rows, original_plans)
+    mirror_comparisons = _mirror_comparisons(
+        plan_rows,
+        original_plans,
+        historical_since_ms=(
+            now_ms - historical_mirror_days * 86_400_000
+            if historical_mirror_days is not None
+            else None
+        ),
+    )
     root = "forensic"
     output_created = False
 
@@ -964,11 +1000,16 @@ def main() -> None:
         action="store_true",
         help="PnL-only refresh: retain private reconciliation evidence without candles",
     )
+    parser.add_argument("--historical-mirror-days", type=int)
     args = parser.parse_args()
+    if args.historical_mirror_days is not None and args.historical_mirror_days <= 0:
+        parser.error("--historical-mirror-days must be positive")
 
     try:
         summary = export_bundle(
-            args.output, skip_market_candles=args.skip_market_candles
+            args.output,
+            skip_market_candles=args.skip_market_candles,
+            historical_mirror_days=args.historical_mirror_days,
         )
     except FileExistsError as exc:
         raise SystemExit(
