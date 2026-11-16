@@ -1321,6 +1321,9 @@ class ExecutionPlan(BaseModel):
     mirror_source_side: Side | None = Field(
         default=None, exclude_if=lambda side: side is None
     )
+    standard_comparison_plan: ExecutionPlan | None = Field(
+        default=None, exclude_if=lambda plan: plan is None
+    )
     # Plans saved before leverage support use the 10x fallback.
     leverage: Decimal = Field(default=Decimal("10"), ge=1, allow_inf_nan=False)
     orders: tuple[
@@ -1363,8 +1366,11 @@ class ExecutionPlan(BaseModel):
 
         if self.strategy_version == MIRROR_STRATEGY_VERSION:
             self._validate_mirror_plan()
-        elif self.mirror_source_side is not None:
-            raise ValueError("Mirror source side requires the mirror strategy")
+        elif (
+            self.mirror_source_side is not None
+            or self.standard_comparison_plan is not None
+        ):
+            raise ValueError("Mirror evidence requires the mirror strategy")
         elif self.strategy_version >= 2:
             self._validate_v2_ladder()
 
@@ -1377,6 +1383,16 @@ class ExecutionPlan(BaseModel):
     def _validate_mirror_plan(self) -> None:
         if self.mirror_source_side is None or self.mirror_source_side is self.side:
             raise ValueError("Mirror plan requires the opposite source side")
+        comparison = self.standard_comparison_plan
+        if comparison is not None and (
+            comparison.strategy_version != 2
+            or comparison.intent_id != self.intent_id
+            or comparison.symbol != self.symbol
+            or comparison.side is not self.mirror_source_side
+            or comparison.entry_slices
+            or comparison.policy != self.policy
+        ):
+            raise ValueError("Mirror comparison must match the original standard plan")
         if len(self.orders) != 1 or len(self.take_profit_targets) != 1:
             raise ValueError("Mirror plan requires one entry and one target")
         order, target = self.orders[0], self.take_profit_targets[0]

@@ -102,6 +102,7 @@ class ExecutionPlanner:
             symbol=standard.symbol,
             side=side,
             mirror_source_side=standard.side,
+            standard_comparison_plan=standard.model_copy(deep=True),
             leverage=standard.leverage,
             orders=(order,),
             stop_loss=stop,

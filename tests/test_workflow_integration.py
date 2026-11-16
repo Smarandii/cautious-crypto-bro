@@ -202,15 +202,24 @@ def test_telegram_demo_mirror_switch_freezes_saved_approvals(tmp_path):
                     await bot.close()
                 async with aiosqlite.connect(path) as db:
                     async with db.execute(
-                        "SELECT p.payload_json FROM execution_plans p JOIN intents i USING(intent_id) WHERE i.message_id=?",
+                        "SELECT p.payload_json, o.payload_json FROM execution_plans p "
+                        "JOIN intents i USING(intent_id) "
+                        "JOIN original_execution_plans o USING(intent_id) WHERE i.message_id=?",
                         (message_id,),
                     ) as cursor:
-                        row = await cursor.fetchone()
-                assert row is not None
-                plans.append(json.loads(row[0]))
+                        rows = await cursor.fetchall()
+                [(selected, original)] = rows
+                assert selected == original
+                plans.append(json.loads(original))
         assert [p["side"] for p in plans] == ["LONG", "SHORT", "LONG"]
         assert plans[1]["take_profit"] == plans[0]["stop_loss"]
         assert plans[1]["stop_loss"] == plans[0]["take_profit_targets"][0]["price"]
+        comparison = plans[1]["standard_comparison_plan"]
+        assert comparison["side"] == "LONG"
+        assert comparison["intent_id"] == plans[1]["intent_id"]
+        assert comparison["stop_loss"] == plans[1]["take_profit"]
+        assert comparison["policy"] == plans[1]["policy"]
+        assert "standard_comparison_plan" not in plans[0]
         assert not exchange.orders
 
     asyncio.run(run())
