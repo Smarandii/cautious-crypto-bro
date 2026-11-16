@@ -6,7 +6,7 @@ import asyncio
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -31,6 +31,7 @@ from cautious_crypto_bro.domain import (
     SignalExtraction,
     SourceMessage,
     StrategyStatus,
+    StrategyV2Policy,
     TradeExecutionError,
     TradingIntent,
 )
@@ -690,6 +691,96 @@ def test_mirror_coordinator_submits_once_and_restart_checks_protection(tmp_path)
                 (alert,) = await restarted.get_pending_strategy_alerts()
                 assert alert.status is StrategyStatus.MANUAL_OVERRIDE
                 assert "protection differs" in alert.pause_reason
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("fill", ["none", "partial", "protection_drift"])
+def test_mirror_expiry_cancels_only_owned_remainder(tmp_path, fill):
+    class ProtectedExchange(Exchange):
+        target = D(0)
+
+        def position(self):
+            return super().position() | {"takeProfit": str(self.target)}
+
+    async def run():
+        path = tmp_path / "state.db"
+        exchange = ProtectedExchange(Side.SHORT)
+        with executor_for(exchange) as executor:
+            store = IntentStore(path)
+            await store.initialize()
+            planner = ExecutionPlanner()
+            original = make_intent().model_copy(
+                update={"entry": Entry(type=EntryType.LIMIT, price=100)}
+            )
+            instrument = await executor.market_context(original.symbol)
+            policy = ExecutionPolicy(
+                trading_capital_usdt=D("6800"),
+                strategy_v2=StrategyV2Policy(entry_order_ttl_minutes=1),
+            )
+            plan = planner.plan_mirror(
+                planner.plan(original, policy, instrument), instrument
+            )
+            plan = plan.model_copy(
+                update={"created_at": datetime.now(UTC) - timedelta(minutes=2)}
+            )
+            intent = original.model_copy(
+                update={
+                    "side": plan.side,
+                    "stop_loss": float(plan.stop_loss),
+                    "take_profit": float(plan.take_profit),
+                }
+            )
+            claim = await store.claim_source(intent.source, lease_seconds=300)
+            assert await store.create_signal_batch_and_complete_source(
+                ((intent, plan),), (), claim
+            )
+            coordinator = ExecutionCoordinator(
+                store=store, executor=executor, planner=planner, max_age_seconds=900
+            )
+            outcome = await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert outcome.status is IntentStatus.EXECUTED, outcome.message
+
+            link = mirror_entry_link_id(plan)
+            if fill != "none":
+                exchange.fill(link, quantity=plan.orders[0].quantity / 2, price=100)
+                exchange.stop = plan.stop_loss
+                if fill == "partial":
+                    exchange.target = plan.take_profit
+            stale = await executor.strategy_order(plan.symbol, link)
+            assert stale is not None
+            reopened = IntentStore(path)
+            supervisor = PositionSupervisor(
+                store=reopened, executor=executor, mutation_lock=asyncio.Lock()
+            )
+            with patch.object(
+                executor, "strategy_order", new=AsyncMock(return_value=stale)
+            ):
+                await supervisor.reconcile_once()
+                await supervisor.reconcile_once()
+                if fill != "protection_drift":
+                    assert await reopened.get_active_position_strategies()
+            cancels = [
+                body for url, body in exchange.requests if url == "/v5/order/cancel"
+            ]
+            if fill == "protection_drift":
+                assert not cancels
+                [alert] = await reopened.get_pending_strategy_alerts()
+                assert alert.status is StrategyStatus.MANUAL_OVERRIDE
+            else:
+                assert [request["orderId"] for request in cancels] == [stale.order_id]
+                await supervisor.reconcile_once()
+                if fill == "none":
+                    assert not await reopened.get_active_position_strategies()
+                else:
+                    assert (
+                        await state_for(reopened)
+                    ).status is StrategyStatus.OPEN_RISK
+                    assert exchange.size == stale.executed_quantity
+                    assert exchange.stop == plan.stop_loss
+                    assert exchange.target == plan.take_profit
 
     asyncio.run(run())
 

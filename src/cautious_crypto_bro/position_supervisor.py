@@ -35,6 +35,7 @@ from .position_management.drift_detector import (
     pre_install_position_drift_reason,
 )
 from .position_management.entry_expiry import (
+    expire_mirror_entry,
     expire_stale_entries,
     pending_entry_link_ids,
     planned_entry_link_ids,
@@ -403,11 +404,20 @@ class PositionSupervisor:
                 "PartiallyFilledCanceled",
                 "Rejected",
                 "Deactivated",
-            }:
+            } and not any(
+                entry.order_link_id == link_id for entry in account.open_orders
+            ):
                 await self._save(
                     state.model_copy(update={"status": StrategyStatus.CLOSED})
                 )
-            return account
+            return await expire_mirror_entry(
+                state,
+                plan,
+                account,
+                order,
+                executor=self._executor,
+                legacy_entry_ttl_minutes=self._legacy_entry_ttl_minutes,
+            )
         if len(positions) != 1:
             return await self._manual_override(
                 state, account, "Mirror position ownership ambiguous"
@@ -446,7 +456,14 @@ class PositionSupervisor:
                     }
                 )
             )
-        return account
+        return await expire_mirror_entry(
+            state,
+            plan,
+            account,
+            order,
+            executor=self._executor,
+            legacy_entry_ttl_minutes=self._legacy_entry_ttl_minutes,
+        )
 
     async def _reconcile_live_position(
         self,
