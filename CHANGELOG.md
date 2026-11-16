@@ -10,6 +10,43 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.133] - 2026-11-17
+
+### Added
+
+- Add an opt-in Bybit Demo mirror strategy. It reverses the entry side, uses
+  the original stop as its full-position take-profit, and protects the entry
+  at the original first target. Approvals and open positions retain their
+  saved strategy across toggles (#554, #560, #562).
+- Retain original execution plans and the standard plan underlying each
+  mirrored entry. Compare both plans offline with funding, fees, stop fill
+  sensitivity, explicit no-fills and chronological coverage (#555, #564, #567).
+- Route same-symbol Demo zones to separate configured worker accounts. Persist
+  assignments before approval, share the portfolio cap, and require review of
+  source follow-ups for mirrored worker positions (#525, #573).
+
+### Fixed
+
+- Retry transient Telegram bot setup errors while Bybit supervision starts
+  independently. Keep trade recovery and signal intake gated during startup
+  (#571).
+- Reconcile retained Bybit Demo P&L history and wait for GitHub Pages artifacts
+  to become visible before verification.
+
+### Verification and rollback
+
+- Verified Telegram startup, fresh Bybit supervision and publisher health on
+  Bybit Demo. Integration tests cover approval replay, duplicate submission,
+  and independent worker reservations. The historical replay smoke test
+  evaluated two archived signals, too few to establish profitability.
+- Ordinary, isolated worker and isolated intake databases remain on schemas
+  17, 18 and 19 respectively. Keep worker databases paired with their account
+  identities. To roll back an active deployment, preserve a state backup and
+  reconcile outstanding entries and positions first. Keep mirror-aware code
+  in service for any live mirror positions or saved mirror approvals.
+- Actual mirrored fills, live isolated-worker protection and profitability
+  verification remain open (#123, #554).
+
 ## [2.2.132] - 2026-11-13
 
 ### Added
