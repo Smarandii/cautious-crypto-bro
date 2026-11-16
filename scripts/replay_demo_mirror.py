@@ -26,7 +26,10 @@ MINUTE_MS = 60_000
 
 
 def standard_replay(
-    plan: ExecutionPlan, candles: list[dict], fee: Decimal
+    plan: ExecutionPlan,
+    candles: list[dict],
+    fee: Decimal,
+    funding: dict[int, Decimal],
 ) -> Result | None:
     primary = plan.orders[0]
     sign = 1 if plan.side is Side.LONG else -1
@@ -89,8 +92,18 @@ def standard_replay(
             }
             for c in entry_candles
         ],
+        "events": [
+            {
+                "kind": "FUNDING",
+                "time": c["startTime"],
+                "rate": float(-sign * funding[c["startTime"]]),
+                "price": float(c["open"]),
+            }
+            for c in entry_candles[1:]
+            if c["startTime"] in funding
+        ],
     }
-    return replay(case, candidate, float(fee), use_events=False)
+    return replay(case, candidate, float(fee), use_events=True)
 
 
 def summarize(values: list[Result]) -> dict:
@@ -119,6 +132,7 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
         root = members[0].removesuffix(f"/{member}")
         comparisons = rows(archive, root, member)
         market = {}
+        funding_by_symbol = {}
         for case in sorted(
             comparisons, key=lambda item: datetime.fromisoformat(item["planned_at"])
         ):
@@ -137,6 +151,15 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
                     }
                 except KeyError:
                     market[standard.symbol] = {}
+                try:
+                    funding_by_symbol[standard.symbol] = {
+                        int(row["fundingRateTimestamp"]): Decimal(row["fundingRate"])
+                        for row in rows(
+                            archive, root, f"market_funding/{standard.symbol}.jsonl"
+                        )
+                    }
+                except KeyError:
+                    funding_by_symbol[standard.symbol] = None
             try:
                 start_ms = int(
                     datetime.fromisoformat(case["planned_at"]).timestamp() * 1_000
@@ -149,6 +172,10 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
             except KeyError:
                 excluded["missing_candles"] += 1
                 continue
+            funding = funding_by_symbol[standard.symbol]
+            if funding is None:
+                excluded["missing_funding_history"] += 1
+                continue
             mirror_plan = ExecutionPlan.model_validate(case["mirror_plan"])
             mirror = replay_mirror(
                 standard.side,
@@ -156,7 +183,12 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
                 mirror_plan.take_profit,
                 mirror_plan.stop_loss,
                 [
-                    MirrorBar(*(Decimal(c[k]) for k in ("open", "high", "low")))
+                    MirrorBar(
+                        Decimal(c["open"]),
+                        Decimal(c["high"]),
+                        Decimal(c["low"]),
+                        funding.get(c["startTime"], Decimal(0)),
+                    )
                     for c in candles
                 ],
                 market_entry=mirror_plan.orders[0].order_type
@@ -168,7 +200,7 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
             if mirror.net_r is None:
                 excluded[f"mirror_{mirror.status}"] += 1
                 continue
-            baseline = standard_replay(standard, candles, fee)
+            baseline = standard_replay(standard, candles, fee, funding)
             if baseline is None:
                 excluded["standard_entry_unresolved"] += 1
                 continue
@@ -184,7 +216,9 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
         "scope": (
             "Resolved mirror exits only. The standard V2 model reconstructs its ladder "
             "from the primary fill and marks open positions at the horizon. "
-            "Fees included. Funding and source follow-ups omitted."
+            "Fees included. Funding uses the settlement minute's opening price "
+            "and skips entry bars. Same-minute settlements and exits depend on "
+            "the simulators' event ordering. Source follow-ups omitted."
         ),
         "horizon_minutes": horizon,
         "mirror_stop_slippage": str(slippage),
@@ -213,25 +247,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", type=Path)
     parser.add_argument("--fee", type=Decimal, required=True)
-    parser.add_argument("--mirror-stop-slippage", type=Decimal, default=Decimal(0))
+    parser.add_argument(
+        "--mirror-stop-slippage",
+        type=Decimal,
+        action="append",
+        help="Adverse fraction of the mirror stop fill price. Repeat to compare scenarios.",
+    )
     parser.add_argument("--horizon-minutes", type=int, default=1440)
     args = parser.parse_args()
     if args.horizon_minutes <= 0:
         parser.error("--horizon-minutes must be positive")
-    for name, rate in (
+    slippages = args.mirror_stop_slippage or [Decimal(0)]
+    for name, rate in [
         ("--fee", args.fee),
-        ("--mirror-stop-slippage", args.mirror_stop_slippage),
-    ):
+        *(("--mirror-stop-slippage", rate) for rate in slippages),
+    ]:
         if not rate.is_finite() or not 0 <= rate < 1:
             parser.error(f"{name} must be a fraction in [0, 1)")
-    print(
-        json.dumps(
-            report(
-                args.bundle, args.fee, args.mirror_stop_slippage, args.horizon_minutes
-            ),
-            indent=2,
-        )
-    )
+    reports = [
+        report(args.bundle, args.fee, rate, args.horizon_minutes)
+        for rate in dict.fromkeys(slippages)
+    ]
+    print(json.dumps(reports[0] if len(reports) == 1 else reports, indent=2))
 
 
 if __name__ == "__main__":
