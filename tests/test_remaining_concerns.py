@@ -29,6 +29,7 @@ from cautious_crypto_bro.domain import (
     SignalExtraction,
     SourceMessage,
     StrategyStatus,
+    TradeExecutionError,
     TradingIntent,
 )
 from cautious_crypto_bro.execution import ExecutionPlanner
@@ -555,6 +556,59 @@ def test_market_rebase_preserves_original_execution_plan(tmp_path):
                     (str(intent.intent_id),),
                 ).fetchone()
             assert payload == original.model_dump_json()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("visible", [False, True])
+def test_mirror_submission_recovers_by_order_link_without_reposting(tmp_path, visible):
+    class MirrorExchange(Exchange):
+        submitted = None
+        post_count = 0
+
+        def handle(self, request):
+            if request.url.path == "/v5/order/create":
+                self.post_count += 1
+                self.submitted = json.loads(request.content)
+                raise httpx.ReadTimeout(
+                    "synthetic lost acknowledgement", request=request
+                )
+            if request.url.path in {"/v5/order/realtime", "/v5/order/history"}:
+                assert self.submitted is not None
+                assert (
+                    request.url.params["orderLinkId"] == self.submitted["orderLinkId"]
+                )
+                row = self.submitted | {
+                    "orderId": "mirror-1",
+                    "leavesQty": self.submitted["qty"],
+                    "orderStatus": "New",
+                }
+                return httpx.Response(
+                    200,
+                    json={"retCode": 0, "result": {"list": [row] if visible else []}},
+                )
+            return super().handle(request)
+
+    async def run():
+        exchange = MirrorExchange()
+        with executor_for(exchange) as executor:
+            _, _, standard, _, _ = await prepare(
+                tmp_path / "state.db", exchange, executor
+            )
+            context = await executor.market_context(standard.symbol)
+            plan = ExecutionPlanner().plan_mirror(standard, context)
+            if visible:
+                assert (
+                    await asyncio.to_thread(executor._submit_mirror_entry, plan)
+                    == "mirror-1"
+                )
+            else:
+                with pytest.raises(
+                    TradeExecutionError, match="acknowledgement is unresolved"
+                ):
+                    await asyncio.to_thread(executor._submit_mirror_entry, plan)
+            assert exchange.post_count == 1
+            assert exchange.submitted["tpslMode"] == "Full"
 
     asyncio.run(run())
 
