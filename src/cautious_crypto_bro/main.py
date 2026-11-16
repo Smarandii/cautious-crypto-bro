@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from time import monotonic
 from types import FrameType
 
+from aiogram.exceptions import (
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
+
 from .approval_bot import BYBIT_IP_BINDING_HELP, ApprovalBot
 from .bybit import UNMATCHED_IP_REASON, BybitDemoExecutor, exchange_failure_reason
 from .config import Settings, get_settings
@@ -270,21 +276,27 @@ async def _run_application(runtime: _Runtime) -> None:
     runtime.bot.set_startup_blocked(
         "Startup reconciliation pending. Trading callbacks and signal ingestion are paused."
     )
-    await runtime.bot.start()
     async with asyncio.TaskGroup() as tg:
+        bot_startup = tg.create_task(_start_operator_bot(runtime.bot))
+
+        async def poll_operator_bot() -> None:
+            await bot_startup
+            await runtime.bot.run()
+
         tg.create_task(_deliver_recovery_warning(runtime))
-        tg.create_task(runtime.bot.run())
+        tg.create_task(poll_operator_bot())
         if runtime.isolated_workers is not None:
             tg.create_task(
                 _run_optional_workers(
                     runtime.bot, runtime.service, *runtime.isolated_workers
                 )
             )
-        # Operator polling is live, but every trading callback remains gated.
         # Grug, Chesterton's Fence (faithful paraphrase): preserve the existing
         # reconciliation-before-ingestion boundary while restoring operator access.
         # Quarantine is durable before the first supervisor reconciliation.
         outage, next_alert = await _reconcile_before_ingestion(runtime)
+        tg.create_task(runtime.supervisor.run())
+        await bot_startup
         await runtime.service.recover_auto_execution()
         # AUTO recovery may open new positions; protect them before ingestion.
         second_outage, _ = await _reconcile_before_ingestion(
@@ -297,11 +309,28 @@ async def _run_application(runtime: _Runtime) -> None:
                 "Exchange startup reconciliation recovered. Trading and signal ingestion may resume.",
             )
         tg.create_task(runtime.bot.run_strategy_alert_delivery())
-        tg.create_task(runtime.supervisor.run())
         tg.create_task(runtime.service.run_delivery_recovery())
         tg.create_task(runtime.service.run_periodic_account_pnl_sync())
 
         tg.create_task(runtime.source_recovery.run())
+
+
+async def _start_operator_bot(bot: ApprovalBot) -> None:
+    delay = 1
+    while True:
+        try:
+            await bot.start()
+            return
+        except (TelegramNetworkError, TelegramRetryAfter, TelegramServerError) as exc:
+            retry_after = exc.retry_after if isinstance(exc, TelegramRetryAfter) else 0
+            wait = max(delay, retry_after)
+            logging.getLogger(__name__).warning(
+                "Telegram bot setup unavailable (%s); retry in %s seconds",
+                type(exc).__name__,
+                wait,
+            )
+        await asyncio.sleep(wait)
+        delay = min(delay * 2, 30)
 
 
 async def _run_optional_workers(
