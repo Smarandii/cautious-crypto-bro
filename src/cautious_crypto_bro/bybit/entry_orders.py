@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from ..domain import (
+    MIRROR_STRATEGY_VERSION,
     ExecutionOrderType,
     ExecutionPlan,
     MarketPrimaryExecutionResult,
@@ -85,6 +86,24 @@ def filled_primary_result(
 
 def entry_order_params(plan: ExecutionPlan, index: int) -> dict[str, object]:
     require_v2(plan)
+    return _entry_order_params(plan, index, prefix="ccb-v2")
+
+
+def mirror_entry_order_params(plan: ExecutionPlan) -> dict[str, object]:
+    if plan.strategy_version != MIRROR_STRATEGY_VERSION:
+        raise TradeExecutionError("Mirrored entry requires a mirror strategy plan")
+    params = _entry_order_params(plan, 0, prefix="ccb-mirror")
+    params.update(
+        takeProfit=format_decimal(plan.take_profit),
+        tpslMode="Full",
+        tpOrderType="Market",
+    )
+    return params
+
+
+def _entry_order_params(
+    plan: ExecutionPlan, index: int, *, prefix: str
+) -> dict[str, object]:
     order = plan.entry_orders[index]
     params: dict[str, object] = {
         "symbol": plan.symbol,
@@ -101,7 +120,7 @@ def entry_order_params(plan: ExecutionPlan, index: int) -> dict[str, object]:
         ),
         "positionIdx": 0,
         "reduceOnly": False,
-        "orderLinkId": f"ccb-v2-{plan.intent_id.hex[:20]}-{order.name.lower()}",
+        "orderLinkId": f"{prefix}-{plan.intent_id.hex[:20]}-{order.name.lower()}",
     }
 
     if order.order_type is ExecutionOrderType.LIMIT:
