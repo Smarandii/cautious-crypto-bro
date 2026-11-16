@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import (
     UTC,
     datetime,
@@ -133,6 +134,43 @@ def test_plan_matches_trader_leverage_without_changing_risk_sizing() -> None:
     assert matched.planned_max_loss_usdt == original.planned_max_loss_usdt
     restored = ExecutionPlan.model_validate_json(matched.model_dump_json())
     assert restored.leverage == Decimal("2.5")
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+@pytest.mark.parametrize("market", [False, True])
+def test_mirror_plan_reverses_side_and_freezes_full_position_target(side, market):
+    planner = ExecutionPlanner()
+    instrument = context("100")
+    intent = limit_intent(side=side)
+    if market:
+        intent = intent.model_copy(update={"entry": Entry(type=EntryType.MARKET)})
+    standard = planner.plan(intent, policy(), instrument)
+    mirror = planner.plan_mirror(standard, instrument)
+
+    assert mirror.side is (Side.SHORT if side is Side.LONG else Side.LONG)
+    assert mirror.mirror_source_side is side
+    assert mirror.orders[0].reference_price == standard.orders[0].reference_price
+    assert mirror.orders[0].order_type == standard.orders[0].order_type
+    assert mirror.stop_loss == standard.take_profit_targets[0].price
+    assert mirror.take_profit_targets[0].price == standard.stop_loss
+    assert mirror.take_profit_targets[0].close_pct == 100
+    assert mirror.runner_pct == 0
+    assert 0 < mirror.planned_max_loss_usdt <= mirror.policy.risk_budget_usdt
+    assert ExecutionPlan.model_validate_json(mirror.model_dump_json()) == mirror
+    assert "mirror_source_side" not in standard.model_dump()
+
+    invalid = mirror.model_dump()
+    invalid["mirror_source_side"] = mirror.side
+    with pytest.raises(ValidationError, match="opposite source side"):
+        ExecutionPlan.model_validate(invalid)
+
+
+def test_mirror_rejects_target_collapsed_to_entry_after_rounding():
+    planner = ExecutionPlanner()
+    standard = planner.plan(limit_intent(), policy(), context("100"))
+    coarse_tick = replace(context("100"), tick_size=Decimal("20"))
+    with pytest.raises(ExecutionPlanningError, match="Invalid mirrored SHORT"):
+        planner.plan_mirror(standard, coarse_tick)
 
 
 @pytest.mark.parametrize("leverage", ["0", "0.5", "NaN", "Infinity"])

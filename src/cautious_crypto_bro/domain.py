@@ -1303,6 +1303,9 @@ class EntrySlice(BaseModel):
         return self.leg_name if self.index == 0 else f"{self.leg_name}c{self.index}"
 
 
+MIRROR_STRATEGY_VERSION = 3
+
+
 class ExecutionPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1314,6 +1317,9 @@ class ExecutionPlan(BaseModel):
     intent_id: UUID
     symbol: str
     side: Side
+    mirror_source_side: Side | None = Field(
+        default=None, exclude_if=lambda side: side is None
+    )
     # Plans saved before leverage support use the 10x fallback.
     leverage: Decimal = Field(default=Decimal("10"), ge=1, allow_inf_nan=False)
     orders: tuple[
@@ -1354,7 +1360,11 @@ class ExecutionPlan(BaseModel):
         if self.planned_max_loss_usdt > self.policy.risk_budget_usdt:
             raise ValueError("Execution plan exceeds configured risk budget")
 
-        if self.strategy_version >= 2:
+        if self.strategy_version == MIRROR_STRATEGY_VERSION:
+            self._validate_mirror_plan()
+        elif self.mirror_source_side is not None:
+            raise ValueError("Mirror source side requires the mirror strategy")
+        elif self.strategy_version >= 2:
             self._validate_v2_ladder()
 
         elif self.take_profit_targets:
@@ -1362,6 +1372,32 @@ class ExecutionPlan(BaseModel):
 
         self._validate_entry_slices()
         return self
+
+    def _validate_mirror_plan(self) -> None:
+        if self.mirror_source_side is None or self.mirror_source_side is self.side:
+            raise ValueError("Mirror plan requires the opposite source side")
+        if len(self.orders) != 1 or len(self.take_profit_targets) != 1:
+            raise ValueError("Mirror plan requires one entry and one target")
+        order, target = self.orders[0], self.take_profit_targets[0]
+        if (
+            order.name != "E1"
+            or order.risk_pct != 100
+            or order.take_profit is not None
+            or target.price != self.take_profit
+            or target.close_pct != 100
+            or self.runner_pct != 0
+        ):
+            raise ValueError("Mirror orders must allocate 100% to one entry and exit")
+        entry = order.reference_price
+        low, high = (
+            (self.stop_loss, self.take_profit)
+            if self.side is Side.LONG
+            else (self.take_profit, self.stop_loss)
+        )
+        if not low < entry < high:
+            raise ValueError("Mirror stop and target must straddle entry")
+        if self.planned_max_loss_usdt != order.quantity * abs(entry - self.stop_loss):
+            raise ValueError("Mirror planned loss must match order size and stop")
 
     def _validate_entry_slices(self) -> None:
         if not self.entry_slices:
