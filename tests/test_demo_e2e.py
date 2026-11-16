@@ -6,11 +6,11 @@ import json
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from cautious_crypto_bro.domain import Side
+from cautious_crypto_bro.domain import InstrumentContext, Side
 
 spec = importlib.util.spec_from_file_location(
     "demo_e2e", Path(__file__).parents[1] / "scripts" / "e2e_bybit_demo.py"
@@ -27,6 +27,65 @@ def test_live_suite_requires_opt_in_before_creating_client(monkeypatch):
     monkeypatch.setattr(demo, "executor", forbidden)
     with pytest.raises(AssertionError, match="Explicit --execute-demo required"):
         asyncio.run(demo.main(SimpleNamespace(resume_db=None, execute_demo=False)))
+
+
+@pytest.mark.parametrize("protected", [True, False])
+def test_mirror_ioc_probe_checks_protection_and_cleans_up(monkeypatch, protected):
+    context = InstrumentContext(
+        market_price=Decimal("0.1"),
+        tick_size=Decimal("0.00001"),
+        qty_step=Decimal(1),
+        min_qty=Decimal(1),
+        min_notional=Decimal(5),
+    )
+    fake = SimpleNamespace(
+        market_context=AsyncMock(return_value=context),
+        _client=SimpleNamespace(
+            public_get=lambda *args: {"result": {"list": [{"ask1Price": "0.1"}]}}
+        ),
+    )
+    owner = SimpleNamespace(verify=AsyncMock(), restore=Mock())
+    cleanup = AsyncMock()
+    monkeypatch.setattr(demo.ProbeOwnership, "start", AsyncMock(return_value=owner))
+    monkeypatch.setattr(demo, "cleanup", cleanup)
+
+    async def execute(plan):
+        assert plan.orders[0].quantity * context.market_price <= 25
+        fake.strategy_order = AsyncMock(
+            return_value=SimpleNamespace(
+                order_id="probe",
+                status="Filled",
+                executed_quantity=plan.orders[0].quantity,
+                price=context.market_price,
+            )
+        )
+        fake.account_state = AsyncMock(
+            return_value=SimpleNamespace(
+                positions=(
+                    SimpleNamespace(
+                        symbol=demo.SYMBOL,
+                        side=Side.LONG,
+                        size=plan.orders[0].quantity,
+                        avg_price=context.market_price,
+                        stop_loss=plan.stop_loss,
+                        take_profit=plan.take_profit if protected else None,
+                    ),
+                )
+            )
+        )
+        return ("probe",)
+
+    fake.execute = execute
+    if protected:
+        asyncio.run(demo.observe_mirror_ioc(fake, Side.LONG))
+        owner.verify.assert_awaited_once()
+    else:
+        with pytest.raises(AssertionError, match="planned full protection"):
+            asyncio.run(demo.observe_mirror_ioc(fake, Side.LONG))
+        owner.verify.assert_not_awaited()
+    cleanup.assert_awaited_once()
+    assert cleanup.await_args.kwargs["ownership"] is owner
+    owner.restore.assert_called_once()
 
 
 def test_cleanup_ignores_other_symbols():

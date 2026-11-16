@@ -15,8 +15,9 @@ import sys
 import tempfile
 import threading
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,6 +25,10 @@ from cautious_crypto_bro.bybit import (
     DEMO_BASE_URL,
     BybitDemoExecutor,
     TradeExecutionError,
+)
+from cautious_crypto_bro.bybit.entry_orders import (
+    mirror_entry_link_id,
+    mirror_entry_order_params,
 )
 from cautious_crypto_bro.config import get_settings
 from cautious_crypto_bro.domain import (
@@ -899,7 +904,135 @@ async def run_side(e, side, directory):
             ownership.restore()
 
 
+async def observe_mirror_ioc(e, side):
+    planner = ExecutionPlanner()
+    context = await e.market_context(SYMBOL)
+    quote = await asyncio.to_thread(
+        e._client.public_get,
+        "/v5/market/tickers",
+        {"category": "linear", "symbol": SYMBOL},
+    )
+    touch = quote["result"]["list"][0]
+    price = D(touch["ask1Price" if side is Side.LONG else "bid1Price"])
+    require(price.is_finite() and price > 0, "Executable book quote required")
+    context = replace(context, market_price=price)
+    source_side = Side.SHORT if side is Side.LONG else Side.LONG
+    sign = D(1) if source_side is Side.LONG else D(-1)
+    intent = TradingIntent(
+        source=source(1),
+        symbol=SYMBOL,
+        side=source_side,
+        entry=Entry(type=EntryType.MARKET),
+        stop_loss=float(rounded(price * (1 - sign * D("0.05")), context.tick_size)),
+        summary="Protected mirrored IOC probe",
+        confidence=1,
+    )
+    standard = planner.plan(
+        intent, ExecutionPolicy(trading_capital_usdt=D("1000")), context
+    )
+    plan = planner.plan_mirror(standard, context)
+    units = max(context.min_qty, context.min_notional * D("1.2") / price)
+    quantity = (units / context.qty_step).to_integral_value(
+        rounding=ROUND_UP
+    ) * context.qty_step
+    risk = quantity * abs(price - plan.stop_loss)
+    require(
+        quantity * price <= D(25) and risk <= D(1), "Probe exceeds size or risk cap"
+    )
+    plan = plan.model_copy(
+        update={
+            "orders": (plan.orders[0].model_copy(update={"quantity": quantity}),),
+            "planned_max_loss_usdt": risk,
+        }
+    )
+    payload = mirror_entry_order_params(plan)
+    require(
+        payload["orderType"] == "Limit"
+        and payload["timeInForce"] == "IOC"
+        and D(str(payload["price"])) == price
+        and payload["tpslMode"] == "Full",
+        "Protected IOC candidate image required",
+    )
+    owner = await ProbeOwnership.start(e)
+    try:
+        [order_id] = await e.execute(plan)
+        for _ in range(30):
+            order = await e.strategy_order(SYMBOL, mirror_entry_link_id(plan))
+            if order is not None and order.status in {
+                "Filled",
+                "PartiallyFilledCanceled",
+                "Cancelled",
+            }:
+                break
+            await asyncio.sleep(0.3)
+        else:
+            raise AssertionError("Protected IOC did not reach a terminal state")
+        require(
+            order.order_id == order_id and order.price == price,
+            "IOC identity or price mismatch",
+        )
+        emit(
+            "mirror_ioc_terminal",
+            side=side.value,
+            status=order.status,
+            filled=order.executed_quantity > 0,
+        )
+        require(
+            order.executed_quantity > 0,
+            "IOC did not fill; exchange protection remains unverified",
+        )
+        account = await wait_account(
+            e, lambda a: position(a) is not None, "protected IOC position"
+        )
+        live = position(account)
+        require(
+            live.side is side
+            and live.size == order.executed_quantity
+            and live.stop_loss == plan.stop_loss
+            and live.take_profit == plan.take_profit,
+            "Exchange position does not have the planned full protection",
+        )
+        require(
+            (live.avg_price <= price if side is Side.LONG else live.avg_price >= price),
+            "Fill crossed the adverse price bound",
+        )
+        await owner.verify(account, side)
+        emit("mirror_ioc_protected", side=side.value, protected=True, price_bound=True)
+    finally:
+        try:
+            await cleanup(e, side, "ccb-ioc-" + uuid4().hex[:16] + "-", ownership=owner)
+        finally:
+            owner.restore()
+
+
 async def main(args):
+    if getattr(args, "mirror_ioc", False):
+        require(args.execute_demo, "Explicit --execute-demo required")
+        require(
+            not any(
+                getattr(args, name, False)
+                for name in (
+                    "resume_db",
+                    "zone_protection",
+                    "zone_pair_cancellation",
+                    "zone_amendment",
+                    "zone_amendment_pair_cancellation",
+                    "zone_process_recovery",
+                    "zone_recovery_worker",
+                )
+            ),
+            "Choose the mirror IOC probe alone",
+        )
+        e = executor()
+        try:
+            for side in (Side.LONG, Side.SHORT):
+                await observe_mirror_ioc(e, side)
+            emit(
+                "suite", result="passed", coverage="protected mirror IOC on both sides"
+            )
+        finally:
+            e.close()
+        return
     if not args.resume_db:
         require(
             args.execute_demo,
@@ -1679,6 +1812,7 @@ async def observe_zone_process_recovery(side):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute-demo", action="store_true")
+    parser.add_argument("--mirror-ioc", action="store_true")
     parser.add_argument("--zone-protection", action="store_true")
     parser.add_argument("--zone-pair-cancellation", action="store_true")
     parser.add_argument("--zone-amendment", action="store_true")
