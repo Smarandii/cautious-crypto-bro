@@ -298,6 +298,7 @@ def _market_candles(
             candle_start = int(row[0])
             candles[candle_start] = {
                 "startTime": candle_start,
+                "open": row[1],
                 "high": row[2],
                 "low": row[3],
                 "close": row[4],
@@ -714,6 +715,7 @@ def export_bundle(
     ]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    mirror_comparisons = _mirror_comparisons(plan_rows, original_plans)
     root = "forensic"
     output_created = False
 
@@ -736,7 +738,7 @@ def export_bundle(
                     archive,
                     root,
                     "analysis/mirror_comparisons.jsonl",
-                    _mirror_comparisons(plan_rows, original_plans),
+                    mirror_comparisons,
                 )
                 _write_jsonl(
                     archive,
@@ -807,7 +809,17 @@ def export_bundle(
                 candle_symbols, candle_start = _market_candle_coverage(
                     symbols,
                     first_fill_times,
-                    participation_assignments,
+                    [
+                        *participation_assignments,
+                        *(
+                            {
+                                "symbol": item["standard_plan"]["symbol"],
+                                "created_at": item["planned_at"],
+                            }
+                            for item in mirror_comparisons
+                            if item["standard_plan"] is not None
+                        ),
+                    ],
                 )
                 if skip_market_candles:
                     candle_symbols = []
