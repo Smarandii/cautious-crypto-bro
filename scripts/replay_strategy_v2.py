@@ -39,6 +39,7 @@ class Result:
     lifecycle_actions: int = 0
     funding_r: float = 0.0
     entry_legs_filled: int = 1
+    marked_at_horizon: bool = False
 
     @property
     def roundtrip_loss(self) -> bool:
@@ -632,7 +633,9 @@ def replay(
     e3_filled_at: int | None = None
     e3_risk_trim_fill_at: int | None = None
 
-    def make_result(*, stopped: bool = False) -> Result:
+    def make_result(
+        *, stopped: bool = False, marked_at_horizon: bool = False
+    ) -> Result:
         return Result(
             start=case["start"],
             net_r=realized,
@@ -641,6 +644,7 @@ def replay(
             lifecycle_actions=lifecycle_actions,
             funding_r=funding_r,
             entry_legs_filled=sum(leg["filled"] for leg in legs),
+            marked_at_horizon=marked_at_horizon,
         )
 
     def close(
@@ -1032,12 +1036,13 @@ def replay(
     # Keep still-open historical
     # positions marked to market at
     # the forensic snapshot boundary.
+    marked_at_horizon = qty > 0
     close(
         qty,
         case["candles"][-1]["close"],
     )
 
-    return make_result()
+    return make_result(marked_at_horizon=marked_at_horizon)
 
 
 def _valid_trailing_pair(trail_at: float, trail_by: float) -> bool:

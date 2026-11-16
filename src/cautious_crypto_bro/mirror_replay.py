@@ -35,6 +35,7 @@ def replay_mirror(
     entry_fee: Decimal,
     exit_fee: Decimal,
     stop_slippage: Decimal = Decimal(0),
+    horizon_close: Decimal | None = None,
 ) -> MirrorOutcome:
     """Use adverse stop gaps and expose bars with indeterminate event order."""
     sign = Decimal(-1 if source_side is Side.LONG else 1)
@@ -46,7 +47,7 @@ def replay_mirror(
         return MirrorOutcome("unfilled")
     fill, first_bar = entry_fill
     if not sign * (stop - fill) < 0 < sign * (target - fill):
-        return MirrorOutcome("unfilled")
+        return MirrorOutcome("ambiguous")
     if first_bar.opening == fill:
         remaining = chain((first_bar,), remaining)
     elif _exit_hit(first_bar, sign, stop, target):
@@ -64,10 +65,22 @@ def replay_mirror(
             return MirrorOutcome("ambiguous")
         if status == "stop":
             exit_price *= 1 - sign * stop_slippage
-        net = sign * (exit_price - fill) + funding
-        net -= fill * entry_fee + exit_price * exit_fee
-        return MirrorOutcome(status, net / abs(entry - stop))
-    return MirrorOutcome("open")
+        break
+    else:
+        status, exit_price = "open", horizon_close
+
+    return MirrorOutcome(
+        status,
+        None
+        if exit_price is None
+        else (
+            sign * (exit_price - fill)
+            + funding
+            - fill * entry_fee
+            - exit_price * exit_fee
+        )
+        / abs(entry - stop),
+    )
 
 
 def _validate_inputs(
