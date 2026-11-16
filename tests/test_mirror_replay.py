@@ -21,7 +21,11 @@ def test_mirror_uses_original_stop_for_full_exit(
         D("100"),
         D(stop),
         D(first_target),
-        [MirrorBar(D("100"), D(high), D(low), D("0.01"))],
+        [
+            MirrorBar(D("100"), D("100"), D("100")),
+            MirrorBar(D("100"), D("100"), D("100"), D("0.01")),
+            MirrorBar(D("100"), D(high), D(low)),
+        ],
         market_entry=True,
         entry_fee=D("0.005"),
         exit_fee=D("0.005"),

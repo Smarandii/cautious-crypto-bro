@@ -333,6 +333,35 @@ def _mirror_comparisons(
     return comparisons
 
 
+def _market_funding_rates(
+    client: BybitClient, symbol: str, start_ms: int, end_ms: int
+) -> list[dict]:
+    rates = []
+    while end_ms >= start_ms:
+        response = client.public_get(
+            "/v5/market/funding/history",
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "startTime": start_ms,
+                "endTime": end_ms,
+                "limit": 200,
+            },
+        )
+        page = response["result"]["list"]
+        if any(
+            row["symbol"] != symbol
+            or not start_ms <= int(row["fundingRateTimestamp"]) <= end_ms
+            for row in page
+        ):
+            raise ValueError(f"Unexpected funding history page for {symbol}")
+        rates.extend(page)
+        if len(page) < 200:
+            break
+        end_ms = min(int(row["fundingRateTimestamp"]) for row in page) - 1
+    return sorted(rates, key=lambda row: int(row["fundingRateTimestamp"]))
+
+
 def export_bundle(
     output_path: Path,
     *,
@@ -823,6 +852,11 @@ def export_bundle(
                 )
                 if skip_market_candles:
                     candle_symbols = []
+                mirror_symbols = {
+                    item["standard_plan"]["symbol"]
+                    for item in mirror_comparisons
+                    if item["standard_plan"] is not None
+                }
                 for index, symbol in enumerate(candle_symbols, start=1):
                     candles = _market_candles(
                         client,
@@ -836,6 +870,13 @@ def export_bundle(
                         f"market_1m/{symbol}.jsonl",
                         (candles[key] for key in sorted(candles)),
                     )
+                    if symbol in mirror_symbols:
+                        _write_jsonl(
+                            archive,
+                            root,
+                            f"market_funding/{symbol}.jsonl",
+                            _market_funding_rates(client, symbol, candle_start, now_ms),
+                        )
                     print(
                         f"candles {index}/{len(candle_symbols)} "
                         f"{symbol}: {len(candles)}"

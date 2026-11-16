@@ -3,8 +3,10 @@ import subprocess
 import sys
 import zipfile
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from test_execution import context, market_intent, policy
 
 from cautious_crypto_bro.execution import ExecutionPlanner
@@ -25,8 +27,8 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
         "startTime": int(planned_at.timestamp() * 1000) + 60_000,
         "open": "100",
         "high": "100.1",
-        "low": "89",
-        "close": "90",
+        "low": "99.9",
+        "close": "100",
     }
     bundle = tmp_path / "forensic.zip"
     with zipfile.ZipFile(bundle, "w") as archive:
@@ -44,7 +46,31 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
                 )
             ),
         )
-        archive.writestr("forensic/market_1m/BTCUSDT.jsonl", json.dumps(candle))
+        settlement = candle["startTime"] + 60_000
+        archive.writestr(
+            "forensic/market_1m/BTCUSDT.jsonl",
+            "\n".join(
+                map(
+                    json.dumps,
+                    [
+                        candle,
+                        {**candle, "startTime": settlement},
+                        {
+                            **candle,
+                            "startTime": settlement + 60_000,
+                            "low": "89",
+                            "close": "90",
+                        },
+                    ],
+                )
+            ),
+        )
+        archive.writestr(
+            "forensic/market_funding/BTCUSDT.jsonl",
+            json.dumps(
+                {"fundingRateTimestamp": str(settlement), "fundingRate": "0.0001"}
+            ),
+        )
 
     result = subprocess.run(
         [
@@ -58,17 +84,31 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
             "--fee",
             "0.00055",
             "--horizon-minutes",
-            "1",
+            "3",
+            "--mirror-stop-slippage",
+            "0",
+            "--mirror-stop-slippage",
+            "0.001",
         ],
         capture_output=True,
         text=True,
         check=True,
     )
-    report = json.loads(result.stdout)
+    report, adverse = json.loads(result.stdout)
+    assert adverse["mirror_stop_slippage"] == "0.001"
     assert report["candidates"] == 3
     assert report["excluded"] == {"missing_plan": 1, "missing_candles": 1}
     source_long = report["by_source_side"]["LONG"]
     assert source_long["all"]["standard"]["expectancy_r"] < 0
-    assert source_long["all"]["mirror"]["expectancy_r"] > 0
+    exit_price = mirror.take_profit
+    entry_price = mirror.orders[0].reference_price
+    fees = (entry_price + exit_price) * Decimal("0.00055")
+    funding = entry_price * Decimal("0.0001")
+    expected_r = (entry_price - exit_price - fees + funding) / (
+        mirror.stop_loss - entry_price
+    )
+    assert source_long["all"]["mirror"]["expectancy_r"] == pytest.approx(
+        float(expected_r)
+    )
     assert source_long["latest_30_percent"]["paired_delta"]["count"] == 1
     assert report["by_source_side"]["SHORT"]["all"]["paired_delta"]["count"] == 0
