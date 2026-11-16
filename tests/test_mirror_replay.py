@@ -22,6 +22,27 @@ def test_open_mirror_marks_at_horizon_with_exit_fee():
     assert outcome.net_r == D("0.3604")
 
 
+@pytest.mark.parametrize(("entry_bars", "status"), [(1, "unfilled"), (2, "target")])
+def test_limit_entry_expiry_preserves_later_mirror_exit(entry_bars, status):
+    outcome = replay_mirror(
+        Side.LONG,
+        D("100"),
+        D("90"),
+        D("105"),
+        [
+            MirrorBar(D("99"), D("99.5"), D("98")),
+            MirrorBar(D("100"), D("101"), D("99")),
+            MirrorBar(D("100"), D("101"), D("89")),
+        ],
+        market_entry=False,
+        entry_fee=D(0),
+        exit_fee=D(0),
+        limit_entry_bars=entry_bars,
+    )
+    assert outcome.status == status
+    assert outcome.net_r == (D(2) if status == "target" else None)
+
+
 @pytest.mark.parametrize(
     ("side", "stop", "first_target", "high", "low", "expected"),
     [

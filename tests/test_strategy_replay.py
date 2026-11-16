@@ -947,6 +947,11 @@ def test_e3_minimum_delay_avoids_early_scale_in_before_stop() -> None:
 
     assert immediate.net_r <= -0.99
     assert delayed.net_r > immediate.net_r
+    expired = replay.replay(
+        case, candidate, 0.0, use_events=False, limit_entry_cutoff_ms=60_000
+    )
+    assert expired.entry_legs_filled == 1
+    assert expired.stopped
 
 
 def test_close_confirmed_time_stop_exits_stale_loser() -> None:

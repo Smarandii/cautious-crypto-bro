@@ -526,6 +526,7 @@ def replay(
     trail_activation_on_close: bool = False,
     maker_fee_rate: float | None = None,
     taker_fee_rate: float | None = None,
+    limit_entry_cutoff_ms: int | None = None,
 ) -> Result:
     if e3_min_delay_minutes < 0:
         raise ValueError("E3 minimum delay cannot be negative")
@@ -728,7 +729,9 @@ def replay(
         #
         # Use adverse-first ordering to
         # avoid optimistic backtesting.
-        if not frozen:
+        if not frozen and (
+            limit_entry_cutoff_ms is None or candle["time"] < limit_entry_cutoff_ms
+        ):
             for leg_index, leg in enumerate(legs[1:], start=1):
                 if leg["filled"]:
                     continue

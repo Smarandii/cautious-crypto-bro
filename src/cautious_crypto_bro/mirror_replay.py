@@ -3,7 +3,7 @@
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from decimal import Decimal
-from itertools import chain
+from itertools import chain, islice
 from typing import Literal
 
 from .domain import Side
@@ -36,13 +36,15 @@ def replay_mirror(
     exit_fee: Decimal,
     stop_slippage: Decimal = Decimal(0),
     horizon_close: Decimal | None = None,
+    limit_entry_bars: int | None = None,
 ) -> MirrorOutcome:
     """Use adverse stop gaps and expose bars with indeterminate event order."""
     sign = Decimal(-1 if source_side is Side.LONG else 1)
     stop, target = standard_first_target, standard_stop
     _validate_inputs(entry, stop, target, sign, (entry_fee, exit_fee, stop_slippage))
     remaining = iter(bars)
-    entry_fill = _entry_fill(remaining, sign, entry, market_entry)
+    eligible = remaining if market_entry else islice(remaining, limit_entry_bars)
+    entry_fill = _entry_fill(eligible, sign, entry, market_entry)
     if entry_fill is None:
         return MirrorOutcome("unfilled")
     fill, first_bar = entry_fill

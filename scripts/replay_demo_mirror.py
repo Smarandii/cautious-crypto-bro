@@ -25,11 +25,21 @@ from cautious_crypto_bro.mirror_replay import MirrorBar, replay_mirror
 MINUTE_MS = 60_000
 
 
+def entry_cutoff_ms(plan: ExecutionPlan, legacy_ttl_minutes: int) -> int | None:
+    ttl = plan.policy.strategy_v2.entry_order_ttl_minutes or legacy_ttl_minutes
+    if not ttl:
+        return None
+    created_minute = int(plan.created_at.timestamp() * 1000) // MINUTE_MS
+    # Only allow full candles ending at or before expiry.
+    return (created_minute + ttl) * MINUTE_MS
+
+
 def standard_replay(
     plan: ExecutionPlan,
     candles: list[dict],
     fee: Decimal,
     funding: dict[int, Decimal],
+    limit_entry_cutoff_ms: int | None,
 ) -> Result | None:
     primary = plan.orders[0]
     sign = 1 if plan.side is Side.LONG else -1
@@ -38,6 +48,11 @@ def standard_replay(
         opening = Decimal(candle["open"])
         if primary.order_type is ExecutionOrderType.MARKET:
             entry = opening
+        elif (
+            limit_entry_cutoff_ms is not None
+            and candle["startTime"] >= limit_entry_cutoff_ms
+        ):
+            return Result(candles[0]["startTime"], 0.0, 0.0, False, entry_legs_filled=0)
         elif sign * (opening - reference) <= 0:
             entry = opening
         elif Decimal(candle["low"]) <= reference <= Decimal(candle["high"]):
@@ -103,7 +118,13 @@ def standard_replay(
             if c["startTime"] in funding
         ],
     }
-    return replay(case, candidate, float(fee), use_events=True)
+    return replay(
+        case,
+        candidate,
+        float(fee),
+        use_events=True,
+        limit_entry_cutoff_ms=limit_entry_cutoff_ms,
+    )
 
 
 def summarize(values: list[Result]) -> dict:
@@ -126,6 +147,7 @@ def report(
     horizon: int,
     *,
     cohort: str = "saved",
+    legacy_entry_ttl_minutes: int = 0,
 ) -> dict:
     excluded: Counter[str] = Counter()
     attempts: dict[str | None, list[tuple[Result, Result] | None]] = defaultdict(list)
@@ -193,8 +215,11 @@ def report(
                 excluded["missing_funding_history"] += 1
                 continue
             primary = standard.orders[0]
+            standard_cutoff = entry_cutoff_ms(standard, legacy_entry_ttl_minutes)
+            mirror_cutoff = standard_cutoff
             if cohort == "saved":
                 mirror_plan = ExecutionPlan.model_validate(mirror_data)
+                mirror_cutoff = entry_cutoff_ms(mirror_plan, legacy_entry_ttl_minutes)
                 primary = mirror_plan.orders[0]
                 mirror_target, mirror_stop = (
                     mirror_plan.take_profit,
@@ -229,11 +254,16 @@ def report(
                 exit_fee=fee,
                 stop_slippage=slippage,
                 horizon_close=Decimal(candles[-1]["close"]),
+                limit_entry_bars=(
+                    None
+                    if mirror_cutoff is None
+                    else max(0, (mirror_cutoff - start) // MINUTE_MS)
+                ),
             )
             if mirror.net_r is None and mirror.status != "unfilled":
                 excluded[f"mirror_{mirror.status}"] += 1
                 continue
-            baseline = standard_replay(standard, candles, fee, funding)
+            baseline = standard_replay(standard, candles, fee, funding, standard_cutoff)
             if baseline is None:
                 excluded["standard_entry_unresolved"] += 1
                 continue
@@ -263,6 +293,8 @@ def report(
             "historical exchange quantity or minimum-order filters."
         ),
         "horizon_minutes": horizon,
+        "legacy_entry_ttl_minutes": legacy_entry_ttl_minutes,
+        "entry_expiry_bar_rule": "Only full candles ending at or before expiry can fill limit entries.",
         "mirror_stop_slippage": str(slippage),
         "by_source_side": {
             side.value: _side_report(attempts[side.value]) for side in Side
@@ -318,10 +350,18 @@ def main() -> None:
         help="Adverse fraction of the mirror stop fill price. Repeat to compare scenarios.",
     )
     parser.add_argument("--horizon-minutes", type=int, default=1440)
+    parser.add_argument(
+        "--legacy-entry-ttl-minutes",
+        type=int,
+        default=0,
+        help="Fallback for saved policies with zero TTL. Zero leaves them open until the horizon.",
+    )
     parser.add_argument("--cohort", choices=("saved", "historical"), default="saved")
     args = parser.parse_args()
     if args.horizon_minutes <= 0:
         parser.error("--horizon-minutes must be positive")
+    if args.legacy_entry_ttl_minutes < 0:
+        parser.error("--legacy-entry-ttl-minutes must be non-negative")
     slippages = args.mirror_stop_slippage or [Decimal(0)]
     for name, rate in [
         ("--fee", args.fee),
@@ -330,7 +370,14 @@ def main() -> None:
         if not rate.is_finite() or not 0 <= rate < 1:
             parser.error(f"{name} must be a fraction in [0, 1)")
     reports = [
-        report(args.bundle, args.fee, rate, args.horizon_minutes, cohort=args.cohort)
+        report(
+            args.bundle,
+            args.fee,
+            rate,
+            args.horizon_minutes,
+            cohort=args.cohort,
+            legacy_entry_ttl_minutes=args.legacy_entry_ttl_minutes,
+        )
         for rate in dict.fromkeys(slippages)
     ]
     print(json.dumps(reports[0] if len(reports) == 1 else reports, indent=2))
