@@ -6,6 +6,22 @@ from cautious_crypto_bro.domain import Side
 from cautious_crypto_bro.mirror_replay import MirrorBar, replay_mirror
 
 
+def test_open_mirror_marks_at_horizon_with_exit_fee():
+    outcome = replay_mirror(
+        Side.LONG,
+        D("100"),
+        D("90"),
+        D("105"),
+        [MirrorBar(D("100"), D("101"), D("98"))],
+        market_entry=True,
+        entry_fee=D("0.001"),
+        exit_fee=D("0.001"),
+        horizon_close=D("98"),
+    )
+    assert outcome.status == "open"
+    assert outcome.net_r == D("0.3604")
+
+
 @pytest.mark.parametrize(
     ("side", "stop", "first_target", "high", "low", "expected"),
     [

@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from test_execution import context, market_intent, policy
+from test_execution import context, limit_intent, market_intent, policy
 
 from cautious_crypto_bro.execution import ExecutionPlanner
 
@@ -17,6 +17,8 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
     instrument = context("100")
     standard = planner.plan(market_intent(), policy(), instrument)
     mirror = planner.plan_mirror(standard, instrument)
+    standard_limit = planner.plan(limit_intent(), policy(), instrument)
+    mirror_limit = planner.plan_mirror(standard_limit, instrument)
     planned_at = datetime(2026, 11, 1, tzinfo=UTC)
     comparison = {
         "planned_at": planned_at.isoformat(),
@@ -30,6 +32,7 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
         "low": "99.9",
         "close": "100",
     }
+    limit_start = int(datetime(2026, 11, 3, tzinfo=UTC).timestamp() * 1000) + 60_000
     bundle = tmp_path / "forensic.zip"
     with zipfile.ZipFile(bundle, "w") as archive:
         archive.writestr("README", "Synthetic fixture")
@@ -42,6 +45,11 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
                         comparison,
                         {**comparison, "standard_plan": None},
                         {**comparison, "planned_at": "2026-11-02T00:00:00+00:00"},
+                        {
+                            "planned_at": "2026-11-03T00:00:00+00:00",
+                            "standard_plan": standard_limit.model_dump(mode="json"),
+                            "mirror_plan": mirror_limit.model_dump(mode="json"),
+                        },
                     ],
                 )
             ),
@@ -61,6 +69,16 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
                             "low": "89",
                             "close": "90",
                         },
+                        *(
+                            {
+                                "startTime": limit_start + index * 60_000,
+                                "open": "99.9",
+                                "high": "99.9",
+                                "low": "89",
+                                "close": "90",
+                            }
+                            for index in range(3)
+                        ),
                     ],
                 )
             ),
@@ -96,7 +114,7 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
     )
     report, adverse = json.loads(result.stdout)
     assert adverse["mirror_stop_slippage"] == "0.001"
-    assert report["candidates"] == 3
+    assert report["candidates"] == 4
     assert report["excluded"] == {"missing_plan": 1, "missing_candles": 1}
     source_long = report["by_source_side"]["LONG"]
     assert source_long["all"]["standard"]["expectancy_r"] < 0
@@ -108,7 +126,11 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
         mirror.stop_loss - entry_price
     )
     assert source_long["all"]["mirror"]["expectancy_r"] == pytest.approx(
-        float(expected_r)
+        float(expected_r) / 2
     )
+    assert source_long["all"]["mirror_unfilled"] == 1
+    assert source_long["all"]["standard_unfilled"] == 0
+    assert source_long["all"]["resolved_only"]["paired_delta"]["count"] == 1
+    assert source_long["latest_30_percent"]["mirror"]["expectancy_r"] == 0
     assert source_long["latest_30_percent"]["paired_delta"]["count"] == 1
     assert report["by_source_side"]["SHORT"]["all"]["paired_delta"]["count"] == 0

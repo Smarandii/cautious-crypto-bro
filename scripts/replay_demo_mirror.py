@@ -50,7 +50,7 @@ def standard_replay(
         entry_candles = candles[fill_index:]
         break
     else:
-        return None
+        return Result(candles[0]["startTime"], 0.0, 0.0, False, entry_legs_filled=0)
 
     policy = plan.policy.strategy_v2
     distance = abs(reference - plan.stop_loss)
@@ -196,8 +196,9 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
                 entry_fee=fee,
                 exit_fee=fee,
                 stop_slippage=slippage,
+                horizon_close=Decimal(candles[-1]["close"]),
             )
-            if mirror.net_r is None:
+            if mirror.net_r is None and mirror.status != "unfilled":
                 excluded[f"mirror_{mirror.status}"] += 1
                 continue
             baseline = standard_replay(standard, candles, fee, funding)
@@ -207,15 +208,22 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
             pairs[standard.side.value].append(
                 (
                     baseline,
-                    Result(start, float(mirror.net_r), 0.0, mirror.status == "stop"),
+                    Result(
+                        start,
+                        float(mirror.net_r or Decimal(0)),
+                        0.0,
+                        mirror.status == "stop",
+                        entry_legs_filled=int(mirror.status != "unfilled"),
+                        marked_at_horizon=mirror.status == "open",
+                    ),
                 )
             )
     return {
         "candidates": len(comparisons),
         "excluded": dict(excluded),
         "scope": (
-            "Resolved mirror exits only. The standard V2 model reconstructs its ladder "
-            "from the primary fill and marks open positions at the horizon. "
+            "Confirmed no-fills contribute zero R. Open positions are valued at the "
+            "final close with exit fees. Standard V2 reconstructs its ladder from the primary fill. "
             "Fees included. Funding uses the settlement minute's opening price "
             "and skips entry bars. Same-minute settlements and exits depend on "
             "the simulators' event ordering. Source follow-ups omitted."
@@ -235,10 +243,29 @@ def _side_report(pairs: list[tuple[Result, Result]]) -> dict:
     for name, group in partitions.items():
         standard = [pair[0] for pair in group]
         mirror = [pair[1] for pair in group]
+        resolved = [
+            (a, b)
+            for a, b in group
+            if a.entry_legs_filled
+            and b.entry_legs_filled
+            and not a.marked_at_horizon
+            and not b.marked_at_horizon
+        ]
         result[name] = {
             "standard": summarize(standard),
             "mirror": summarize(mirror),
             "paired_delta": paired_difference_summary(standard, mirror),
+            "resolved_only": {
+                "standard": summarize([a for a, _ in resolved]),
+                "mirror": summarize([b for _, b in resolved]),
+                "paired_delta": paired_difference_summary(
+                    [a for a, _ in resolved], [b for _, b in resolved]
+                ),
+            },
+            "standard_unfilled": sum(r.entry_legs_filled == 0 for r in standard),
+            "mirror_unfilled": sum(r.entry_legs_filled == 0 for r in mirror),
+            "standard_marked_at_horizon": sum(r.marked_at_horizon for r in standard),
+            "mirror_marked_at_horizon": sum(r.marked_at_horizon for r in mirror),
         }
     return result
 
