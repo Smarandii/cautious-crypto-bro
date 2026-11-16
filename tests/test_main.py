@@ -120,6 +120,7 @@ def _fake_application(monkeypatch, tmp_path, failed_reconciliation=None):
         demo_long_momentum_gate=False,
         demo_portfolio_stop_risk_cap_usdt=340,
         demo_exit_profile="baseline",
+        demo_mirror_enabled=False,
         demo_entry_order_ttl_minutes=0,
         telegram_api_id=1,
         telegram_api_hash="test-hash",
