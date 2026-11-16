@@ -94,11 +94,16 @@ def mirror_entry_order_params(plan: ExecutionPlan) -> dict[str, object]:
         raise TradeExecutionError("Mirrored entry requires a mirror strategy plan")
     params = _entry_order_params(plan, 0, prefix="ccb-mirror")
     params.update(
+        orderLinkId=mirror_entry_link_id(plan),
         takeProfit=format_decimal(plan.take_profit),
         tpslMode="Full",
         tpOrderType="Market",
     )
     return params
+
+
+def mirror_entry_link_id(plan: ExecutionPlan) -> str:
+    return f"ccb-mirror-{plan.intent_id.hex[:20]}-e1"
 
 
 def _entry_order_params(
