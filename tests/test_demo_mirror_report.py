@@ -17,8 +17,11 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
     instrument = context("100")
     standard = planner.plan(market_intent(), policy(), instrument)
     mirror = planner.plan_mirror(standard, instrument)
+    limit_planned_at = datetime(2026, 11, 3, tzinfo=UTC)
     standard_limit = planner.plan(limit_intent(), policy(), instrument)
     mirror_limit = planner.plan_mirror(standard_limit, instrument)
+    standard_limit = standard_limit.model_copy(update={"created_at": limit_planned_at})
+    mirror_limit = mirror_limit.model_copy(update={"created_at": limit_planned_at})
     planned_at = datetime(2026, 11, 1, tzinfo=UTC)
     comparison = {
         "planned_at": planned_at.isoformat(),
@@ -32,7 +35,7 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
         "low": "99.9",
         "close": "100",
     }
-    limit_start = int(datetime(2026, 11, 3, tzinfo=UTC).timestamp() * 1000) + 60_000
+    limit_start = int(limit_planned_at.timestamp() * 1000) + 60_000
     bundle = tmp_path / "forensic.zip"
     with zipfile.ZipFile(bundle, "w") as archive:
         archive.writestr("README", "Synthetic fixture")
@@ -149,3 +152,17 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
     ] == pytest.approx(float(expected_r))
     assert source_long["latest_30_percent"]["paired_delta"]["count"] == 1
     assert report["by_source_side"]["SHORT"]["all"]["paired_delta"]["count"] == 0
+    expired = subprocess.run(
+        [*result.args, "--legacy-entry-ttl-minutes", "1"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    expiry_report, _ = json.loads(expired.stdout)
+    assert expiry_report["legacy_entry_ttl_minutes"] == 1
+    assert (
+        expiry_report["by_source_side"]["LONG"]["latest_30_percent"]["standard"][
+            "expectancy_r"
+        ]
+        == 0
+    )
