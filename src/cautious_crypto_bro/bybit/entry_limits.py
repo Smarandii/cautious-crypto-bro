@@ -66,3 +66,22 @@ def allocate_entry_slices(plan: ExecutionPlan, instrument: dict) -> ExecutionPla
             )
     mapped = tuple(children)
     return ExecutionPlan.model_validate(plan.model_dump() | {"entry_slices": mapped})
+
+
+def validate_single_entry(plan: ExecutionPlan, instrument: dict) -> None:
+    order = plan.orders[0]
+    lot = instrument.get("lotSizeFilter", {})
+    ceiling = (
+        "maxMktOrderQty"
+        if order.order_type is ExecutionOrderType.MARKET
+        else "maxOrderQty"
+    )
+    if (
+        order.quantity % _number(lot, "qtyStep") != 0
+        or not _number(lot, "minOrderQty") <= order.quantity <= _number(lot, ceiling)
+        or order.quantity * order.reference_price
+        < _number(lot, "minNotionalValue", zero=True)
+    ):
+        raise EntryPreflightError(
+            "Mirrored entry does not meet single-order exchange limits"
+        )

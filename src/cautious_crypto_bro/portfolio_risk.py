@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from decimal import Decimal
 
+from .bybit.entry_orders import mirror_entry_link_id
 from .domain import (
+    MIRROR_STRATEGY_VERSION,
     AccountPosition,
     AccountStateSummary,
     ExecutionPlan,
@@ -89,25 +91,22 @@ def open_stop_risk_usdt(
         ):
             continue
 
-        prefix = "ccb-v2-"
         plan = next(
             (
                 candidate
                 for candidate in plans
-                if order.order_link_id.startswith(
-                    f"{prefix}{candidate.intent_id.hex[:20]}-"
-                )
+                if _matches_entry_link(candidate, order.order_link_id)
             ),
             None,
         )
         if plan is None:
             raise PortfolioRiskUnavailable(
-                f"{order.symbol} has an entry order without a known V2 stop plan"
+                f"{order.symbol} has an entry order without a known stop plan"
             )
 
         if order.symbol != plan.symbol or order.side is not plan.side:
             raise PortfolioRiskUnavailable(
-                f"{order.symbol} entry order does not match its V2 plan"
+                f"{order.symbol} entry order does not match its plan"
             )
 
         entry_name = order.order_link_id.rsplit("-", 1)[-1].upper()
@@ -126,6 +125,12 @@ def open_stop_risk_usdt(
         total += order.remaining_quantity * abs(entry_price - plan.stop_loss)
 
     return total
+
+
+def _matches_entry_link(plan: ExecutionPlan, link_id: str) -> bool:
+    if plan.strategy_version == MIRROR_STRATEGY_VERSION:
+        return link_id == mirror_entry_link_id(plan)
+    return link_id.startswith(f"ccb-v2-{plan.intent_id.hex[:20]}-")
 
 
 def policy_with_remaining_portfolio_risk(

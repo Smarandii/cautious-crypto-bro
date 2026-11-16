@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from ..cancellation import finish_before_cancellation
 from ..domain import (
+    MIRROR_STRATEGY_VERSION,
     AccountOrder,
     AccountStateSummary,
     ClosedPnlRecord,
@@ -28,7 +29,7 @@ from ..execution import ExecutionPlanner
 from ..execution_history import HISTORY_WINDOW_MS, ExecutionHistoryPage
 from . import account_reads, entry_orders, market_reads, position_actions
 from .client import DEMO_BASE_URL, BybitClient
-from .entry_limits import allocate_entry_slices
+from .entry_limits import allocate_entry_slices, validate_single_entry
 from .leverage import (
     RiskTier,
     flat_position_risk_tier,
@@ -525,7 +526,9 @@ class BybitDemoExecutor:
         return None
 
     def _prepare_entry_plan_sync(self, plan: ExecutionPlan) -> ExecutionPlan:
-        self._require_v2(plan)
+        mirror = plan.strategy_version == MIRROR_STRATEGY_VERSION
+        if not mirror:
+            self._require_v2(plan)
         self._sync_clock()
         instrument = self._instrument_info(plan.symbol)
         limits = instrument_leverage_filter(instrument)
@@ -573,6 +576,13 @@ class BybitDemoExecutor:
             if selected == plan.leverage
             else plan.model_copy(update={"leverage": selected})
         )
+        if mirror:
+            if orders:
+                raise EntryPreflightError(
+                    "Mirrored entry requires a symbol without open orders"
+                )
+            validate_single_entry(prepared, instrument)
+            return prepared
         prepared = allocate_entry_slices(prepared, instrument)
         if prepared.entry_slices and len(prepared.entry_orders) + len(orders) > 20:
             raise EntryPreflightError(
@@ -585,9 +595,14 @@ class BybitDemoExecutor:
 
     def _set_leverage_sync(self, plan: ExecutionPlan) -> None:
         prepared = self._prepare_entry_plan_sync(plan)
-        if prepared.leverage != plan.leverage or [
-            self._order_params(prepared, i) for i in range(len(prepared.entry_orders))
-        ] != [self._order_params(plan, i) for i in range(len(plan.entry_orders))]:
+        if prepared.leverage != plan.leverage or (
+            plan.strategy_version == 2
+            and [
+                self._order_params(prepared, i)
+                for i in range(len(prepared.entry_orders))
+            ]
+            != [self._order_params(plan, i) for i in range(len(plan.entry_orders))]
+        ):
             raise EntryPreflightError(
                 "Entry constraints changed; prepare and persist the entry plan again"
             )
@@ -806,6 +821,8 @@ class BybitDemoExecutor:
         self,
         plan: ExecutionPlan,
     ) -> tuple[str, ...]:
+        if plan.strategy_version == MIRROR_STRATEGY_VERSION:
+            return self._execute_mirror_sync(plan)
         try:
             self._require_v2(plan)
             if any(
@@ -838,6 +855,34 @@ class BybitDemoExecutor:
             raise EntryPreflightError(str(exc)) from exc
 
         return self._submit_entry_batch(plan.symbol, requests)
+
+    def _execute_mirror_sync(self, plan: ExecutionPlan) -> tuple[str, ...]:
+        try:
+            self._set_leverage_sync(plan)
+            market = self._last_price(plan.symbol)
+            order = plan.orders[0]
+            low, high = sorted((plan.stop_loss, plan.take_profit))
+            if not market.is_finite() or not low < market < high:
+                raise EntryPreflightError(
+                    "Market is outside the mirrored protection range"
+                )
+            worst_entry = market
+            if order.order_type is ExecutionOrderType.LIMIT:
+                worst_entry = (
+                    max(market, order.reference_price)
+                    if plan.side is Side.LONG
+                    else min(market, order.reference_price)
+                )
+            if (
+                order.quantity * abs(worst_entry - plan.stop_loss)
+                > plan.planned_max_loss_usdt
+            ):
+                raise EntryPreflightError(
+                    "Current quote exceeds frozen mirrored stop risk"
+                )
+        except Exception as exc:
+            raise EntryPreflightError(str(exc)) from exc
+        return (self._submit_mirror_entry(plan),)
 
     def _submit_entry_batch(
         self,
