@@ -99,6 +99,11 @@ def mirror_entry_order_params(plan: ExecutionPlan) -> dict[str, object]:
         tpslMode="Full",
         tpOrderType="Market",
     )
+    primary = plan.entry_orders[0]
+    if primary.order_type is ExecutionOrderType.MARKET:
+        # Bybit's Market slippage fields cannot be combined with attached TP/SL.
+        # Keep immediate-or-cancel semantics and enforce the frozen adverse bound.
+        params.update(orderType="Limit", price=format_decimal(primary.reference_price))
     return params
 
 

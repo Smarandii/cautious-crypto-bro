@@ -706,6 +706,7 @@ class BybitDemoExecutor:
             and order.order_id.strip()
             and order.side is plan.side
             and order.order_type == request["orderType"]
+            and order.price == Decimal(str(request["price"]))
             and order.quantity == plan.orders[0].quantity
             and not order.reduce_only
         ):

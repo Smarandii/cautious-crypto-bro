@@ -166,6 +166,8 @@ def test_mirror_plan_reverses_side_and_freezes_full_position_target(side, market
     assert outbound["tpslMode"] == "Full"
     assert outbound["tpOrderType"] == outbound["slOrderType"] == "Market"
     assert outbound["timeInForce"] == ("IOC" if market else "GTC")
+    assert outbound["orderType"] == "Limit"
+    assert Decimal(str(outbound["price"])) == mirror.orders[0].reference_price
     assert len(str(outbound["orderLinkId"])) <= 36
     assert outbound == mirror_entry_order_params(
         ExecutionPlan.model_validate_json(mirror.model_dump_json())
