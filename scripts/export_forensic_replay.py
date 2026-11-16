@@ -308,6 +308,30 @@ def _market_candles(
     return candles
 
 
+def _mirror_comparisons(
+    rows: list[sqlite3.Row], originals: dict[str, str]
+) -> list[dict]:
+    comparisons = []
+    for row in rows:
+        intent_id = row["intent_id"]
+        selected = json.loads(row["payload_json"])
+        if selected.get("mirror_source_side") is None:
+            continue
+        original = json.loads(originals[intent_id]) if intent_id in originals else None
+        comparisons.append(
+            {
+                "intent_id": intent_id,
+                "planned_at": row["created_at"],
+                "status": row["status"],
+                "mirror_plan": original,
+                "standard_plan": original.get("standard_comparison_plan")
+                if original
+                else None,
+            }
+        )
+    return comparisons
+
+
 def export_bundle(
     output_path: Path,
     *,
@@ -615,15 +639,19 @@ def export_bundle(
         source = intent_payload.get("source") or {}
         entry = intent_payload.get("entry") or {}
         policy = plan.get("policy") or {}
+        original_plan = (
+            json.loads(original_plans[intent_id])
+            if intent_id in original_plans
+            else None
+        )
         symbols.add(plan["symbol"].upper())
         first_fill_times.extend(int(fill["execTime"]) for fill in entry_fills)
         item = {
             "status": attempt.row["status"],
             "intent_id": intent_id,
-            "original_execution_plan": (
-                json.loads(original_plans[intent_id])
-                if intent_id in original_plans
-                else None
+            "original_execution_plan": original_plan,
+            "standard_comparison_plan": (
+                original_plan.get("standard_comparison_plan") if original_plan else None
             ),
             "created_at": created_at,
             "entry_order_ids": list(order_ids),
@@ -703,6 +731,12 @@ def export_bundle(
                     root,
                     "analysis/trade_lineage.jsonl",
                     [{"intents": lineage}],
+                )
+                _write_jsonl(
+                    archive,
+                    root,
+                    "analysis/mirror_comparisons.jsonl",
+                    _mirror_comparisons(plan_rows, original_plans),
                 )
                 _write_jsonl(
                     archive,
