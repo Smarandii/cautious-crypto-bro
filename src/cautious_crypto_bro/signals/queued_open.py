@@ -76,6 +76,7 @@ class QueuedOpenExecution:
                     retain_retry_candidates=False,
                     original_duplicate=candidate.duplicate_in_batch,
                     original_manual=intent.approval_mode is ApprovalMode.MANUAL,
+                    strategy_frozen=True,
                 )
                 planned, errors, rejections = (
                     planning.planned,

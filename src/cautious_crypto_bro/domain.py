@@ -744,6 +744,7 @@ class TradingIntent(BaseModel):
     source: SourceMessage
     symbol: str
     side: Side
+    mirror_enabled: bool = Field(default=False, exclude_if=lambda enabled: not enabled)
     entry: Entry
     stop_loss: float | None = Field(default=None, gt=0)
     take_profit: float | None = Field(default=None, gt=0)

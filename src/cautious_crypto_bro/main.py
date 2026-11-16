@@ -210,6 +210,7 @@ async def _build_runtime(
         ),
         demo_long_momentum_gate=settings.demo_long_momentum_gate,
         demo_exit_profile=(settings.demo_exit_profile),
+        demo_mirror_enabled=settings.demo_mirror_enabled,
         demo_portfolio_stop_risk_cap_usdt=(settings.demo_portfolio_stop_risk_cap_usdt),
         demo_entry_order_ttl_minutes=(settings.demo_entry_order_ttl_minutes),
     )

@@ -700,6 +700,11 @@ def _render_signal_entry(intent: TradingIntent) -> str:
 
 
 def _render_take_profit_block(plan: ExecutionPlan) -> str:
+    if plan.mirror_source_side is not None:
+        return (
+            f"<b>Mirror Demo · source {plan.mirror_source_side.value}</b>\n"
+            f"Full take-profit: <b>{fmt_decimal(plan.take_profit)}</b>"
+        )
     if not plan.take_profit_targets:
         return f"Take profit: <b>{fmt_decimal(plan.take_profit)}</b>"
 

@@ -168,6 +168,7 @@ class Settings(BaseSettings):
 
     # Applies only to newly created Strategy V2 plans; zero leaves entries GTC.
     demo_entry_order_ttl_minutes: int = Field(default=0, ge=0)
+    demo_mirror_enabled: bool = False
 
     # Applies to new Demo plans only; existing execution plans retain their
     # serialized Strategy V2 policy.

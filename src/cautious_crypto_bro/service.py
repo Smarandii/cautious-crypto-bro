@@ -113,6 +113,7 @@ class SignalService:
         demo_long_participation_skip_fraction: Decimal = Decimal("0"),
         demo_long_momentum_gate: bool = False,
         demo_exit_profile: str = "baseline",
+        demo_mirror_enabled: bool = False,
         demo_portfolio_stop_risk_cap_usdt: Decimal | None = None,
         demo_entry_order_ttl_minutes: int = 0,
         isolated_intake: IsolatedDemoIntake | None = None,
@@ -131,6 +132,7 @@ class SignalService:
             demo_long_participation_skip_fraction=demo_long_participation_skip_fraction,
             demo_long_momentum_gate=demo_long_momentum_gate,
             demo_exit_profile=demo_exit_profile,
+            demo_mirror_enabled=demo_mirror_enabled,
             demo_portfolio_stop_risk_cap_usdt=demo_portfolio_stop_risk_cap_usdt,
             demo_entry_order_ttl_minutes=demo_entry_order_ttl_minutes,
         )
