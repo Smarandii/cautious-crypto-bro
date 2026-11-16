@@ -9,6 +9,7 @@ from decimal import (
 )
 
 from .domain import (
+    MIRROR_STRATEGY_VERSION,
     EntryType,
     ExecutionOrderType,
     ExecutionPlan,
@@ -71,6 +72,54 @@ def _weighted_entry(orders: Sequence[PlannedOrder]) -> Decimal:
 
 
 class ExecutionPlanner:
+    def plan_mirror(
+        self, standard: ExecutionPlan, context: InstrumentContext
+    ) -> ExecutionPlan:
+        """Build a mirror from the original, pre-execution standard plan."""
+        if standard.strategy_version != 2 or standard.entry_slices:
+            raise ExecutionPlanningError("Mirror requires an original Strategy V2 plan")
+        side = Side.SHORT if standard.side is Side.LONG else Side.LONG
+        primary = standard.orders[0]
+        entry = self._round_price(primary.reference_price, context.tick_size)
+        stop = self._round_price(
+            standard.take_profit_targets[0].price, context.tick_size
+        )
+        target = self._round_price(standard.stop_loss, context.tick_size)
+        if side is Side.LONG and not stop < entry < target:
+            raise ExecutionPlanningError("Invalid mirrored LONG stop or target")
+        if side is Side.SHORT and not target < entry < stop:
+            raise ExecutionPlanningError("Invalid mirrored SHORT stop or target")
+        order = self._planned_order(
+            EntrySpec("E1", primary.order_type, entry, Decimal(100)),
+            standard.policy,
+            context,
+            stop,
+        )
+        distance = abs(stop - entry)
+        return ExecutionPlan(
+            strategy_version=MIRROR_STRATEGY_VERSION,
+            intent_id=standard.intent_id,
+            symbol=standard.symbol,
+            side=side,
+            mirror_source_side=standard.side,
+            leverage=standard.leverage,
+            orders=(order,),
+            stop_loss=stop,
+            stop_loss_source=StopLossSource.POLICY,
+            take_profit=target,
+            take_profit_targets=(
+                PlannedTakeProfit(
+                    name="TP1",
+                    price=target,
+                    close_pct=Decimal(100),
+                    r_multiple=abs(target - entry) / distance,
+                ),
+            ),
+            take_profit_source=TakeProfitSource.POLICY,
+            policy=standard.policy.model_copy(deep=True),
+            planned_max_loss_usdt=order.quantity * distance,
+        )
+
     def plan(
         self,
         intent: TradingIntent,
