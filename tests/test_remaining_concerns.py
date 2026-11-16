@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -525,6 +526,35 @@ def test_10_trader_cap_after_actual_market_rebase(tmp_path, side, tp, accumulate
             )
             assert not exceeds
             assert len(set(prices)) == 3
+
+    asyncio.run(run())
+
+
+def test_market_rebase_preserves_original_execution_plan(tmp_path):
+    async def run():
+        path = tmp_path / "state.db"
+        exchange = Exchange()
+        with executor_for(exchange) as executor:
+            store, intent, original, coordinator, _ = await prepare(
+                path, exchange, executor
+            )
+            exchange.fill_price = D("101")
+            result = await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert result.status is IntentStatus.EXECUTED
+            effective = await store.get_execution_plan(intent.intent_id)
+            assert effective is not None
+            assert (
+                effective.orders[0].reference_price
+                != original.orders[0].reference_price
+            )
+            with sqlite3.connect(path) as db:
+                (payload,) = db.execute(
+                    "SELECT payload_json FROM original_execution_plans WHERE intent_id=?",
+                    (str(intent.intent_id),),
+                ).fetchone()
+            assert payload == original.model_dump_json()
 
     asyncio.run(run())
 

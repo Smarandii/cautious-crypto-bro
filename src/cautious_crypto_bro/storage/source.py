@@ -588,6 +588,7 @@ class SourceRepositoryImpl(_Store):
             ),
         )
 
+        plan_json = plan.model_dump_json()
         await db.execute(
             """
             INSERT INTO execution_plans(
@@ -599,9 +600,18 @@ class SourceRepositoryImpl(_Store):
             """,
             (
                 str(intent.intent_id),
-                plan.model_dump_json(),
+                plan_json,
                 plan.created_at.isoformat(),
             ),
+        )
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS original_execution_plans ("
+            "intent_id TEXT PRIMARY KEY REFERENCES execution_plans(intent_id), "
+            "payload_json TEXT NOT NULL)"
+        )
+        await db.execute(
+            "INSERT INTO original_execution_plans(intent_id, payload_json) VALUES (?, ?)",
+            (str(intent.intent_id), plan_json),
         )
 
     async def _insert_position_action(

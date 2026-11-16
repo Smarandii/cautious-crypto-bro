@@ -355,6 +355,15 @@ def export_bundle(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
+        original_plans = (
+            dict(
+                database.execute(
+                    "SELECT intent_id, payload_json FROM original_execution_plans"
+                )
+            )
+            if "original_execution_plans" in tables
+            else {}
+        )
         own_strategy_prefixes = set()
         own_action_prefixes = set()
         if "position_strategies" in tables:
@@ -611,6 +620,11 @@ def export_bundle(
         item = {
             "status": attempt.row["status"],
             "intent_id": intent_id,
+            "original_execution_plan": (
+                json.loads(original_plans[intent_id])
+                if intent_id in original_plans
+                else None
+            ),
             "created_at": created_at,
             "entry_order_ids": list(order_ids),
             "metadata": {
