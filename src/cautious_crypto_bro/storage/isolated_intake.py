@@ -6,7 +6,13 @@ from uuid import UUID
 
 import aiosqlite
 
-from ..domain import ExecutionPlan, IntentStatus, StoreError, TradingIntent
+from ..domain import (
+    MIRROR_STRATEGY_VERSION,
+    ExecutionPlan,
+    IntentStatus,
+    StoreError,
+    TradingIntent,
+)
 from ._connection import sqlite_connection
 from .schema import LATEST_SCHEMA_SQL
 
@@ -32,13 +38,13 @@ class DemoIntentAssignment:
             raise ValueError("A verified Demo account identity is required")
         if (
             self.intent.status is not IntentStatus.PENDING
-            or self.plan.strategy_version != 2
+            or self.plan.strategy_version not in {2, MIRROR_STRATEGY_VERSION}
             or self.plan.intent_id != self.intent.intent_id
             or self.plan.symbol != self.intent.symbol
             or self.plan.side is not self.intent.side
         ):
             raise ValueError(
-                "Assignment requires a matching pending Strategy V2 intent"
+                "Assignment requires a matching pending V2 or mirror intent"
             )
 
     def payload(self) -> tuple[str, str, str]:

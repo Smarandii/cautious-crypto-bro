@@ -15,6 +15,7 @@ from decimal import Decimal
 
 from .contract_symbols import BYBIT_CONTRACT_ALIASES
 from .domain import (
+    MIRROR_STRATEGY_VERSION,
     AccountSnapshotDelivery,
     AccountStateSummary,
     ApprovalMode,
@@ -494,7 +495,7 @@ class SignalService:
             for intent, plan in planned
             if intent.intent_id in isolated_ids
             and intent.approval_mode is ApprovalMode.MANUAL
-            and plan.strategy_version == 2
+            and plan.strategy_version in {2, MIRROR_STRATEGY_VERSION}
         )
         if self._isolated_dispatcher is not None:
             selection = await self._isolated_dispatcher.select_workers(eligible)

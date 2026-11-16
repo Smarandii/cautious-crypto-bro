@@ -62,13 +62,19 @@ async def find_lifecycle_targets(
     targets = []
     for uid, store in accounts.items():
         active = await store.get_active_position_strategies()
-        matching = [state for state, _ in active if state.symbol == action.symbol]
+        matching = [
+            (state, plan) for state, plan in active if state.symbol == action.symbol
+        ]
         if not matching:
             continue
         if len(matching) != 1:
             raise ValueError("Demo lifecycle ownership is ambiguous")
-        state = matching[0]
-        if action.expected_side is not None and state.side is not action.expected_side:
+        state, plan = matching[0]
+        if (
+            plan.mirror_source_side is None
+            and action.expected_side is not None
+            and state.side is not action.expected_side
+        ):
             continue
         owner = await store.get_intent(state.strategy_id)
         if (
@@ -82,6 +88,10 @@ async def find_lifecycle_targets(
             or owner.source.published_at > action.source.published_at
         ):
             continue
+        if plan.mirror_source_side is not None:
+            raise ValueError(
+                "Mirrored position requires operator review before a source follow-up"
+            )
         if state.status in {
             StrategyStatus.MANUAL_OVERRIDE,
             StrategyStatus.UNCERTAIN,
