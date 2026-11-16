@@ -663,6 +663,40 @@ class BybitDemoExecutor:
             ),
         )
 
+    def _submit_mirror_entry(self, plan: ExecutionPlan) -> str:
+        request = entry_orders.mirror_entry_order_params(plan)
+        try:
+            response = self._client.private_post(
+                "/v5/order/create", {"category": "linear", **request}
+            )
+            result = response.get("result")
+            order_id = result.get("orderId") if isinstance(result, dict) else None
+            if (
+                isinstance(result, dict)
+                and isinstance(order_id, str)
+                and order_id.strip()
+                and result.get("orderLinkId", request["orderLinkId"])
+                == request["orderLinkId"]
+            ):
+                return order_id
+        except TradeExecutionError:
+            # A transport failure may follow exchange acceptance.
+            pass
+
+        order = account_reads.strategy_order(
+            self._client, plan.symbol, str(request["orderLinkId"])
+        )
+        if (
+            order is not None
+            and order.order_id.strip()
+            and order.side is plan.side
+            and order.order_type == request["orderType"]
+            and order.quantity == plan.orders[0].quantity
+            and not order.reduce_only
+        ):
+            return order.order_id
+        raise TradeExecutionError("Mirrored entry acknowledgement is unresolved")
+
     def _execute_sliced_market_primary_sync(
         self,
         plan: ExecutionPlan,
