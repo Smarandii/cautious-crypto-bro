@@ -4,7 +4,9 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from uuid import UUID
 
 import aiosqlite
 import httpx
@@ -14,7 +16,7 @@ from test_source_recovery import RecoveringClient, harness, notice
 from test_telegram_source import FakeMessage, FakeTelegramClient
 
 from cautious_crypto_bro import telegram_source
-from cautious_crypto_bro.approval_bot import ApprovalBot
+from cautious_crypto_bro.approval_bot import ApprovalBot, IntentAction
 from cautious_crypto_bro.domain import (
     AutoApprovalMode,
     ImageAttachment,
@@ -160,10 +162,11 @@ def workflow(
 def test_telegram_demo_mirror_switch_freezes_saved_approvals(tmp_path):
     async def run():
         path = tmp_path / "state.db"
-        exchange = ExchangeTransport()
+        exchange = ExchangeTransport(Side.SHORT)
         provider = ModelTransport()
         provider.fail_image_once = False
         plans = []
+        saved_execute: IntentAction | None = None
         with executor_for(exchange) as executor:
             for message_id, enabled in enumerate((False, True, False), start=1):
                 store = IntentStore(path)
@@ -198,6 +201,30 @@ def test_telegram_demo_mirror_switch_freezes_saved_approvals(tmp_path):
                         )
                         == enabled
                     )
+                    if enabled:
+                        [button_data] = [
+                            button.callback_data
+                            for call in send.call_args_list
+                            if (markup := call.kwargs["reply_markup"]) is not None
+                            for row in markup.inline_keyboard
+                            for button in row
+                            if button.callback_data
+                            and button.callback_data.startswith("intent:execute:")
+                        ]
+                        saved_execute = IntentAction.unpack(button_data)
+                    if message_id == 3:
+                        assert saved_execute is not None
+                        assert not exchange.orders
+                        callback = SimpleNamespace(
+                            from_user=SimpleNamespace(id=1),
+                            answer=AsyncMock(),
+                            message=None,
+                        )
+                        for _ in range(2):
+                            await bot._execute(callback, saved_execute)
+                        executed = await store.get_intent(UUID(saved_execute.intent_id))
+                        assert executed is not None
+                        assert executed.status is IntentStatus.EXECUTED
                 finally:
                     await bot.close()
                 async with aiosqlite.connect(path) as db:
@@ -220,7 +247,14 @@ def test_telegram_demo_mirror_switch_freezes_saved_approvals(tmp_path):
         assert comparison["stop_loss"] == plans[1]["take_profit"]
         assert comparison["policy"] == plans[1]["policy"]
         assert "standard_comparison_plan" not in plans[0]
-        assert not exchange.orders
+        [order] = [
+            body for path, body in exchange.requests if path == "/v5/order/create"
+        ]
+        assert len(exchange.orders) == 1
+        assert order["side"] == "Sell"
+        assert order["tpslMode"] == "Full"
+        assert Decimal(order["takeProfit"]) == Decimal(plans[1]["take_profit"])
+        assert Decimal(order["stopLoss"]) == Decimal(plans[1]["stop_loss"])
 
     asyncio.run(run())
 
