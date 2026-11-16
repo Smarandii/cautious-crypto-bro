@@ -18,6 +18,7 @@ from test_telegram_source import FakeMessage, FakeTelegramClient
 from cautious_crypto_bro import telegram_source
 from cautious_crypto_bro.approval_bot import ApprovalBot, IntentAction
 from cautious_crypto_bro.domain import (
+    ApprovalMode,
     AutoApprovalMode,
     ImageAttachment,
     IncomingPost,
@@ -259,9 +260,11 @@ def test_telegram_demo_mirror_switch_freezes_saved_approvals(tmp_path):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("worker_count", [0, 2])
+@pytest.mark.parametrize(
+    ("worker_count", "mirror_enabled"), [(0, False), (2, False), (0, True), (2, True)]
+)
 def test_telegram_same_symbol_zones_persist_routing_before_card_delivery(
-    tmp_path, worker_count
+    tmp_path, worker_count, mirror_enabled
 ):
     async def run():
         path = tmp_path / "state.sqlite3"
@@ -294,19 +297,27 @@ def test_telegram_same_symbol_zones_persist_routing_before_card_delivery(
             )
         )
         intake = IsolatedDemoIntake(path)
+        primary_exchange = ExchangeTransport()
+        exchange_by_uid = {
+            101: ExchangeTransport(Side.SHORT),
+            102: ExchangeTransport(Side.SHORT),
+        }
         with (
-            executor_for(ExchangeTransport()) as primary,
-            executor_for(ExchangeTransport()) as first,
-            executor_for(ExchangeTransport()) as second,
+            executor_for(primary_exchange) as primary,
+            executor_for(exchange_by_uid[101]) as first,
+            executor_for(exchange_by_uid[102]) as second,
         ):
             workers = {
                 101: (first, IntentStore(tmp_path / "first.db")),
                 102: (second, IntentStore(tmp_path / "second.db")),
             }
+            for uid, (_, worker_store) in workers.items():
+                await worker_store.initialize_isolated_demo(uid)
+            portfolio = IsolatedDemoPortfolio(tuple(workers.values()), Decimal("1000"))
             dispatcher = IsolatedDemoDispatcher(
                 intake,
                 workers,
-                IsolatedDemoPortfolio(tuple(workers.values()), Decimal("1000")),
+                portfolio,
                 ExecutionPlanner(),
                 900,
                 worker_ready=lambda _: worker_count > 0,
@@ -317,6 +328,7 @@ def test_telegram_same_symbol_zones_persist_routing_before_card_delivery(
                 provider,
                 mode=AutoApprovalMode.DISABLED,
                 isolated_intake=intake,
+                demo_mirror_enabled=mirror_enabled,
             )
             service.bind_isolated_lifecycle(dispatcher)
             try:
@@ -350,12 +362,14 @@ def test_telegram_same_symbol_zones_persist_routing_before_card_delivery(
                     isolated_intake=IsolatedDemoIntake(path),
                 )
                 try:
+                    restarted.bind_isolated_lifecycle(dispatcher)
                     with patch.object(
                         restarted_bot, "send_intent", new=AsyncMock()
                     ) as send:
                         await restarted.delivery.recover_manual()
                     assert send.await_count == worker_count
                     assigned_workers = set()
+                    expected_risk = Decimal(0)
                     for call in send.await_args_list:
                         intent, plan = call.args
                         assignment = await intake.get_assignment(intent.intent_id)
@@ -363,7 +377,44 @@ def test_telegram_same_symbol_zones_persist_routing_before_card_delivery(
                         assert assignment.plan == plan
                         assigned_workers.add(assignment.uid)
                         assert call.kwargs["isolated"] is True
+                        if mirror_enabled:
+                            exchange = exchange_by_uid[assignment.uid]
+                            assert plan.side is Side.SHORT
+                            assert plan.standard_comparison_plan.side is Side.LONG
+                            exchange.mark = plan.orders[0].reference_price
+                            expected_risk += plan.planned_max_loss_usdt
+                            for _ in range(2):
+                                outcome = await dispatcher.execute_intent(
+                                    intent.intent_id, approval_mode=ApprovalMode.MANUAL
+                                )
+                                assert outcome.status is IntentStatus.EXECUTED, (
+                                    outcome.message
+                                )
+                            [order] = [
+                                body
+                                for url, body in exchange.requests
+                                if url == "/v5/order/create"
+                            ]
+                            assert order["side"] == "Sell"
+                            assert order["tpslMode"] == "Full"
+                            assert Decimal(order["stopLoss"]) == plan.stop_loss
+                            assert Decimal(order["takeProfit"]) == plan.take_profit
                     assert assigned_workers == (set(workers) if worker_count else set())
+                    if mirror_enabled and worker_count:
+                        assert await portfolio.open_risk_usdt() == expected_risk
+                        action = PositionActionIntent(
+                            source=source,
+                            symbol="BTCUSDT",
+                            action=PositionActionType.CLOSE,
+                            expected_side=Side.LONG,
+                            summary="Close the source position",
+                            confidence=1,
+                        )
+                        [review] = await restarted._bind_worker_action(action)
+                        assert review.status is IntentStatus.SKIPPED
+                        assert review.contract_review_reason
+                        assert review.target_strategy_id is None
+                        assert not primary_exchange.orders
                 finally:
                     await restarted_bot.close()
             finally:
