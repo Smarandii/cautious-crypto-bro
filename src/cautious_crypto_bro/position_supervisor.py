@@ -11,7 +11,9 @@ from pathlib import Path
 from uuid import UUID
 
 from .bybit import exchange_failure_reason
+from .bybit.entry_orders import mirror_entry_link_id
 from .domain import (
+    MIRROR_STRATEGY_VERSION,
     AccountPosition,
     AccountStateSummary,
     ExecutionPlan,
@@ -234,7 +236,7 @@ class PositionSupervisor:
                 ) from exc
 
         try:
-            return await self._reconcile(state, plan, account), None
+            return await self._reconcile_plan(state, plan, account), None
         except ExitReplacementPositionChanged as exc:
             await self._manual_override(state, account, str(exc))
             return None, None
@@ -254,6 +256,13 @@ class PositionSupervisor:
             # A mutation may have succeeded before the error. Refresh
             # account state before reconciling another strategy.
             return None, exc
+
+    async def _reconcile_plan(
+        self, state: PositionStrategy, plan: ExecutionPlan, account: AccountStateSummary
+    ) -> AccountStateSummary:
+        if plan.strategy_version == MIRROR_STRATEGY_VERSION:
+            return await self._reconcile_mirror(state, plan, account)
+        return await self._reconcile(state, plan, account)
 
     async def _blocked_reconcile_outcome(
         self,
@@ -363,6 +372,81 @@ class PositionSupervisor:
             return account
 
         return await self._reconcile_live_position(state, plan, account, position)
+
+    async def _reconcile_mirror(
+        self,
+        state: PositionStrategy,
+        plan: ExecutionPlan,
+        account: AccountStateSummary,
+    ) -> AccountStateSummary:
+        link_id = mirror_entry_link_id(plan)
+        order = await self._executor.strategy_order(plan.symbol, link_id)
+        if (
+            order is None
+            or order.symbol != plan.symbol
+            or order.order_link_id != link_id
+            or order.side is not plan.side
+            or order.reduce_only
+            or order.quantity != plan.orders[0].quantity
+            or order.executed_quantity > order.quantity
+        ):
+            return await self._manual_override(
+                state, account, "Mirror entry ownership unverified"
+            )
+
+        account = await self._executor.account_state()
+        positions = tuple(p for p in account.positions if p.symbol == plan.symbol)
+        if not positions:
+            if order.status in {
+                "Filled",
+                "Cancelled",
+                "PartiallyFilledCanceled",
+                "Rejected",
+                "Deactivated",
+            }:
+                await self._save(
+                    state.model_copy(update={"status": StrategyStatus.CLOSED})
+                )
+            return account
+        if len(positions) != 1:
+            return await self._manual_override(
+                state, account, "Mirror position ownership ambiguous"
+            )
+        position = positions[0]
+        if position.side is not plan.side or position.size != order.executed_quantity:
+            return await self._manual_override(
+                state, account, "Mirror position does not match saved entry fill"
+            )
+        if (
+            position.stop_loss != plan.stop_loss
+            or position.take_profit != plan.take_profit
+            or position.trailing_stop not in (None, Decimal(0))
+        ):
+            return await self._manual_override(
+                state, account, "Mirror exchange protection differs from saved plan"
+            )
+        if (
+            position.size * abs(position.avg_price - plan.stop_loss)
+            > plan.policy.risk_budget_usdt
+        ):
+            return await self._manual_override(
+                state, account, "Mirror fill exceeded the saved risk budget"
+            )
+        if (
+            state.status is not StrategyStatus.OPEN_RISK
+            or state.last_position_qty != position.size
+        ):
+            await self._save(
+                state.model_copy(
+                    update={
+                        "status": StrategyStatus.OPEN_RISK,
+                        "last_position_qty": position.size,
+                        "last_avg_price": position.avg_price,
+                        "protected_stop_loss": plan.stop_loss,
+                    }
+                )
+            )
+        return account
 
     async def _reconcile_live_position(
         self,

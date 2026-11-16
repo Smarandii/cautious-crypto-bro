@@ -15,7 +15,9 @@ import httpx
 import pytest
 
 from cautious_crypto_bro.bybit import BybitDemoExecutor
+from cautious_crypto_bro.bybit.entry_orders import mirror_entry_link_id
 from cautious_crypto_bro.domain import (
+    AccountOrder,
     ApprovalMode,
     Entry,
     EntryType,
@@ -609,6 +611,61 @@ def test_mirror_submission_recovers_by_order_link_without_reposting(tmp_path, vi
                     await asyncio.to_thread(executor._submit_mirror_entry, plan)
             assert exchange.post_count == 1
             assert exchange.submitted["tpslMode"] == "Full"
+
+    asyncio.run(run())
+
+
+def test_mirror_restart_verifies_both_exits_then_pauses_on_drift(tmp_path):
+    class MirrorExchange(Exchange):
+        target = D(0)
+
+        def position(self):
+            return super().position() | {"takeProfit": str(self.target)}
+
+    async def run():
+        path = tmp_path / "state.db"
+        exchange = MirrorExchange(Side.SHORT)
+        with executor_for(exchange) as executor:
+            store, _, standard, _, _ = await prepare(path, exchange, executor)
+            plan = ExecutionPlanner().plan_mirror(
+                standard, await executor.market_context(standard.symbol)
+            )
+            await store.update_execution_plan(plan)
+            await store.ensure_position_strategy(plan)
+            exchange.size = plan.orders[0].quantity
+            exchange.stop, exchange.target = plan.stop_loss, plan.take_profit
+            link = mirror_entry_link_id(plan)
+            order = AccountOrder(
+                symbol=plan.symbol,
+                side=plan.side,
+                order_type="Market",
+                status="Filled",
+                quantity=exchange.size,
+                remaining_quantity=D(0),
+                price=None,
+                avg_price=exchange.avg,
+                order_id="mirror-1",
+                order_link_id=link,
+                reduce_only=False,
+                updated_at=datetime.now(UTC),
+                executed_quantity=exchange.size,
+            )
+            restarted = IntentStore(path)
+            supervisor = PositionSupervisor(
+                store=restarted, executor=executor, mutation_lock=asyncio.Lock()
+            )
+            with patch.object(
+                executor, "strategy_order", new=AsyncMock(return_value=order)
+            ) as fetch:
+                await supervisor.reconcile_once()
+                assert (await state_for(restarted)).status is StrategyStatus.OPEN_RISK
+                fetch.assert_awaited_with(plan.symbol, link)
+
+                exchange.target = D(0)
+                await supervisor.reconcile_once()
+                (alert,) = await restarted.get_pending_strategy_alerts()
+                assert alert.status is StrategyStatus.MANUAL_OVERRIDE
+                assert "protection differs" in alert.pause_reason
 
     asyncio.run(run())
 
