@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from cautious_crypto_bro.bybit.entry_orders import mirror_entry_order_params
 from cautious_crypto_bro.domain import (
     Entry,
     EntryType,
@@ -158,6 +159,17 @@ def test_mirror_plan_reverses_side_and_freezes_full_position_target(side, market
     assert 0 < mirror.planned_max_loss_usdt <= mirror.policy.risk_budget_usdt
     assert ExecutionPlan.model_validate_json(mirror.model_dump_json()) == mirror
     assert "mirror_source_side" not in standard.model_dump()
+    outbound = mirror_entry_order_params(mirror)
+    assert outbound["side"] == ("Sell" if side is Side.LONG else "Buy")
+    assert Decimal(str(outbound["stopLoss"])) == mirror.stop_loss
+    assert Decimal(str(outbound["takeProfit"])) == mirror.take_profit
+    assert outbound["tpslMode"] == "Full"
+    assert outbound["tpOrderType"] == outbound["slOrderType"] == "Market"
+    assert outbound["timeInForce"] == ("IOC" if market else "GTC")
+    assert len(str(outbound["orderLinkId"])) <= 36
+    assert outbound == mirror_entry_order_params(
+        ExecutionPlan.model_validate_json(mirror.model_dump_json())
+    )
 
     invalid = mirror.model_dump()
     invalid["mirror_source_side"] = mirror.side
