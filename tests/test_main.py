@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from aiogram.exceptions import TelegramServerError
+from aiogram.methods import DeleteWebhook
 
 pytestmark = pytest.mark.integration
 
@@ -197,7 +199,7 @@ def test_initial_reconciliation_precedes_any_execution(
         assert events.index("store.quarantine") < events.index("store.reset_stale")
         assert events.index("store.reset_stale") < events.index("supervisor.reconcile")
         assert ("service.recover" in events) is (failed_reconciliation == 2)
-        assert "bot.run" not in events
+        assert "bot.ready" not in events
         assert "source.start" not in events
     else:
         asyncio.run(app.async_main())
@@ -213,7 +215,7 @@ def test_initial_reconciliation_precedes_any_execution(
         ) < events.index("source.start")
         assert events.index("bot.blocked") < events.index("bot.ready")
         assert events.index("service.recover") < events.index("bot.ready")
-        assert events.index("service.recover") < events.index("supervisor.run")
+        assert events.index("supervisor.reconcile") < events.index("supervisor.run")
         assert "pnl.sync" in events
         # The catch-up poll must run alongside the live listener, or
         # dropped Telegram pushes stay dropped.
@@ -354,6 +356,38 @@ def test_reader_outage_keeps_operator_and_protection_alive_until_shutdown(
     assert not supervision_health_path(fake.settings.database_path).exists()
     with fake.app.state_ownership(fake.settings.database_path):
         pass
+
+
+def test_telegram_setup_outage_keeps_supervision_active(monkeypatch, tmp_path):
+    fake = _fake_application(monkeypatch, tmp_path)
+
+    async def run():
+        supervision_started = asyncio.Event()
+        telegram_recovered = asyncio.Event()
+        failed = TelegramServerError(DeleteWebhook(), "Bad Gateway")
+
+        async def start_bot():
+            fake.events.append("bot.start")
+            if fake.events.count("bot.start") == 1:
+                raise failed
+            await supervision_started.wait()
+            assert "service.recover" not in fake.events
+            assert "source.start" not in fake.events
+            assert "bot.ready" not in fake.events
+            telegram_recovered.set()
+
+        async def supervise():
+            supervision_started.set()
+            await telegram_recovered.wait()
+
+        fake.bot.start = start_bot
+        fake.supervisor.run = supervise
+        await asyncio.wait_for(fake.app.async_main(), timeout=4)
+        assert fake.events.count("bot.start") == 2
+        assert "bot.run" in fake.events
+        assert fake.events.index("bot.ready") < fake.events.index("source.start")
+
+    asyncio.run(run())
 
 
 def test_cleanup_attempts_all_clients_and_preserves_failure_chain(
