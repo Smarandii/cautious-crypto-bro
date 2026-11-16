@@ -615,7 +615,7 @@ def test_mirror_submission_recovers_by_order_link_without_reposting(tmp_path, vi
     asyncio.run(run())
 
 
-def test_mirror_restart_verifies_both_exits_then_pauses_on_drift(tmp_path):
+def test_mirror_coordinator_submits_once_and_restart_checks_protection(tmp_path):
     class MirrorExchange(Exchange):
         target = D(0)
 
@@ -626,12 +626,36 @@ def test_mirror_restart_verifies_both_exits_then_pauses_on_drift(tmp_path):
         path = tmp_path / "state.db"
         exchange = MirrorExchange(Side.SHORT)
         with executor_for(exchange) as executor:
-            store, _, standard, _, _ = await prepare(path, exchange, executor)
-            plan = ExecutionPlanner().plan_mirror(
-                standard, await executor.market_context(standard.symbol)
+            planner = ExecutionPlanner()
+            store = IntentStore(path)
+            await store.initialize()
+            original = make_intent()
+            instrument = await executor.market_context(original.symbol)
+            standard = planner.plan(
+                original, ExecutionPolicy(trading_capital_usdt=D("6800")), instrument
             )
-            await store.update_execution_plan(plan)
-            await store.ensure_position_strategy(plan)
+            plan = ExecutionPlanner().plan_mirror(standard, instrument)
+            intent = original.model_copy(update={"side": plan.side})
+            claim = await store.claim_source(intent.source, lease_seconds=300)
+            assert await store.create_signal_batch_and_complete_source(
+                ((intent, plan),), (), claim
+            )
+            coordinator = ExecutionCoordinator(
+                store=store,
+                executor=executor,
+                planner=planner,
+                max_age_seconds=900,
+            )
+            for _ in range(2):
+                result = await coordinator.execute_intent(
+                    intent.intent_id, approval_mode=ApprovalMode.MANUAL
+                )
+                assert result.status is IntentStatus.EXECUTED, result.message
+            requests = [
+                body for path, body in exchange.requests if path == "/v5/order/create"
+            ]
+            assert len(requests) == 1
+            assert requests[0]["tpslMode"] == "Full"
             exchange.size = plan.orders[0].quantity
             exchange.stop, exchange.target = plan.stop_loss, plan.take_profit
             link = mirror_entry_link_id(plan)

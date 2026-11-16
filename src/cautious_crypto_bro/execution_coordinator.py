@@ -9,6 +9,7 @@ from uuid import UUID
 
 from .cancellation import finish_before_cancellation
 from .domain import (
+    MIRROR_STRATEGY_VERSION,
     AccountStateSummary,
     ApprovalMode,
     EntryPreflightError,
@@ -331,7 +332,10 @@ class ExecutionCoordinator:
             await self._store.ensure_position_strategy(plan)
             strategy_created = True
 
-            staged_market = plan.orders[0].order_type is ExecutionOrderType.MARKET
+            staged_market = (
+                plan.strategy_version == 2
+                and plan.orders[0].order_type is ExecutionOrderType.MARKET
+            )
 
             if staged_market:
                 plan = effective_plan = await self._prepare_physical_primary(plan)
@@ -511,7 +515,7 @@ class ExecutionCoordinator:
                 plan=plan,
             )
 
-        if plan.strategy_version != 2:
+        if plan.strategy_version not in {2, MIRROR_STRATEGY_VERSION}:
             message = (
                 f"Historical Strategy V{plan.strategy_version} plans are read-only; "
                 "only Strategy V2 can execute"
@@ -540,7 +544,7 @@ class ExecutionCoordinator:
         already live on the exchange, so an evidence-write failure must not
         turn a filled execution into a failure outcome or trigger cleanup.
         """
-        if plan.strategy_version < 2:
+        if plan.strategy_version != 2:
             return
         try:
             group_id = zone_group_id(plan.symbol, plan.side)
@@ -570,6 +574,14 @@ class ExecutionCoordinator:
         plan: ExecutionPlan,
         approval_mode: ApprovalMode,
     ) -> None:
+        if plan.strategy_version == MIRROR_STRATEGY_VERSION and (
+            intent.intent_id != plan.intent_id
+            or intent.symbol != plan.symbol
+            or intent.side is not plan.side
+        ):
+            raise EntryPreflightError(
+                "Mirrored execution plan does not match its intent"
+            )
         active = await self._store.get_active_position_strategies()
         if any(state.symbol == plan.symbol for state, _ in active):
             raise EntryPreflightError(
