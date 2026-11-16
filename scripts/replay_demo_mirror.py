@@ -119,9 +119,16 @@ def summarize(values: list[Result]) -> dict:
     }
 
 
-def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
+def report(
+    bundle: Path,
+    fee: Decimal,
+    slippage: Decimal,
+    horizon: int,
+    *,
+    cohort: str = "saved",
+) -> dict:
     excluded: Counter[str] = Counter()
-    pairs: dict[str, list[tuple[Result, Result]]] = defaultdict(list)
+    attempts: dict[str | None, list[tuple[Result, Result] | None]] = defaultdict(list)
     with zipfile.ZipFile(bundle) as archive:
         member = "analysis/mirror_comparisons.jsonl"
         members = [name for name in archive.namelist() if name.endswith(f"/{member}")]
@@ -130,14 +137,23 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
                 "Expected one mirror comparison file in the forensic bundle"
             )
         root = members[0].removesuffix(f"/{member}")
-        comparisons = rows(archive, root, member)
+        comparisons = [
+            case
+            for case in rows(archive, root, member)
+            if case.get("kind", "saved") == cohort
+        ]
         market = {}
         funding_by_symbol = {}
         for case in sorted(
             comparisons, key=lambda item: datetime.fromisoformat(item["planned_at"])
         ):
             plan_data = case["standard_plan"]
-            if plan_data is None or case["mirror_plan"] is None:
+            mirror_data = case["mirror_plan"]
+            source_side = case.get("source_side") or (plan_data or {}).get("side")
+            if source_side is None and mirror_data is not None:
+                source_side = mirror_data.get("mirror_source_side")
+            attempts[source_side].append(None)
+            if plan_data is None or (cohort == "saved" and mirror_data is None):
                 excluded["missing_plan"] += 1
                 continue
             standard = ExecutionPlan.model_validate(plan_data)
@@ -176,12 +192,29 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
             if funding is None:
                 excluded["missing_funding_history"] += 1
                 continue
-            mirror_plan = ExecutionPlan.model_validate(case["mirror_plan"])
+            primary = standard.orders[0]
+            if cohort == "saved":
+                mirror_plan = ExecutionPlan.model_validate(mirror_data)
+                primary = mirror_plan.orders[0]
+                mirror_target, mirror_stop = (
+                    mirror_plan.take_profit,
+                    mirror_plan.stop_loss,
+                )
+            else:
+                mirror_target = standard.stop_loss
+                mirror_stop = standard.take_profit_targets[0].price
+                sign = 1 if standard.side is Side.LONG else -1
+                if not (
+                    sign * (primary.reference_price - mirror_target) > 0
+                    and sign * (mirror_stop - primary.reference_price) > 0
+                ):
+                    excluded["historical_invalid_geometry"] += 1
+                    continue
             mirror = replay_mirror(
                 standard.side,
-                mirror_plan.orders[0].reference_price,
-                mirror_plan.take_profit,
-                mirror_plan.stop_loss,
+                primary.reference_price,
+                mirror_target,
+                mirror_stop,
                 [
                     MirrorBar(
                         Decimal(c["open"]),
@@ -191,8 +224,7 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
                     )
                     for c in candles
                 ],
-                market_entry=mirror_plan.orders[0].order_type
-                is ExecutionOrderType.MARKET,
+                market_entry=primary.order_type is ExecutionOrderType.MARKET,
                 entry_fee=fee,
                 exit_fee=fee,
                 stop_slippage=slippage,
@@ -205,42 +237,45 @@ def report(bundle: Path, fee: Decimal, slippage: Decimal, horizon: int) -> dict:
             if baseline is None:
                 excluded["standard_entry_unresolved"] += 1
                 continue
-            pairs[standard.side.value].append(
-                (
-                    baseline,
-                    Result(
-                        start,
-                        float(mirror.net_r or Decimal(0)),
-                        0.0,
-                        mirror.status == "stop",
-                        entry_legs_filled=int(mirror.status != "unfilled"),
-                        marked_at_horizon=mirror.status == "open",
-                    ),
-                )
+            attempts[source_side][-1] = (
+                baseline,
+                Result(
+                    start,
+                    float(mirror.net_r or Decimal(0)),
+                    0.0,
+                    mirror.status == "stop",
+                    entry_legs_filled=int(mirror.status != "unfilled"),
+                    marked_at_horizon=mirror.status == "open",
+                ),
             )
     return {
         "candidates": len(comparisons),
+        "cohort": cohort,
+        "unknown_source_side": len(attempts[None]),
         "excluded": dict(excluded),
         "scope": (
             "Confirmed no-fills contribute zero R. Open positions are valued at the "
             "final close with exit fees. Standard V2 reconstructs its ladder from the primary fill. "
             "Fees included. Funding uses the settlement minute's opening price "
             "and skips entry bars. Same-minute settlements and exits depend on "
-            "the simulators' event ordering. Source follow-ups omitted."
+            "the simulators' event ordering. Source follow-ups omitted. "
+            "Historical mirror geometry uses saved standard prices without reconstructing "
+            "historical exchange quantity or minimum-order filters."
         ),
         "horizon_minutes": horizon,
         "mirror_stop_slippage": str(slippage),
         "by_source_side": {
-            side.value: _side_report(pairs[side.value]) for side in Side
+            side.value: _side_report(attempts[side.value]) for side in Side
         },
     }
 
 
-def _side_report(pairs: list[tuple[Result, Result]]) -> dict:
-    cutoff = len(pairs) * 7 // 10
-    partitions = {"all": pairs, "latest_30_percent": pairs[cutoff:]}
+def _side_report(attempts: list[tuple[Result, Result] | None]) -> dict:
+    cutoff = len(attempts) * 7 // 10
+    partitions = {"all": attempts, "latest_30_percent": attempts[cutoff:]}
     result = {}
-    for name, group in partitions.items():
+    for name, candidates in partitions.items():
+        group = [pair for pair in candidates if pair is not None]
         standard = [pair[0] for pair in group]
         mirror = [pair[1] for pair in group]
         resolved = [
@@ -252,6 +287,8 @@ def _side_report(pairs: list[tuple[Result, Result]]) -> dict:
             and not b.marked_at_horizon
         ]
         result[name] = {
+            "candidates": len(candidates),
+            "excluded": len(candidates) - len(group),
             "standard": summarize(standard),
             "mirror": summarize(mirror),
             "paired_delta": paired_difference_summary(standard, mirror),
@@ -281,6 +318,7 @@ def main() -> None:
         help="Adverse fraction of the mirror stop fill price. Repeat to compare scenarios.",
     )
     parser.add_argument("--horizon-minutes", type=int, default=1440)
+    parser.add_argument("--cohort", choices=("saved", "historical"), default="saved")
     args = parser.parse_args()
     if args.horizon_minutes <= 0:
         parser.error("--horizon-minutes must be positive")
@@ -292,7 +330,7 @@ def main() -> None:
         if not rate.is_finite() or not 0 <= rate < 1:
             parser.error(f"{name} must be a fraction in [0, 1)")
     reports = [
-        report(args.bundle, args.fee, rate, args.horizon_minutes)
+        report(args.bundle, args.fee, rate, args.horizon_minutes, cohort=args.cohort)
         for rate in dict.fromkeys(slippages)
     ]
     print(json.dumps(reports[0] if len(reports) == 1 else reports, indent=2))

@@ -43,6 +43,7 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
                     json.dumps,
                     [
                         comparison,
+                        {**comparison, "kind": "historical", "mirror_plan": None},
                         {**comparison, "standard_plan": None},
                         {**comparison, "planned_at": "2026-11-02T00:00:00+00:00"},
                         {
@@ -132,5 +133,19 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
     assert source_long["all"]["standard_unfilled"] == 0
     assert source_long["all"]["resolved_only"]["paired_delta"]["count"] == 1
     assert source_long["latest_30_percent"]["mirror"]["expectancy_r"] == 0
+    assert source_long["latest_30_percent"]["candidates"] == 2
+    assert source_long["latest_30_percent"]["excluded"] == 1
+    historical = subprocess.run(
+        [*result.args, "--cohort", "historical"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    historical_report, _ = json.loads(historical.stdout)
+    assert historical_report["cohort"] == "historical"
+    assert historical_report["candidates"] == 1
+    assert historical_report["by_source_side"]["LONG"]["all"]["mirror"][
+        "expectancy_r"
+    ] == pytest.approx(float(expected_r))
     assert source_long["latest_30_percent"]["paired_delta"]["count"] == 1
     assert report["by_source_side"]["SHORT"]["all"]["paired_delta"]["count"] == 0
