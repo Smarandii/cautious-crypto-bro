@@ -22,6 +22,9 @@ from ..domain import (
     AccountStateSummary,
     ApprovalMode,
     AutoApprovalMode,
+    Entry,
+    EntryType,
+    ExecutionOrderType,
     ExecutionPlan,
     ExecutionPolicy,
     InstrumentContext,
@@ -120,6 +123,7 @@ class SignalPlanning:
         demo_long_participation_skip_fraction: Decimal = Decimal("0"),
         demo_long_momentum_gate: bool = False,
         demo_exit_profile: str = "baseline",
+        demo_mirror_enabled: bool = False,
         demo_portfolio_stop_risk_cap_usdt: Decimal | None = None,
         demo_entry_order_ttl_minutes: int = 0,
     ) -> None:
@@ -171,6 +175,7 @@ class SignalPlanning:
         )
         self._demo_long_momentum_gate = demo_long_momentum_gate
         self._demo_exit_profile = demo_exit_profile
+        self._demo_mirror_enabled = demo_mirror_enabled
         self._demo_portfolio_stop_risk_cap_usdt = demo_portfolio_stop_risk_cap_usdt
         self._demo_entry_order_ttl_minutes = demo_entry_order_ttl_minutes
 
@@ -211,7 +216,16 @@ class SignalPlanning:
         retain_retry_candidates: bool = True,
         original_duplicate: bool = False,
         original_manual: bool = False,
+        strategy_frozen: bool = False,
     ) -> OpenPlanningResult:
+        if self._demo_mirror_enabled and not strategy_frozen:
+            signals = replace(
+                signals,
+                open_intents=tuple(
+                    intent.model_copy(update={"mirror_enabled": True})
+                    for intent in signals.open_intents
+                ),
+            )
         planned: list[
             tuple[
                 TradingIntent,
@@ -427,6 +441,8 @@ class SignalPlanning:
         )
         if plan is None:
             return batch_reserved_risk
+        if intent.mirror_enabled:
+            intent = self._mirror_execution_intent(intent, plan)
         if admitted_policy.strategy_v2.long_participation_arm == "skip":
             intent = intent.model_copy(
                 update={
@@ -658,8 +674,27 @@ class SignalPlanning:
         return extracted_intent.model_copy(
             update={
                 "approval_mode": ApprovalMode.MANUAL
-                if original_manual
+                if original_manual or extracted_intent.mirror_enabled
                 else approval_mode
+            }
+        )
+
+    @staticmethod
+    def _mirror_execution_intent(
+        intent: TradingIntent, plan: ExecutionPlan
+    ) -> TradingIntent:
+        order = plan.orders[0]
+        entry = (
+            Entry(type=EntryType.MARKET)
+            if order.order_type is ExecutionOrderType.MARKET
+            else Entry(type=EntryType.LIMIT, price=float(order.reference_price))
+        )
+        return intent.model_copy(
+            update={
+                "side": plan.side,
+                "entry": entry,
+                "stop_loss": float(plan.stop_loss),
+                "take_profit": float(plan.take_profit),
             }
         )
 
@@ -675,10 +710,15 @@ class SignalPlanning:
         try:
             if market_context is None:
                 market_context = await self._executor.market_context(intent.symbol)
-            return self._planner.plan(
+            standard = self._planner.plan(
                 intent,
                 policy,
                 market_context,
+            )
+            return (
+                self._planner.plan_mirror(standard, market_context)
+                if intent.mirror_enabled
+                else standard
             )
 
         except ExecutionPlanningError as exc:

@@ -844,6 +844,14 @@ class ExecutionCoordinator:
     async def _verify_position_action_target(
         self, action: PositionActionIntent
     ) -> None:
+        active = await self._store.get_active_position_strategies()
+        if any(
+            state.symbol == action.symbol and plan.mirror_source_side is not None
+            for state, plan in active
+        ):
+            raise PositionActionPreflightError(
+                "Mirrored position requires operator review before a source follow-up"
+            )
         if action.target_strategy_id is None:
             return
         owner = await self._store.get_intent(action.target_strategy_id)
@@ -857,7 +865,6 @@ class ExecutionCoordinator:
             raise PositionActionPreflightError(
                 "Saved lifecycle target does not match its source"
             )
-        active = await self._store.get_active_position_strategies()
         matches = [state for state, _ in active if state.symbol == action.symbol]
         if (
             len(matches) != 1

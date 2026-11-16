@@ -5,6 +5,7 @@ x-demo-policy: &demo-policy
   DEMO_LONG_MOMENTUM_GATE: "false"
   DEMO_PORTFOLIO_STOP_RISK_CAP_USDT: "4000"
   DEMO_EXIT_PROFILE: payoff_early_tight_trail_long_015
+  DEMO_MIRROR_ENABLED: ${DEMO_MIRROR_ENABLED:-false}
   DEMO_ENTRY_ORDER_TTL_MINUTES: "240"
 
 services:

@@ -17,6 +17,7 @@ from cautious_crypto_bro import telegram_source
 from cautious_crypto_bro.approval_bot import ApprovalBot
 from cautious_crypto_bro.domain import (
     AutoApprovalMode,
+    ImageAttachment,
     IncomingPost,
     IntentStatus,
     PositionActionIntent,
@@ -119,6 +120,7 @@ def workflow(
     max_age=900,
     portfolio_cap=None,
     isolated_intake=None,
+    demo_mirror_enabled=False,
 ):
     planner = ExecutionPlanner()
     lock = asyncio.Lock()
@@ -149,9 +151,69 @@ def workflow(
         intent_max_age_seconds=max_age,
         demo_portfolio_stop_risk_cap_usdt=portfolio_cap,
         isolated_intake=isolated_intake,
+        demo_mirror_enabled=demo_mirror_enabled,
     )
     supervisor = PositionSupervisor(store=store, executor=executor, mutation_lock=lock)
     return service, bot, supervisor
+
+
+def test_telegram_demo_mirror_switch_freezes_saved_approvals(tmp_path):
+    async def run():
+        path = tmp_path / "state.db"
+        exchange = ExchangeTransport()
+        provider = ModelTransport()
+        provider.fail_image_once = False
+        plans = []
+        with executor_for(exchange) as executor:
+            for message_id, enabled in enumerate((False, True, False), start=1):
+                store = IntentStore(path)
+                await store.initialize()
+                service, bot, _ = workflow(
+                    store,
+                    executor,
+                    provider,
+                    mode=AutoApprovalMode.DISABLED,
+                    demo_mirror_enabled=enabled,
+                )
+                post = IncomingPost(
+                    images=(ImageAttachment("image/png", b"synthetic chart"),),
+                    source=make_intent().source.model_copy(
+                        update={
+                            "message_id": message_id,
+                            "text": "Enter BTCUSDT LONG at market, stop 90",
+                        }
+                    ),
+                )
+                try:
+                    with patch.object(
+                        bot._bot, "send_message", new=AsyncMock()
+                    ) as send:
+                        await service.on_message(post)
+                    assert send.await_count > 0
+                    assert (
+                        any(
+                            "Mirror Demo" in call.kwargs["text"]
+                            and "Full take-profit" in call.kwargs["text"]
+                            for call in send.call_args_list
+                        )
+                        == enabled
+                    )
+                finally:
+                    await bot.close()
+                async with aiosqlite.connect(path) as db:
+                    async with db.execute(
+                        "SELECT p.payload_json FROM execution_plans p JOIN intents i USING(intent_id) WHERE i.message_id=?",
+                        (message_id,),
+                    ) as cursor:
+                        row = await cursor.fetchone()
+                assert row is not None
+                plans.append(json.loads(row[0]))
+        assert [p["side"] for p in plans] == ["LONG", "SHORT", "LONG"]
+        assert plans[1]["take_profit"] == plans[0]["stop_loss"]
+        assert plans[1]["stop_loss"] == plans[0]["take_profit_targets"][0]["price"]
+        assert not exchange.orders
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("worker_count", [0, 2])
