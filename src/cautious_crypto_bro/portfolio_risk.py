@@ -101,7 +101,7 @@ def open_stop_risk_usdt(
         )
         if plan is None:
             raise PortfolioRiskUnavailable(
-                f"{order.symbol} has an entry order without a known stop plan"
+                f"{order.symbol} has an entry order without a known V2 or mirror stop plan"
             )
 
         if order.symbol != plan.symbol or order.side is not plan.side:
