@@ -263,11 +263,16 @@ def _timestamp(value: object, *, optional: bool = True) -> None:
 def validate_public_feed(feed: object) -> dict:
     """Reject extra fields instead of silently publishing arbitrary input."""
     base_fields = ("schema_version", "generated_at", "risk", "trade_history")
-    if isinstance(feed, dict) and "channel_analytics" in feed:
-        feed = _fields(feed, (*base_fields, "channel_analytics"))
+    optional_fields = tuple(
+        field
+        for field in ("channel_analytics", "strategy_performance")
+        if isinstance(feed, dict) and field in feed
+    )
+    feed = _fields(feed, (*base_fields, *optional_fields))
+    if "channel_analytics" in feed:
         _validate_channel_analytics(feed["channel_analytics"])
-    else:
-        feed = _fields(feed, base_fields)
+    if "strategy_performance" in feed:
+        _validate_strategy_performance(feed["strategy_performance"])
     if type(feed["schema_version"]) is not int or feed["schema_version"] != 1:
         raise ValueError("Unsupported public feed schema")
     _timestamp(feed["generated_at"], optional=False)
@@ -276,6 +281,35 @@ def validate_public_feed(feed: object) -> dict:
     if len(json.dumps(feed, allow_nan=False).encode("utf-8")) > MAX_PUBLIC_FEED_BYTES:
         raise ValueError("Public feed exceeds dispatch payload budget")
     return feed
+
+
+def _validate_strategy_performance(value: object) -> None:
+    metrics = (
+        "net_pnl_usdt",
+        "expectancy_usdt",
+        "avg_win_usdt",
+        "avg_loss_usdt",
+        "avg_win_to_loss_ratio",
+    )
+    if not isinstance(value, list) or len(value) != 2:
+        raise ValueError("Invalid public strategy summaries")
+    for strategy, item in zip(("standard", "mirror"), value, strict=True):
+        row = _fields(item, ("strategy", "completed_trades", *metrics))
+        count = row["completed_trades"]
+        if row["strategy"] != strategy or type(count) is not int or count < 0:
+            raise ValueError("Invalid public strategy cohort")
+        for field in metrics:
+            _number(row[field])
+        if count > 0 and row["expectancy_usdt"] is None:
+            raise ValueError("Invalid public strategy metrics")
+        if row["net_pnl_usdt"] is None or (
+            count == 0
+            and (
+                row["net_pnl_usdt"] != 0
+                or any(row[field] is not None for field in metrics[1:])
+            )
+        ):
+            raise ValueError("Invalid empty strategy summary")
 
 
 def _channel_field_sets(
@@ -656,6 +690,8 @@ def public_feed_from_snapshot(snapshot: dict) -> dict:
     }
     if snapshot.get("channel_analytics") is not None:
         payload["channel_analytics"] = snapshot["channel_analytics"]
+    if snapshot.get("strategy_performance") is not None:
+        payload["strategy_performance"] = snapshot["strategy_performance"]
     return validate_public_feed(payload)
 
 

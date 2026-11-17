@@ -566,6 +566,36 @@ function renderTradeHistory(data, refreshFailed = false) {
     add("p", "Trade evidence unavailable. No outcomes inferred.");
     return;
   }
+  if (Array.isArray(data.strategy_performance)) {
+    const signed = (value) =>
+      Number.isFinite(value)
+        ? `${value > 0 ? "+" : ""}${value.toFixed(2)}` : "—";
+    const scroll = add("div", "");
+    scroll.className = "trade-table-scroll";
+    scroll.tabIndex = 0;
+    const table = add("table", "", scroll);
+    add("caption", "Strategy performance · all reconciled completed trades", table);
+    const heading = add("tr", "", add("thead", "", table));
+    for (const title of [
+      "Strategy", "Completed", "Net P&L · USDT",
+      "Mean P&L / trade · USDT", "Average win / loss · USDT", "Payoff ratio",
+    ])
+      add("th", title, heading).scope = "col";
+    const body = add("tbody", "", table);
+    for (const summary of data.strategy_performance) {
+      const tr = add("tr", "", body);
+      for (const cell of [
+        summary.strategy === "mirror" ? "Mirror" : "Standard",
+        summary.completed_trades,
+        signed(summary.net_pnl_usdt, 2),
+        signed(summary.expectancy_usdt, 2),
+        `${signed(summary.avg_win_usdt, 2)} / ${signed(summary.avg_loss_usdt, 2)}`,
+        Number.isFinite(summary.avg_win_to_loss_ratio)
+          ? `${number(summary.avg_win_to_loss_ratio, 2)}×` : "—",
+      ]) add("td", cell, tr);
+    }
+    add("p", "Includes older completed trades omitted below. Open or unresolved positions are excluded; these historical cohorts are not a matched strategy experiment.");
+  }
   const allRows = history.rows ?? [];
   const rows = selectedTradeDate
     ? allRows.filter((trade) => {
