@@ -317,6 +317,12 @@ def _mirror_comparisons(
 ) -> list[dict]:
     comparisons = []
     for row in rows:
+        # Re-approval is another attempt on the same signal, so the paired
+        # source cohort keeps the initial mirror and standard references.
+        if "intent_payload_json" in row.keys() and json.loads(
+            row["intent_payload_json"]
+        ).get("mirror_refresh_parent_id"):
+            continue
         intent_id = row["intent_id"]
         selected = json.loads(row["payload_json"])
         original = json.loads(originals[intent_id]) if intent_id in originals else None

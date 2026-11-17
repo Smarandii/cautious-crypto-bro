@@ -24,6 +24,27 @@ from export_forensic_replay import (  # noqa: E402
 )
 
 
+def test_mirror_refresh_is_not_a_second_source_comparison():
+    original = json.dumps(
+        {"mirror_source_side": "LONG", "standard_comparison_plan": {}}
+    )
+    with closing(sqlite3.connect(":memory:")) as database:
+        database.row_factory = sqlite3.Row
+        rows = list(
+            database.execute(
+                "SELECT 'parent' AS intent_id, ? AS payload_json, '{}' AS intent_payload_json, "
+                "'2026-11-17T00:00:00+00:00' AS created_at, 'FAILED' AS status "
+                "UNION ALL SELECT 'replacement', ?, '{\"mirror_refresh_parent_id\":\"parent\"}', "
+                "'2026-11-17T00:00:00+00:00', 'EXECUTED'",
+                (original, original),
+            )
+        )
+    [comparison] = exporter._mirror_comparisons(
+        rows, {"parent": original, "replacement": original}
+    )
+    assert comparison["intent_id"] == "parent"
+
+
 def test_market_candle_coverage_includes_skip_only_symbols_and_signal_history() -> None:
     signal_time = datetime(2026, 10, 9, 12, tzinfo=UTC)
     signal_ms = int(signal_time.timestamp() * 1000)
