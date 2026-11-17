@@ -621,7 +621,14 @@ def _validate_history(value: object) -> None:
 
 
 def _validate_trade(value: object) -> None:
-    row = _fields(value, TRADE_FIELDS)
+    fields = (
+        (*TRADE_FIELDS, "strategy")
+        if isinstance(value, dict) and "strategy" in value
+        else TRADE_FIELDS
+    )
+    row = _fields(value, fields)
+    if row.get("strategy", "standard") not in ("standard", "mirror"):
+        raise ValueError("Invalid public trade strategy")
     if not isinstance(row["symbol"], str) or not re.fullmatch(
         r"[A-Z0-9]{1,40}USDT", row["symbol"]
     ):

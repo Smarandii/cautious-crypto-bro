@@ -589,6 +589,7 @@ function renderTradeHistory(data, refreshFailed = false) {
     const heading = add("tr", "", add("thead", "", table));
     for (const title of [
       "Symbol",
+      "Strategy",
       "Side",
       "Quantity",
       "Net PnL · USDT",
@@ -608,6 +609,7 @@ function renderTradeHistory(data, refreshFailed = false) {
       const date = Date.parse(trade.closed_at);
       for (const value of [
         trade.symbol,
+        trade.strategy === "mirror" ? "Mirror" : "Standard",
         trade.side,
         number(trade.quantity, 8),
         signed(trade.net_pnl_usdt),
