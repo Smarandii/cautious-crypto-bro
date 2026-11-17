@@ -697,6 +697,8 @@ def test_mirror_coordinator_submits_once_and_restart_checks_protection(tmp_path)
 
 
 def test_failed_mirror_quote_creates_one_durable_manual_replacement(tmp_path):
+    from cautious_crypto_bro.approval_bot import ApprovalBot, IntentAction
+
     async def run():
         path = tmp_path / "state.db"
         exchange = Exchange(Side.SHORT)
@@ -720,26 +722,49 @@ def test_failed_mirror_quote_creates_one_durable_manual_replacement(tmp_path):
             coordinator = ExecutionCoordinator(
                 store=store, executor=executor, planner=planner, max_age_seconds=900
             )
-            failed = await coordinator.execute_intent(
-                intent.intent_id, approval_mode=ApprovalMode.MANUAL
-            )
-            assert failed.status is IntentStatus.FAILED
-            assert failed.message.startswith("MirrorQuoteRiskExceeded:")
-            assert not exchange.orders
-            assert await store.mirror_refresh_eligible(intent.intent_id)
-
             replacement_id = uuid5(intent.intent_id, "mirror-market-refresh")
             reopened = IntentStore(path)
             restarted = ExecutionCoordinator(
                 store=reopened, executor=executor, planner=planner, max_age_seconds=900
             )
-            refreshed, retry = await asyncio.gather(
-                coordinator.refresh_mirror_approval(intent.intent_id),
-                restarted.refresh_mirror_approval(intent.intent_id),
+            bot = ApprovalBot(
+                token="123456:offline",
+                approval_chat_id=1,
+                approver_user_id=1,
+                store=store,
+                executor=coordinator,
             )
-            assert refreshed.status is retry.status is IntentStatus.PENDING
-            updated = refreshed.plan
-            assert updated is not None and updated == retry.plan
+            callback = SimpleNamespace(
+                from_user=SimpleNamespace(id=1), answer=AsyncMock()
+            )
+            try:
+                with patch.object(bot, "_edit_message", new=AsyncMock()) as edit:
+                    await bot._execute(
+                        callback,
+                        IntentAction(action="execute", intent_id=str(intent.intent_id)),
+                    )
+                    [row] = edit.await_args.kwargs["reply_markup"].inline_keyboard
+                    [refresh] = row
+                    assert refresh.text == "Refresh quote"
+                    assert not exchange.orders
+                    assert await store.mirror_refresh_eligible(intent.intent_id)
+                    _, retry = await asyncio.gather(
+                        bot._refresh_mirror(
+                            callback, IntentAction.unpack(refresh.callback_data)
+                        ),
+                        restarted.refresh_mirror_approval(intent.intent_id),
+                    )
+                    assert retry.status is IntentStatus.PENDING
+                    assert "Refreshed mirror entry at 99.9" in edit.await_args.args[1]
+                    [buttons] = edit.await_args.kwargs["reply_markup"].inline_keyboard
+                    assert IntentAction.unpack(
+                        buttons[0].callback_data
+                    ).intent_id == str(replacement_id)
+                    assert not exchange.orders
+            finally:
+                await bot.close()
+            updated = retry.plan
+            assert updated is not None
             assert await reopened.get_execution_plan(replacement_id) == updated
             assert (
                 await reopened.get_intent(replacement_id)
