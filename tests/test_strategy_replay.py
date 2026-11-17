@@ -730,14 +730,20 @@ def test_paired_difference_summary_reports_deterministic_bootstrap() -> None:
     interval = summary["iid_bootstrap_95ci_delta_net_r"]
     assert interval is not None and interval[0] <= 1.5 <= interval[1]
     block_interval = summary["circular_block_4_bootstrap_95ci_delta_net_r"]
-    assert block_interval is not None
-    assert block_interval[0] <= 1.5 <= block_interval[1]
+    assert block_interval is None
     assert summary == replay.paired_difference_summary(
         baseline,
         candidate,
         bootstrap_iterations=500,
         seed=9,
     )
+    baseline = [replay.Result(i, 0, 0, False) for i in range(8)]
+    candidate = [replay.Result(i, i, 0, False) for i in range(8)]
+    enough = replay.paired_difference_summary(
+        baseline, candidate, bootstrap_iterations=500, seed=9
+    )
+    interval = enough["circular_block_4_bootstrap_95ci_delta_net_r"]
+    assert interval is not None and interval[0] < sum(range(8)) < interval[1]
 
 
 def test_paired_difference_summary_reports_top_three_gain_concentration() -> None:

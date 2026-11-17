@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from replay_strategy_v2 import (
+    MIN_CIRCULAR_BLOCK_PAIRS,
     Candidate,
     Result,
     paired_difference_summary,
@@ -293,6 +294,7 @@ def report(
             "historical exchange quantity or minimum-order filters."
         ),
         "horizon_minutes": horizon,
+        "minimum_pairs_for_circular_block_interval": MIN_CIRCULAR_BLOCK_PAIRS,
         "legacy_entry_ttl_minutes": legacy_entry_ttl_minutes,
         "entry_expiry_bar_rule": "Only full candles ending at or before expiry can fill limit entries.",
         "mirror_stop_slippage": str(slippage),

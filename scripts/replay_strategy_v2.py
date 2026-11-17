@@ -1226,6 +1226,10 @@ def summarize_by_side(cases, results):
     }
 
 
+CIRCULAR_BLOCK_CASES = 4
+MIN_CIRCULAR_BLOCK_PAIRS = 2 * CIRCULAR_BLOCK_CASES
+
+
 def paired_difference_summary(
     baseline_results,
     candidate_results,
@@ -1266,18 +1270,25 @@ def paired_difference_summary(
         for _ in range(bootstrap_iterations)
     )
     last = len(bootstrapped_sums) - 1
-    block_rng = random.Random(seed + 1)
-    block_sums = []
-    for _ in range(bootstrap_iterations):
-        sample = []
-        while len(sample) < len(differences):
-            start = block_rng.randrange(len(differences))
-            sample.extend(
-                differences[(start + offset) % len(differences)] for offset in range(4)
-            )
-        block_sums.append(sum(sample[: len(differences)]))
-    block_sums.sort()
-    block_last = len(block_sums) - 1
+    block_interval = None
+    if len(differences) >= MIN_CIRCULAR_BLOCK_PAIRS:
+        block_rng = random.Random(seed + 1)
+        block_sums = []
+        for _ in range(bootstrap_iterations):
+            sample = []
+            while len(sample) < len(differences):
+                start = block_rng.randrange(len(differences))
+                sample.extend(
+                    differences[(start + offset) % len(differences)]
+                    for offset in range(CIRCULAR_BLOCK_CASES)
+                )
+            block_sums.append(sum(sample[: len(differences)]))
+        block_sums.sort()
+        block_last = len(block_sums) - 1
+        block_interval = (
+            block_sums[int(0.025 * block_last)],
+            block_sums[int(0.975 * block_last)],
+        )
     return {
         "count": len(differences),
         "improved_cases": sum(value > 0 for value in differences),
@@ -1289,10 +1300,7 @@ def paired_difference_summary(
             bootstrapped_sums[int(0.025 * last)],
             bootstrapped_sums[int(0.975 * last)],
         ),
-        "circular_block_4_bootstrap_95ci_delta_net_r": (
-            block_sums[int(0.025 * block_last)],
-            block_sums[int(0.975 * block_last)],
-        ),
+        "circular_block_4_bootstrap_95ci_delta_net_r": block_interval,
     }
 
 
