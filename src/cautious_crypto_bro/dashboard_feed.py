@@ -273,7 +273,7 @@ def validate_public_feed(feed: object) -> dict:
     _timestamp(feed["generated_at"], optional=False)
     _validate_risk(feed["risk"])
     _validate_history(feed["trade_history"])
-    if len(json.dumps(feed, allow_nan=False).encode("utf-8")) > 60000:
+    if len(json.dumps(feed, allow_nan=False).encode("utf-8")) > MAX_PUBLIC_FEED_BYTES:
         raise ValueError("Public feed exceeds dispatch payload budget")
     return feed
 

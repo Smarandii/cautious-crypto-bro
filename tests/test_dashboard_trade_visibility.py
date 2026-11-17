@@ -16,6 +16,7 @@ from cautious_crypto_bro.dashboard_metrics import public_trade_history
 from cautious_crypto_bro.forensic_pnl import reconcile
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+import export_trade_feed as trade_exporter  # noqa: E402
 import install_dashboard_feed as installer  # noqa: E402
 from export_trade_feed import build_trade_feed  # noqa: E402
 
@@ -147,6 +148,39 @@ def test_public_history_preserves_unknown_and_unavailable_values():
     assert public_trade_history([], available=False)["total_completed"] is None
     with pytest.raises(ValueError, match="positive"):
         public_trade_history([], available=True, limit=0)
+
+
+@pytest.mark.parametrize("budget", [1800, 20])
+def test_export_trims_oldest_details_to_byte_budget(tmp_path, monkeypatch, budget):
+    from cautious_crypto_bro import dashboard_feed
+
+    positions = [
+        {
+            "complete": True,
+            "symbol": "BTCUSDT",
+            "side": "SHORT",
+            "strategy_version": 3,
+            "closed_at": 1000 * i,
+        }
+        for i in range(1, 31)
+    ]
+    monkeypatch.setattr(trade_exporter, "reconcile", lambda _: positions)
+    monkeypatch.setattr(trade_exporter, "forensic_as_of", lambda _: None)
+    monkeypatch.setattr(dashboard_feed, "MAX_PUBLIC_FEED_BYTES", budget)
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.execute("CREATE TABLE execution_policy(id INTEGER, risk_per_trade_pct REAL)")
+        if budget == 20:
+            with pytest.raises(ValueError, match="budget"):
+                build_trade_feed(db, tmp_path / "unused.zip", {})
+            return
+        feed = build_trade_feed(db, tmp_path / "unused.zip", {})
+    history = feed["trade_history"]
+    assert 0 < len(history["rows"]) < 30
+    assert history["total_completed"] == 30
+    assert history["omitted_count"] == 30 - len(history["rows"])
+    assert history["rows"][0]["closed_at"] == "1970-01-01T00:00:30+00:00"
+    assert all(row["strategy"] == "mirror" for row in history["rows"])
+    assert len(json.dumps(feed).encode()) <= budget
 
 
 @pytest.mark.parametrize("strategy", ["standard", "mirror", None])

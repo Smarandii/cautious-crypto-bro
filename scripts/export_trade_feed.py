@@ -31,17 +31,27 @@ def build_trade_feed(database, bundle: Path, risk: dict) -> dict:
     history = public_trade_history(positions, available=True)
     history["as_of"] = forensic_as_of(bundle)
     channels = build_channel_analytics(database, positions)
-    return public_feed_from_snapshot(
-        {
-            "generated_at": datetime.now(UTC).isoformat(),
-            "trade_history": history,
-            "channel_analytics": channels,
-            "risk": {
-                **risk,
-                "risk_per_trade_pct": float(policy[0]) if policy else None,
-            },
-        }
-    )
+    snapshot = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "trade_history": history,
+        "channel_analytics": channels,
+        "risk": {
+            **risk,
+            "risk_per_trade_pct": float(policy[0]) if policy else None,
+        },
+    }
+    while True:
+        try:
+            return public_feed_from_snapshot(snapshot)
+        except ValueError as exc:
+            if (
+                str(exc) != "Public feed exceeds dispatch payload budget"
+                or not history["rows"]
+            ):
+                raise
+            history["rows"].pop()
+            history["limit"] = max(1, len(history["rows"]))
+            history["omitted_count"] = history["total_completed"] - len(history["rows"])
 
 
 def main() -> None:
