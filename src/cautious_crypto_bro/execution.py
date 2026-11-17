@@ -7,6 +7,7 @@ from decimal import (
     ROUND_FLOOR,
     Decimal,
 )
+from uuid import UUID
 
 from .domain import (
     MIRROR_STRATEGY_VERSION,
@@ -72,6 +73,57 @@ def _weighted_entry(orders: Sequence[PlannedOrder]) -> Decimal:
 
 
 class ExecutionPlanner:
+    def refresh_mirror_market_plan(
+        self, plan: ExecutionPlan, context: InstrumentContext, *, intent_id: UUID
+    ) -> ExecutionPlan:
+        previous = plan.orders[0]
+        if (
+            plan.strategy_version != MIRROR_STRATEGY_VERSION
+            or previous.order_type is not ExecutionOrderType.MARKET
+            or intent_id == plan.intent_id
+        ):
+            raise ExecutionPlanningError(
+                "Refresh requires a new mirrored market approval"
+            )
+        rounding = ROUND_CEILING if plan.side is Side.LONG else ROUND_FLOOR
+        entry = (context.market_price / context.tick_size).to_integral_value(
+            rounding=rounding
+        ) * context.tick_size
+        low, high = sorted((plan.stop_loss, plan.take_profit))
+        if not low < entry < high or not low < context.market_price < high:
+            raise ExecutionPlanningError(
+                "Fresh quote is outside the saved protection range"
+            )
+        distance = abs(entry - plan.stop_loss)
+        max_quantity = min(previous.quantity, plan.planned_max_loss_usdt / distance)
+        order = self._planned_order(
+            EntrySpec("E1", ExecutionOrderType.MARKET, entry, Decimal(100)),
+            plan.policy,
+            context,
+            plan.stop_loss,
+            max_quantity=max_quantity,
+        )
+        target = plan.take_profit_targets[0].model_copy(
+            update={
+                "r_multiple": abs(plan.take_profit - entry)
+                / abs(entry - plan.stop_loss)
+            }
+        )
+        comparison = plan.standard_comparison_plan
+        return plan.model_copy(
+            update={
+                "intent_id": intent_id,
+                "orders": (order,),
+                "take_profit_targets": (target,),
+                "planned_max_loss_usdt": order.quantity * abs(entry - plan.stop_loss),
+                "standard_comparison_plan": comparison.model_copy(
+                    update={"intent_id": intent_id}
+                )
+                if comparison is not None
+                else None,
+            }
+        )
+
     def plan_mirror(
         self, standard: ExecutionPlan, context: InstrumentContext
     ) -> ExecutionPlan:
@@ -860,6 +912,8 @@ class ExecutionPlanner:
         policy: ExecutionPolicy,
         context: InstrumentContext,
         stop_loss: Decimal,
+        *,
+        max_quantity: Decimal | None = None,
     ) -> PlannedOrder:
         stop_distance = abs(spec.reference_price - stop_loss)
 
@@ -869,6 +923,8 @@ class ExecutionPlanner:
         leg_budget = policy.risk_budget_usdt * spec.risk_pct / Decimal("100")
 
         raw_quantity = leg_budget / stop_distance
+        if max_quantity is not None:
+            raw_quantity = min(raw_quantity, max_quantity)
 
         quantity = self._round_down(
             raw_quantity,
