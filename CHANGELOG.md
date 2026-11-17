@@ -10,6 +10,26 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.134] - 2026-11-17
+
+### Fixed
+
+- Expire unfilled remainders of owned mirrored entries and honor each
+  strategy's entry deadline in paired replay (#577, #579).
+- Offer a fresh manual approval when a mirrored entry's current quote
+  exceeds its approved stop-loss risk (#583).
+- Record reasons for skipped lifecycle actions and omit confidence intervals
+  for replay cohorts with fewer than eight observations (#585, #587).
+
+### Verification and rollback
+
+- The Demo behavior was verified on revision `f98ba95` with healthy app and
+  publisher services, Telegram intake, and a successful supervision pass.
+- This release requires no schema migration. Keep the existing state volume
+  if rolling back to v2.2.133.
+- The protected immediate-or-cancel entry change and its dedicated Demo
+  account validation remain pending (#581).
+
 ## [2.2.133] - 2026-11-17
 
 ### Added
