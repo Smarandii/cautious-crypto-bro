@@ -353,6 +353,12 @@ class EntryType(StrEnum):
     RANGE = "RANGE"
 
 
+class LifecycleRoutingSkipReason(StrEnum):
+    MISSING_POSITION = "missing_position"
+    SIDE_MISMATCH = "side_mismatch"
+    AMBIGUOUS_POSITION = "ambiguous_position"
+
+
 class PositionActionType(StrEnum):
     CANCEL_ENTRIES = "CANCEL_ENTRIES"
     REDUCE = "REDUCE"
@@ -873,6 +879,9 @@ class PositionActionIntent(BaseModel):
     )
     # Like status, this is hydrated from store columns, not frozen source JSON.
     contract_review_reason: str | None = Field(default=None, exclude=True)
+    routing_skip_reason: LifecycleRoutingSkipReason | None = Field(
+        default=None, exclude=True
+    )
 
     @model_validator(mode="after")
     def validate_position_action(

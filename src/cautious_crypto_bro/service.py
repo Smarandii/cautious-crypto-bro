@@ -688,6 +688,8 @@ class SignalService:
 
         for action in position_actions:
             if action.approval_mode is ApprovalMode.SKIPPED:
+                if action.routing_skip_reason is not None:
+                    continue
                 # Resolve durably instead of leaving an eternal PENDING row:
                 # the trader's lifecycle instruction has no matching live
                 # position, so it can never become executable later.

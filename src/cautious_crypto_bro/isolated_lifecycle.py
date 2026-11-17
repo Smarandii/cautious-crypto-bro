@@ -39,6 +39,7 @@ def bind_lifecycle_targets(
                     "approval_mode": ApprovalMode.MANUAL,
                     "status": IntentStatus.PENDING,
                     "contract_review_reason": None,
+                    "routing_skip_reason": None,
                 }
             )
             for uid, strategy_id in targets
@@ -48,6 +49,7 @@ def bind_lifecycle_targets(
             update={
                 "approval_mode": ApprovalMode.MANUAL,
                 "status": IntentStatus.SKIPPED,
+                "routing_skip_reason": None,
                 "contract_review_reason": "Demo worker ownership is unavailable or ambiguous. Review the source and account before acting.",
             }
         ),
