@@ -10,6 +10,29 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.135] - 2026-11-17
+
+### Fixed
+
+- Restore configured auto-approval for eligible mirror entries on Bybit Demo.
+  Evaluate account conflicts on the execution side and retain saved
+  approval modes (#591).
+- Reconcile completed primary-account mirror trades from verified entry and
+  closing orders. Use `--mirror` in the private forensic analyzer (#593).
+- Keep the GitHub Pages validator independent of application dependencies
+  (#595).
+- Deliver manual review for explicit current re-entry invitations that use
+  a matching base ticker. The review cannot submit an order (#598).
+
+### Verification and rollback
+
+- Verified Telegram intake, Bybit supervision, and dashboard publication on
+  Demo revision `ba23029`.
+- This release requires no schema migration. Keep the existing state volume
+  when rolling back to v2.2.134.
+- The first automatic mirror fill from a live Telegram signal and the
+  dedicated Demo IOC probe remain unverified (#554, #581).
+
 ## [2.2.134] - 2026-11-17
 
 ### Fixed
