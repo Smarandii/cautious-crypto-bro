@@ -161,6 +161,43 @@ def workflow(
     return service, bot, supervisor
 
 
+def test_telegram_demo_mirror_auto_approval_submits_one_protected_entry(tmp_path):
+    async def run():
+        path = tmp_path / "state.db"
+        store = IntentStore(path)
+        await store.initialize()
+        exchange = ExchangeTransport(Side.SHORT)
+        provider = ModelTransport()
+        provider.fail_image_once = False
+        with executor_for(exchange) as executor:
+            service, bot, _ = workflow(
+                store, executor, provider, demo_mirror_enabled=True
+            )
+            post = IncomingPost(
+                images=(ImageAttachment("image/png", b"synthetic chart"),),
+                source=make_intent().source.model_copy(
+                    update={"text": "Enter BTCUSDT LONG at market, stop 90"}
+                ),
+            )
+            try:
+                with patch.object(bot._bot, "send_message", new=AsyncMock()):
+                    await service.on_message(post)
+                    await service.on_message(post)
+            finally:
+                await bot.close()
+
+        [order] = [body for url, body in exchange.requests if url == "/v5/order/create"]
+        assert order["side"] == "Sell"
+        assert order["tpslMode"] == "Full"
+        assert Decimal(order["takeProfit"]) == Decimal("90")
+        assert Decimal(order["stopLoss"]) > Decimal("100")
+        async with aiosqlite.connect(path) as db:
+            async with db.execute("SELECT approval_mode, status FROM intents") as rows:
+                assert list(await rows.fetchall()) == [("AUTO", "EXECUTED")]
+
+    asyncio.run(run())
+
+
 def test_telegram_demo_mirror_switch_freezes_saved_approvals(tmp_path):
     async def run():
         path = tmp_path / "state.db"

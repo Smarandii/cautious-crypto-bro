@@ -409,7 +409,9 @@ class SignalPlanning:
             policy,
             intent.side,
             intent.intent_id,
-            participation_eligible=(intent.approval_mode is ApprovalMode.AUTO),
+            participation_eligible=(
+                intent.approval_mode is ApprovalMode.AUTO and not intent.mirror_enabled
+            ),
             momentum_stratum=momentum_stratum,
         )
         admitted_policy = self._admit_intent_portfolio_risk(
@@ -576,6 +578,7 @@ class SignalPlanning:
             self._demo_long_momentum_gate
             and intent.side is Side.LONG
             and intent.approval_mode is ApprovalMode.AUTO
+            and not intent.mirror_enabled
         ):
             return None
         return await self._prior_momentum_stratum(intent.symbol)
@@ -663,9 +666,15 @@ class SignalPlanning:
         original_manual: bool = False,
     ) -> TradingIntent:
         key = (extracted_intent.symbol, extracted_intent.side)
+        execution_intent = extracted_intent
+        if extracted_intent.mirror_enabled:
+            mirror_side = (
+                Side.SHORT if extracted_intent.side is Side.LONG else Side.LONG
+            )
+            execution_intent = extracted_intent.model_copy(update={"side": mirror_side})
 
         approval_mode = self._open_approval_mode(
-            extracted_intent,
+            execution_intent,
             position_context=(position_context),
             account_state=(account_state),
             duplicate_in_batch=(open_counts[key] > 1),
@@ -674,7 +683,7 @@ class SignalPlanning:
         return extracted_intent.model_copy(
             update={
                 "approval_mode": ApprovalMode.MANUAL
-                if original_manual or extracted_intent.mirror_enabled
+                if original_manual
                 else approval_mode
             }
         )
