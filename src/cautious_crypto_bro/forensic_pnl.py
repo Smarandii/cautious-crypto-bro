@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 
+from .domain import MIRROR_STRATEGY_VERSION
 from .entry_settlement import entry_orders_settled
 
 LONG_RISK_SHADOW_FROZEN_AFTER = "2026-10-07T16:40:50+00:00"
@@ -226,7 +227,8 @@ def wilson_interval(wins: int, trials: int) -> tuple[float, float] | None:
     )
 
 
-def reconcile(path: Path | BinaryIO) -> list[dict]:
+def reconcile(path: Path | BinaryIO, *, strategy_version: int = 2) -> list[dict]:
+    """Reconcile all ownership windows, returning only the selected strategy."""
     with zipfile.ZipFile(path) as archive:
         root = archive.namelist()[0].split("/", 1)[0]
         lineage = jsonl(archive, root, "analysis/trade_lineage.jsonl")
@@ -278,23 +280,35 @@ def reconcile(path: Path | BinaryIO) -> list[dict]:
 
     positions = _entry_positions(lineage, executions_by_order)
     by_symbol = _position_windows(positions)
-    owned_order_ids: dict[str, str] = {}
+    owners_by_order: dict[str, set[str]] = defaultdict(set)
     for source in lineage:
         for item in source["intents"]:
             intent_id = str(item.get("intent_id") or "")
             if not intent_id:
                 continue
+            mirror = item.get("strategy_version") == MIRROR_STRATEGY_VERSION
+            attached_ids = {
+                order["order_id"]
+                for order in (item.get("entry_evidence") or {}).get(
+                    "attached_closing_orders", []
+                )
+            }
             for fill in (item.get("bybit") or {}).get("plan_executions") or []:
                 order_id = str(fill.get("orderId") or "")
-                if order_id:
-                    owned_order_ids.setdefault(order_id, intent_id)
+                if order_id and (not mirror or order_id in attached_ids):
+                    owners_by_order[order_id].add(intent_id)
+    owned_order_ids = {
+        order_id: next(iter(owners))
+        for order_id, owners in owners_by_order.items()
+        if len(owners) == 1
+    }
     _assign_closed_pnl(by_symbol, closed_pnl, owned_order_ids, probe_order_ids)
     _assign_funding(by_symbol, settlements)
     _verify_entry_settlement(
         positions, lineage, history, pending, capture, executions_by_order
     )
     _finish_positions(positions)
-    return positions
+    return [p for p in positions if p["strategy_version"] == strategy_version]
 
 
 def _filled_entry_legs(fills: list[dict], evidence: dict | None) -> list[str]:
@@ -323,6 +337,7 @@ def _filled_entry_legs(fills: list[dict], evidence: dict | None) -> list[str]:
 def _reconciled_attempt_state(item: dict) -> dict:
     evidence = item.get("entry_evidence") or {}
     return {
+        "strategy_version": item.get("strategy_version", 2),
         "attempt_status": item.get("status", "EXECUTED"),
         "strategy_status": evidence.get("strategy_status"),
         "entry_identity_complete": evidence.get("entry_identity_complete") is True,
@@ -515,7 +530,10 @@ def _assign_closed_pnl(
                         position["ambiguous_rows"] += 1
                 continue
             attributed = matches[0]
-            if attributed.get("attempt_status", "EXECUTED") != "EXECUTED":
+            if (
+                attributed.get("strategy_version") == MIRROR_STRATEGY_VERSION
+                or attributed.get("attempt_status", "EXECUTED") != "EXECUTED"
+            ):
                 # An uncertain attempt needs a confirmed closing identity.
                 # A matching symbol/time window cannot establish ownership.
                 attributed["ambiguous_rows"] += 1
@@ -557,8 +575,13 @@ def _finish_positions(positions: list[dict]) -> None:
             if position["entry_qty"] > 0
             else 0.0
         )
+        minimum_closed_fraction = (
+            1.0 - 1e-9
+            if position.get("strategy_version") == MIRROR_STRATEGY_VERSION
+            else 0.99
+        )
         position["complete"] = (
-            position["closed_fraction"] >= 0.99
+            position["closed_fraction"] >= minimum_closed_fraction
             # Preserve the underfill allowance, but tolerate only float
             # roundoff above entry fills, never extra closed trades.
             and position["closed_fraction"] <= 1.0 + 1e-9

@@ -16,9 +16,14 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from cautious_crypto_bro.bybit.client import DEMO_BASE_URL, BybitClient
+from cautious_crypto_bro.bybit.entry_orders import mirror_entry_link_id
 from cautious_crypto_bro.bybit.normalize import account_order_from_item
 from cautious_crypto_bro.config import get_settings
-from cautious_crypto_bro.domain import ExecutionPlan, TradeExecutionError
+from cautious_crypto_bro.domain import (
+    MIRROR_STRATEGY_VERSION,
+    ExecutionPlan,
+    TradeExecutionError,
+)
 from cautious_crypto_bro.entry_settlement import entry_orders_settled
 from cautious_crypto_bro.terminal_entry_evidence import (
     retain_terminal_entries,
@@ -70,7 +75,8 @@ def _entry_attempt(
 ) -> _EntryAttempt | None:
     plan = json.loads(row["payload_json"])
     saved_ids = tuple(json.loads(row["bybit_order_ids_json"] or "[]"))
-    if plan.get("strategy_version", 1) != 2:
+    strategy_version = plan.get("strategy_version", 1)
+    if strategy_version not in {2, MIRROR_STRATEGY_VERSION}:
         return None
     if not any(order.role == "ENTRY" for order in bindings) and not (
         row["status"] == "EXECUTED" and saved_ids
@@ -79,6 +85,8 @@ def _entry_attempt(
     try:
         frozen = ExecutionPlan.model_validate(plan)
     except ValidationError:
+        if strategy_version == MIRROR_STRATEGY_VERSION:
+            return None
         if bindings or plan.get("entry_slices"):
             raise
         # Legacy request metadata can be incomplete. Retain actual economic
@@ -98,7 +106,11 @@ def _entry_attempt(
     if str(frozen.intent_id) != row["intent_id"]:
         raise ValueError("Stored entry plan has conflicting intent identity")
     prefix = f"ccb-v2-{frozen.intent_id.hex[:20]}-"
-    expected = {prefix + order.name.lower(): order for order in frozen.entry_orders}
+    expected = (
+        {mirror_entry_link_id(frozen): frozen.entry_orders[0]}
+        if strategy_version == MIRROR_STRATEGY_VERSION
+        else {prefix + order.name.lower(): order for order in frozen.entry_orders}
+    )
     legs = {s.name: s.leg_name for s in frozen.entry_slices} or {
         order.name: order.name for order in frozen.orders
     }
@@ -165,6 +177,11 @@ def _attached_closing_orders(
     if attempt.evidence is None:
         return {}
     parents = {item["order_link_id"]: item for item in attempt.evidence["entry_orders"]}
+    stop_types = (
+        {"TakeProfit", "StopLoss"}
+        if attempt.plan.get("strategy_version") == MIRROR_STRATEGY_VERSION
+        else {"PartialTakeProfit", "PartialStopLoss"}
+    )
     closers = {}
     for row in history:
         parent = parents.get(row.get("parentOrderLinkId"))
@@ -177,7 +194,7 @@ def _attached_closing_orders(
         qualified = (
             child.order_id
             and not child.order_link_id
-            and child.stop_order_type in {"PartialTakeProfit", "PartialStopLoss"}
+            and child.stop_order_type in stop_types
             and (child.reduce_only or child.close_on_trigger)
             and child.symbol == attempt.plan["symbol"]
             and child.side.value != attempt.plan["side"]
@@ -529,7 +546,7 @@ def export_bundle(
             plans.append(attempt)
 
     if not plans:
-        raise ValueError("No accepted V2 entry orders with durable ownership")
+        raise ValueError("No accepted entry orders with durable ownership")
 
     client = BybitClient(
         base_url=DEMO_BASE_URL,
@@ -713,6 +730,7 @@ def export_bundle(
         item = {
             "status": attempt.row["status"],
             "intent_id": intent_id,
+            "strategy_version": plan.get("strategy_version", 2),
             "original_execution_plan": original_plan,
             "standard_comparison_plan": (
                 original_plan.get("standard_comparison_plan") if original_plan else None
@@ -765,7 +783,7 @@ def export_bundle(
         lineage.append(item)
 
     if not lineage:
-        raise ValueError("No filled V2 primary-entry orders found in Bybit history")
+        raise ValueError("No filled primary-entry orders found in Bybit history")
 
     actions = [
         {
