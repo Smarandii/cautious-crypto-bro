@@ -25,6 +25,24 @@ _EXCLUDED = re.compile(
     r"recap|results|not|never|hasn't|didn't|если|когда|пример|вчера|итоги|не)\b",
     re.IGNORECASE,
 )
+_BARE_LIMIT_FILL = re.compile(
+    r"(?i:\bлимитка\s+по\s+)\$?([A-Z][A-Z0-9]{1,29})"
+    r"(?i:\s+(?:исполнилась|сработала)\b)"
+)
+_CURRENT_ENTRY = re.compile(
+    r"\b(?:по\s+рынку\s+вход|вход\s+по\s+этой\s+монете)"
+    r"\s+сейчас\s+(?:тоже\s+)?актуален(?=\s*(?:[.!]|$))",
+    re.IGNORECASE,
+)
+
+
+def _bare_ticker_reentry(text: str, evidence: str, symbol: str) -> bool:
+    fill = _BARE_LIMIT_FILL.search(evidence)
+    if fill is None or not _CURRENT_ENTRY.search(text):
+        return False
+    ticker = fill[1]
+    caption_tickers = set(re.findall(r"(?<!\w)[A-Z][A-Z0-9]{1,29}(?!\w)", text))
+    return symbol == f"{ticker}USDT" and caption_tickers == {ticker}
 
 
 def entry_reviews(
@@ -56,7 +74,9 @@ def entry_reviews(
         symbols = re.findall(
             r"(?<![A-Z0-9])[A-Z0-9]{2,30}USDT(?![A-Z0-9])", evidence.upper()
         )
-        if set(symbols) != {raw.symbol}:
+        if set(symbols) != {raw.symbol} and not _bare_ticker_reentry(
+            text, evidence, raw.symbol
+        ):
             continue
         if context is not None and any(
             context.has_existing_copy(raw.symbol, side) for side in Side
