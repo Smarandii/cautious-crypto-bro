@@ -164,7 +164,11 @@ def test_export_trims_oldest_details_to_byte_budget(tmp_path, monkeypatch, budge
         }
         for i in range(1, 31)
     ]
-    monkeypatch.setattr(trade_exporter, "reconcile", lambda _: positions)
+    monkeypatch.setattr(
+        trade_exporter,
+        "reconcile",
+        lambda _, strategy_version=2: positions if strategy_version == 2 else [],
+    )
     monkeypatch.setattr(trade_exporter, "forensic_as_of", lambda _: None)
     monkeypatch.setattr(dashboard_feed, "MAX_PUBLIC_FEED_BYTES", budget)
     with closing(sqlite3.connect(":memory:")) as db:
@@ -181,6 +185,50 @@ def test_export_trims_oldest_details_to_byte_budget(tmp_path, monkeypatch, budge
     assert history["rows"][0]["closed_at"] == "1970-01-01T00:00:30+00:00"
     assert all(row["strategy"] == "mirror" for row in history["rows"])
     assert len(json.dumps(feed).encode()) <= budget
+
+
+def test_public_history_combines_strategies_without_mixing_standard_cohorts(
+    tmp_path, monkeypatch
+):
+    standard = {
+        "complete": True,
+        "symbol": "BTCUSDT",
+        "side": "LONG",
+        "strategy_version": 2,
+        "closed_at": 1000,
+    }
+    mirrored = {
+        **standard,
+        "side": "SHORT",
+        "strategy_version": 3,
+        "closed_at": 2000,
+    }
+    mirror_positions = [mirrored, {**mirrored, "complete": False, "closed_at": 3000}]
+    monkeypatch.setattr(
+        trade_exporter,
+        "reconcile",
+        lambda _, strategy_version=2: (
+            [standard] if strategy_version == 2 else mirror_positions
+        ),
+    )
+    monkeypatch.setattr(trade_exporter, "forensic_as_of", lambda _: None)
+    cohort_inputs = []
+
+    def channel_analytics(database, positions):
+        cohort_inputs.extend(positions)
+        return None
+
+    monkeypatch.setattr(trade_exporter, "build_channel_analytics", channel_analytics)
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.execute("CREATE TABLE execution_policy(id INTEGER, risk_per_trade_pct REAL)")
+        feed = build_trade_feed(db, tmp_path / "unused.zip", {})
+    assert cohort_inputs == [standard]
+    assert feed["trade_history"]["total_completed"] == 2
+    assert [(r["strategy"], r["side"]) for r in feed["trade_history"]["rows"]] == [
+        ("mirror", "SHORT"),
+        ("standard", "LONG"),
+    ]
+    assert decode_public_feed(encode_public_feed(feed)) == feed
 
 
 @pytest.mark.parametrize("strategy", ["standard", "mirror", None])
