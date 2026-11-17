@@ -1,7 +1,9 @@
 """Public rows retain whole-trade reconciliation without leaking lineage."""
 
 import json
+import os
 import sqlite3
+import subprocess
 import sys
 from contextlib import closing
 from pathlib import Path
@@ -23,6 +25,20 @@ from cautious_crypto_bro.dashboard_feed import (  # noqa: E402
     public_feed_from_snapshot,
     validate_public_feed,
 )
+
+
+def test_pages_validator_reaches_validation_without_site_packages():
+    result = subprocess.run(
+        [sys.executable, "-S", str(Path(installer.__file__).resolve())],
+        env={**os.environ, "PUBLIC_TRADE_FEED": "{invalid"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 1
+    assert (
+        result.stderr.strip() == "Public trade feed validation failed; input withheld"
+    )
 
 
 @pytest.mark.integration

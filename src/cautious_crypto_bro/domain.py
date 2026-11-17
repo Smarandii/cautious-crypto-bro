@@ -9,6 +9,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .strategy_versions import MIRROR_STRATEGY_VERSION as MIRROR_STRATEGY_VERSION
+
 
 class Side(StrEnum):
     LONG = "LONG"
@@ -1320,9 +1322,6 @@ class EntrySlice(BaseModel):
     @property
     def name(self) -> str:
         return self.leg_name if self.index == 0 else f"{self.leg_name}c{self.index}"
-
-
-MIRROR_STRATEGY_VERSION = 3
 
 
 class ExecutionPlan(BaseModel):
