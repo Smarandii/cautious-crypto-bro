@@ -883,7 +883,7 @@ class BybitDemoExecutor:
                     if order.order_type is ExecutionOrderType.MARKET
                     else EntryPreflightError
                 )
-                raise error("Current quote exceeds frozen mirrored stop risk")
+                raise error(MirrorQuoteRiskExceeded.reason)
         except EntryPreflightError:
             raise
         except Exception as exc:

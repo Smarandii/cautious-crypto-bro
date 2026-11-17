@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+from uuid import UUID, uuid5
 
 import aiosqlite
 
-from ..domain import IntentStatus, PositionActionIntent, StoreError
+from ..domain import (
+    ApprovalMode,
+    ExecutionPlan,
+    IntentStatus,
+    MirrorQuoteRiskExceeded,
+    PositionActionIntent,
+    StoreError,
+    TradingIntent,
+)
 from ._connection import SQLiteConnectionMixin, sqlite_connection
 from .attention import OperatorAttentionRepositoryImpl
 from .auto_outcome import AutoOutcomeRepositoryImpl
@@ -27,6 +36,24 @@ from .position_strategy import PositionStrategyRepositoryImpl
 from .recovery import RecoveryRepositoryImpl
 from .zone import ZoneLedgerRepositoryImpl
 from .zone_history import ZoneHistoryRepositoryImpl
+
+MIRROR_REFRESH_PARENT = """
+    SELECT 1
+    FROM intents i JOIN execution_plans p USING(intent_id)
+    JOIN position_strategies s ON s.strategy_id = i.intent_id
+    WHERE i.intent_id = ? AND i.status = 'FAILED' AND i.approval_mode = 'MANUAL'
+      AND i.error IN (?, ?) AND i.bybit_order_id IS NULL
+      AND p.bybit_order_ids_json IS NULL AND s.status = 'CLOSED'
+"""
+
+
+def _mirror_refresh_parent_parameters(intent_id: UUID) -> tuple[str, str, str]:
+    reason = MirrorQuoteRiskExceeded.reason
+    return (
+        str(intent_id),
+        f"MirrorQuoteRiskExceeded: {reason}",
+        f"EntryPreflightError: {reason}",
+    )
 
 
 class SQLiteStore(
@@ -51,6 +78,40 @@ class SQLiteStore(
 
     async def initialize_isolated_demo(self, verified_uid: int) -> None:
         await initialize_isolated_demo_database(self._database_path, verified_uid)
+
+    async def mirror_refresh_eligible(self, intent_id: UUID) -> bool:
+        return (
+            await self._fetch(
+                MIRROR_REFRESH_PARENT, _mirror_refresh_parent_parameters(intent_id)
+            )
+            is not None
+        )
+
+    async def save_mirror_refresh(
+        self, parent_id: UUID, intent: TradingIntent, plan: ExecutionPlan
+    ) -> bool:
+        if (
+            intent.intent_id != uuid5(parent_id, "mirror-market-refresh")
+            or intent.mirror_refresh_parent_id != parent_id
+            or intent.status is not IntentStatus.PENDING
+            or intent.approval_mode is not ApprovalMode.MANUAL
+        ):
+            raise ValueError("Refresh requires the pending replacement approval")
+        async with sqlite_connection(self._database_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                MIRROR_REFRESH_PARENT, _mirror_refresh_parent_parameters(parent_id)
+            ) as cursor:
+                if await cursor.fetchone() is None:
+                    return False
+            async with db.execute(
+                "SELECT 1 FROM intents WHERE intent_id=?", (str(intent.intent_id),)
+            ) as cursor:
+                already_saved = await cursor.fetchone() is not None
+            if not already_saved:
+                await self._insert_intent_with_plan(db, intent, plan)
+            await db.commit()
+            return True
 
     async def import_isolated_intent(self, assignment: DemoIntentAssignment) -> None:
         """Copy an intake assignment once without resetting execution state."""

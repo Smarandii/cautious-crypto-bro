@@ -5,7 +5,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from .cancellation import finish_before_cancellation
 from .domain import (
@@ -24,10 +24,12 @@ from .domain import (
     PositionActionPreflightError,
     PositionActionType,
     StrategyStatus,
+    TradeExecutionError,
     TradingIntent,
 )
 from .entry_ownership import recover_entry_bindings
 from .execution import ExecutionPlanner
+from .execution_geometry import ExecutionPlanningError
 from .isolated_demo_risk import IsolatedDemoPortfolio
 from .portfolio_risk import open_stop_risk_usdt
 from .ports import AccountGateway, ExecutionCoordinatorStore
@@ -45,6 +47,81 @@ class PositionActionConfirmationError(RuntimeError):
 
 
 class ExecutionCoordinator:
+    async def refresh_mirror_approval(self, intent_id: UUID) -> IntentExecutionOutcome:
+        async with self._execution_lock:
+            return await self._refresh_mirror_approval_locked(intent_id)
+
+    async def _refresh_mirror_approval_locked(
+        self, intent_id: UUID
+    ) -> IntentExecutionOutcome:
+        unavailable = IntentExecutionOutcome(
+            status=IntentStatus.FAILED,
+            message="This mirrored approval cannot be refreshed",
+        )
+        if (
+            self._worker_uid is not None
+            or not await self._store.mirror_refresh_eligible(intent_id)
+        ):
+            return unavailable
+        intent = await self._store.get_intent(intent_id)
+        plan = await self._store.get_execution_plan(intent_id)
+        if (
+            intent is None
+            or plan is None
+            or plan.strategy_version != MIRROR_STRATEGY_VERSION
+        ):
+            return unavailable
+        if (
+            datetime.now(UTC) - intent.source.published_at
+        ).total_seconds() > self._max_age_seconds:
+            return IntentExecutionOutcome(
+                status=IntentStatus.FAILED, message="The source signal has expired"
+            )
+        replacement_id = uuid5(intent_id, "mirror-market-refresh")
+        replacement = await self._store.get_intent(replacement_id)
+        if replacement is None:
+            candidate = intent.model_copy(
+                update={
+                    "intent_id": replacement_id,
+                    "status": IntentStatus.PENDING,
+                    "mirror_refresh_parent_id": intent_id,
+                }
+            )
+            try:
+                revised = self._planner.refresh_mirror_market_plan(
+                    plan,
+                    await self._executor.market_context(plan.symbol),
+                    intent_id=replacement_id,
+                )
+                await self._assert_open_preflight(
+                    candidate, revised, ApprovalMode.MANUAL
+                )
+            except (ExecutionPlanningError, EntryPreflightError) as exc:
+                return IntentExecutionOutcome(
+                    status=IntentStatus.FAILED, message=str(exc)
+                )
+            except TradeExecutionError:
+                return IntentExecutionOutcome(
+                    status=IntentStatus.FAILED,
+                    message="Fresh quote or Demo account state is unavailable",
+                )
+            if not await self._store.save_mirror_refresh(intent_id, candidate, revised):
+                return unavailable
+            replacement = await self._store.get_intent(replacement_id)
+        revised = await self._store.get_execution_plan(replacement_id)
+        if (
+            replacement is None
+            or revised is None
+            or replacement.status is not IntentStatus.PENDING
+        ):
+            return unavailable
+        return IntentExecutionOutcome(
+            status=IntentStatus.PENDING,
+            message="Fresh quote ready for approval",
+            intent=replacement,
+            plan=revised,
+        )
+
     def __init__(
         self,
         *,
@@ -527,6 +604,17 @@ class ExecutionCoordinator:
                 message=message,
                 intent=intent,
                 plan=plan,
+            )
+
+        if (
+            intent.mirror_refresh_parent_id is not None
+            and (datetime.now(UTC) - intent.source.published_at).total_seconds()
+            > self._max_age_seconds
+        ):
+            message = "The source signal has expired"
+            await self._store.mark_failed(intent_id, message)
+            return IntentExecutionOutcome(
+                status=IntentStatus.FAILED, message=message, intent=intent, plan=plan
             )
 
         return intent, plan

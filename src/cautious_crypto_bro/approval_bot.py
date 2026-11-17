@@ -61,6 +61,8 @@ from .domain import (
     EntryReview,
     ExecutionPlan,
     IntentExecutionOutcome,
+    IntentStatus,
+    MirrorQuoteRiskExceeded,
     PositionActionExecutionOutcome,
     PositionActionIntent,
     PositionActionType,
@@ -150,6 +152,9 @@ class ApprovalBot:
         self._router.callback_query(
             IntentAction.filter(F.action.in_({"execute", "iso_execute"}))
         )(self._execute)
+        self._router.callback_query(IntentAction.filter(F.action == "refresh_mirror"))(
+            self._refresh_mirror
+        )
 
         self._router.callback_query(
             IntentAction.filter(F.action.in_({"skip", "iso_skip"}))
@@ -485,6 +490,8 @@ class ApprovalBot:
         self,
         callback: CallbackQuery,
         text: str,
+        *,
+        reply_markup: InlineKeyboardMarkup | None = None,
     ) -> None:
         message = callback.message
 
@@ -493,7 +500,7 @@ class ApprovalBot:
                 text,
                 parse_mode="HTML",
                 disable_web_page_preview=True,
-                reply_markup=None,
+                reply_markup=reply_markup,
             )
 
     async def send_account_snapshot(
@@ -535,7 +542,16 @@ class ApprovalBot:
                 pnl_error=snapshot.pnl_error,
             )
 
-        keyboard = InlineKeyboardMarkup(
+        await self._send_html(
+            render(intent, plan, exposure=exposure, exposure_error=exposure_error),
+            reply_markup=self._intent_keyboard(intent.intent_id, isolated=isolated),
+        )
+
+    @staticmethod
+    def _intent_keyboard(
+        intent_id: UUID, *, isolated: bool = False
+    ) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
@@ -543,7 +559,7 @@ class ApprovalBot:
                         callback_data=(
                             IntentAction(
                                 action="iso_execute" if isolated else "execute",
-                                intent_id=str(intent.intent_id),
+                                intent_id=str(intent_id),
                             ).pack()
                         ),
                         style="success",
@@ -553,23 +569,13 @@ class ApprovalBot:
                         callback_data=(
                             IntentAction(
                                 action="iso_skip" if isolated else "skip",
-                                intent_id=str(intent.intent_id),
+                                intent_id=str(intent_id),
                             ).pack()
                         ),
                         style="danger",
                     ),
                 ]
             ]
-        )
-
-        await self._send_html(
-            render(
-                intent,
-                plan,
-                exposure=exposure,
-                exposure_error=exposure_error,
-            ),
-            reply_markup=keyboard,
         )
 
     async def send_entry_review(self, review: EntryReview) -> None:
@@ -681,9 +687,48 @@ class ApprovalBot:
             )
             return
 
+        rendered = render_manual_intent_outcome(outcome.intent, outcome.plan, outcome)
+        if callback_data.action == "execute" and outcome.message == (
+            f"MirrorQuoteRiskExceeded: {MirrorQuoteRiskExceeded.reason}"
+        ):
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="Refresh quote",
+                            callback_data=IntentAction(
+                                action="refresh_mirror", intent_id=str(intent_id)
+                            ).pack(),
+                        )
+                    ]
+                ]
+            )
+            await self._edit_message(callback, rendered, reply_markup=keyboard)
+        else:
+            await self._edit_message(callback, rendered)
+
+    async def _refresh_mirror(
+        self, callback: CallbackQuery, callback_data: IntentAction
+    ) -> None:
+        if not await self._authorized(callback):
+            return
+        outcome = await self._executor.refresh_mirror_approval(
+            UUID(callback_data.intent_id)
+        )
+        if (
+            outcome.status is not IntentStatus.PENDING
+            or outcome.intent is None
+            or outcome.plan is None
+        ):
+            await callback.answer(outcome.message, show_alert=True)
+            return
+        await callback.answer(outcome.message)
+        reference_price = html.escape(str(outcome.plan.orders[0].reference_price))
         await self._edit_message(
             callback,
-            render_manual_intent_outcome(outcome.intent, outcome.plan, outcome),
+            f"<b>Refreshed mirror entry at {reference_price}</b>\n\n"
+            + render(outcome.intent, outcome.plan),
+            reply_markup=self._intent_keyboard(outcome.intent.intent_id),
         )
 
     async def _execute_position_action(
