@@ -10,6 +10,37 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.136] - 2026-11-18
+
+### Added
+
+- Publish completed standard and mirror trades with saved strategy labels.
+  Selecting a wallet-balance day shows that UTC day's completed trades
+  (#603, #607, #609).
+- Show separate strategy counts, net P&L, mean P&L per trade, average win/loss
+  and payoff ratio over all reconciled completed positions, including older
+  rows omitted from the detail table. Empty cohorts have unknown expectancy
+  (#611).
+
+### Fixed
+
+- Keep public detail rows within the dispatch byte budget by omitting the
+  oldest rows without changing the completed totals or strategy summaries
+  (#605).
+
+### Verification and rollback
+
+- Verified dashboard publication, Telegram readiness and recent successful
+  Bybit supervision on Demo revision `b33392c`. Dashboard and forensic
+  integration checks pass; actual browser rendering was checked with
+  populated and empty strategy cohorts.
+- This release requires no schema migration. Keep the existing state volume
+  when rolling back to v2.2.135. Older feeds without strategy summaries remain
+  readable.
+- Organic mirror-result validation and the dedicated-account IOC probe
+  remain pending (#554, #581, #602). Historical strategy cohorts are not a
+  matched experiment and do not establish profitability.
+
 ## [2.2.135] - 2026-11-17
 
 ### Fixed
