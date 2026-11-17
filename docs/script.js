@@ -566,13 +566,29 @@ function renderTradeHistory(data, refreshFailed = false) {
     add("p", "Trade evidence unavailable. No outcomes inferred.");
     return;
   }
-  const rows = history.rows ?? [];
+  const allRows = history.rows ?? [];
+  const rows = selectedTradeDate
+    ? allRows.filter((trade) => {
+        const closed = Date.parse(trade.closed_at);
+        return (
+          Number.isFinite(closed) &&
+          new Date(closed).toISOString().slice(0, 10) === selectedTradeDate
+        );
+      })
+    : allRows;
   add(
     "p",
-    `Showing ${rows.length} of ${history.total_completed ?? "unknown"} terminal-certified trades · ${history.omitted_count ?? 0} older rows omitted.`,
+    `Showing ${rows.length}${selectedTradeDate ? ` closed on ${selectedTradeDate} UTC` : ` of ${history.total_completed ?? "unknown"}`} terminal-certified trades · ${history.omitted_count ?? 0} older rows omitted.`,
   );
+  if (selectedTradeDate && history.omitted_count > 0)
+    add("p", "Older trade details were omitted; this day's list may be incomplete.");
   if (!rows.length) {
-    add("p", "No terminal-certified trades in this evidence window.");
+    add(
+      "p",
+      selectedTradeDate
+        ? "No completed trades for this day in the captured trade details."
+        : "No terminal-certified trades in this evidence window.",
+    );
     return;
   }
   function tradeTable(trades, parent, caption) {
@@ -622,12 +638,23 @@ function renderTradeHistory(data, refreshFailed = false) {
     }
   }
   const complete = add("details", "");
-  complete.open = olderExpanded;
-  add("summary", `Reconciled strategy trades (${rows.length})`, complete);
+  complete.open = Boolean(selectedTradeDate) || olderExpanded;
+  add(
+    "summary",
+    `Reconciled strategy trades${selectedTradeDate ? ` · ${selectedTradeDate} UTC` : ""} (${rows.length})`,
+    complete,
+  );
   tradeTable(rows, complete, "Complete strategy trades · UTC close times");
 }
 
+let selectedTradeDate;
 let lastTradeFeed;
+window.addEventListener("ccb-balance-day-selected", (event) => {
+  const date = event.detail?.date;
+  if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+  selectedTradeDate = date;
+  if (lastTradeFeed) renderTradeHistory(lastTradeFeed);
+});
 let tradeRefreshPending = false;
 async function refreshTradeFeed() {
   if (tradeRefreshPending) return;

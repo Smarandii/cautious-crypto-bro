@@ -203,6 +203,9 @@ function renderDailyBalance(feed, refreshFailed = false) {
 
   function showDay(date, focus = false) {
     selectedBalanceDate = date;
+    window.dispatchEvent(
+      new CustomEvent("ccb-balance-day-selected", { detail: { date } }),
+    );
     select.value = date;
     const day = days.find((item) => item.date === date);
     summary.replaceChildren();
