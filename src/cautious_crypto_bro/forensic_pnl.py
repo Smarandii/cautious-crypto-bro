@@ -11,8 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 
-from .domain import MIRROR_STRATEGY_VERSION
 from .entry_settlement import entry_orders_settled
+from .strategy_versions import MIRROR_STRATEGY_VERSION
 
 LONG_RISK_SHADOW_FROZEN_AFTER = "2026-10-07T16:40:50+00:00"
 LONG_RISK_SHADOW_MULTIPLIER = 0.25
