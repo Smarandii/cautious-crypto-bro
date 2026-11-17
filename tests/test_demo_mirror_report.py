@@ -118,6 +118,7 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
     )
     report, adverse = json.loads(result.stdout)
     assert adverse["mirror_stop_slippage"] == "0.001"
+    assert report["minimum_pairs_for_circular_block_interval"] == 8
     assert report["candidates"] == 4
     assert report["excluded"] == {"missing_plan": 1, "missing_candles": 1}
     source_long = report["by_source_side"]["LONG"]
@@ -151,6 +152,11 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
         "expectancy_r"
     ] == pytest.approx(float(expected_r))
     assert source_long["latest_30_percent"]["paired_delta"]["count"] == 1
+    for partition in source_long.values():
+        assert (
+            partition["paired_delta"]["circular_block_4_bootstrap_95ci_delta_net_r"]
+            is None
+        )
     assert report["by_source_side"]["SHORT"]["all"]["paired_delta"]["count"] == 0
     expired = subprocess.run(
         [*result.args, "--legacy-entry-ttl-minutes", "1"],
