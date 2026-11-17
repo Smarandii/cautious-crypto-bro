@@ -10,6 +10,7 @@ from ..domain import (
     ApprovalMode,
     AutoApprovalMode,
     IntentStatus,
+    LifecycleRoutingSkipReason,
     OpenRelation,
     PositionActionIntent,
     PositionActionType,
@@ -114,8 +115,19 @@ def position_action_approval_mode(
     auto_approval_mode: AutoApprovalMode,
     account_state: AccountStateSummary | None,
 ) -> ApprovalMode:
+    return _position_action_route(
+        action, auto_approval_mode=auto_approval_mode, account_state=account_state
+    )[0]
+
+
+def _position_action_route(
+    action: PositionActionIntent,
+    *,
+    auto_approval_mode: AutoApprovalMode,
+    account_state: AccountStateSummary | None,
+) -> tuple[ApprovalMode, LifecycleRoutingSkipReason | None]:
     if action.source.recovery_review_reason:
-        return ApprovalMode.MANUAL
+        return ApprovalMode.MANUAL, None
     if account_state is None:
         return _manual(
             "Position action %s %s remains "
@@ -123,32 +135,25 @@ def position_action_approval_mode(
             "state is unavailable",
             action.action.value,
             action.symbol,
-        )
+        ), None
 
-    if action.action is PositionActionType.CANCEL_ENTRIES:
-        executable = True
-    else:
+    if action.action is not PositionActionType.CANCEL_ENTRIES:
         positions = tuple(
             position
             for position in account_state.positions
             if position.symbol == action.symbol
         )
-        executable = len(positions) == 1 and (
-            action.expected_side is None or action.expected_side is positions[0].side
-        )
-
-    if not executable:
-        logger.info(
-            "Position action %s %s skipped; no matching live position",
-            action.action.value,
-            action.symbol,
-        )
-        return ApprovalMode.SKIPPED
+        if not positions:
+            return ApprovalMode.SKIPPED, LifecycleRoutingSkipReason.MISSING_POSITION
+        if len(positions) != 1:
+            return ApprovalMode.SKIPPED, LifecycleRoutingSkipReason.AMBIGUOUS_POSITION
+        if action.expected_side not in (None, positions[0].side):
+            return ApprovalMode.SKIPPED, LifecycleRoutingSkipReason.SIDE_MISMATCH
 
     if auto_approval_mode is not AutoApprovalMode.ALL:
-        return ApprovalMode.MANUAL
+        return ApprovalMode.MANUAL, None
 
-    return ApprovalMode.AUTO
+    return ApprovalMode.AUTO, None
 
 
 async def plan_position_actions(
@@ -175,20 +180,20 @@ async def plan_position_actions(
         )
         for action in signals.position_actions
     )
-    planned = tuple(
-        action.model_copy(
+    reviewed = []
+    for action in actions:
+        mode, skip_reason = _position_action_route(
+            action, auto_approval_mode=auto_approval_mode, account_state=account_state
+        )
+        action = action.model_copy(
             update={
-                "approval_mode": position_action_approval_mode(
-                    action,
-                    auto_approval_mode=auto_approval_mode,
-                    account_state=account_state,
-                )
+                "approval_mode": mode,
+                "routing_skip_reason": skip_reason,
+                "status": IntentStatus.SKIPPED
+                if skip_reason is not None
+                else action.status,
             }
         )
-        for action in actions
-    )
-    reviewed = []
-    for action in planned:
         held_symbol = account_state is not None and any(
             p.symbol == action.symbol for p in account_state.positions
         )
@@ -208,6 +213,7 @@ async def plan_position_actions(
                 update={
                     "approval_mode": ApprovalMode.MANUAL,
                     "status": IntentStatus.SKIPPED,
+                    "routing_skip_reason": None,
                     "contract_review_reason": (
                         "Exchange contract verification unavailable "
                         f"({type(exc).__name__}). Verify the original source ticker "

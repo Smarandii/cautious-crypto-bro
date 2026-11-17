@@ -6,6 +6,7 @@ from uuid import UUID
 from ..domain import (
     ApprovalMode,
     IntentStatus,
+    LifecycleRoutingSkipReason,
     PositionActionIntent,
     PositionActionType,
     StoreError,
@@ -19,6 +20,18 @@ EXPIRED_ACTION_ERROR = (
     "Lifecycle instruction expired before approval; no exchange action sent"
 )
 CONTRACT_REVIEW_PREFIX = "Unverified lifecycle contract: "
+ROUTING_SKIP_PREFIX = "Lifecycle routing skip: "
+
+
+def lifecycle_routing_skip_reason(
+    error: str | None,
+) -> LifecycleRoutingSkipReason | None:
+    if error and error.startswith(ROUTING_SKIP_PREFIX):
+        try:
+            return LifecycleRoutingSkipReason(error.removeprefix(ROUTING_SKIP_PREFIX))
+        except ValueError:
+            return None
+    return None
 
 
 class PositionActionRepositoryImpl(SharedRepositoryMixin, _Store):
@@ -89,6 +102,7 @@ class PositionActionRepositoryImpl(SharedRepositoryMixin, _Store):
                 "status": IntentStatus(row["status"]),
                 "approval_mode": ApprovalMode(row["approval_mode"]),
                 "contract_review_reason": self._contract_review_reason(row["error"]),
+                "routing_skip_reason": lifecycle_routing_skip_reason(row["error"]),
             }
         )
 

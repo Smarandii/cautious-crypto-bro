@@ -37,6 +37,7 @@ from cautious_crypto_bro.position_supervisor import PositionSupervisor
 from cautious_crypto_bro.service import SignalService
 from cautious_crypto_bro.signal_context import SignalContextProvider
 from cautious_crypto_bro.signals.extraction import IntentExtractor
+from cautious_crypto_bro.source_coverage import coverage_summary
 from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.storage.isolated_intake import IsolatedDemoIntake
 
@@ -419,6 +420,65 @@ def test_telegram_same_symbol_zones_persist_routing_before_card_delivery(
                     await restarted_bot.close()
             finally:
                 await bot.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("positions", "reason"),
+    [(0, "missing_position"), (1, "side_mismatch"), (2, "ambiguous_position")],
+)
+def test_lifecycle_route_skip_is_terminal_and_auditable(tmp_path, positions, reason):
+    class SkipExchange(ExchangeTransport):
+        def handle(self, request):
+            if request.url.path == "/v5/position/list":
+                return httpx.Response(
+                    200,
+                    json={
+                        "retCode": 0,
+                        "result": {
+                            "list": [self.position()] * positions,
+                            "nextPageCursor": "",
+                        },
+                    },
+                )
+            return super().handle(request)
+
+    async def run():
+        database = tmp_path / "state.db"
+        store = IntentStore(database)
+        await store.initialize()
+        exchange = SkipExchange(Side.SHORT)
+        exchange.size = Decimal(1)
+        post = IncomingPost(
+            source=make_intent().source.model_copy(update={"text": "Close BTCUSDT now"})
+        )
+        with executor_for(exchange) as executor:
+            service, bot, _ = workflow(store, executor, ModelTransport())
+            try:
+                with patch.object(bot._bot, "send_message", new=AsyncMock()) as send:
+                    await service.on_message(post)
+                assert not any(
+                    call.kwargs.get("reply_markup") is not None
+                    for call in send.await_args_list
+                )
+            finally:
+                await bot.close()
+            assert not exchange.orders
+        async with aiosqlite.connect(database) as db:
+            async with db.execute("SELECT action_id FROM position_actions") as cursor:
+                (action_id,) = await cursor.fetchone()
+        action = await IntentStore(database).get_position_action(UUID(action_id))
+        assert action.status is IntentStatus.SKIPPED
+        assert action.routing_skip_reason.value == reason
+        since = datetime.now(UTC) - timedelta(hours=1)
+        report = await coverage_summary(database, since=since)
+        assert report["lifecycle_routing_skip_reasons"] == {reason: 1}
+        async with aiosqlite.connect(database) as db:
+            await db.execute("UPDATE position_actions SET error=NULL")
+            await db.commit()
+        report = await coverage_summary(database, since=since)
+        assert report["lifecycle_routing_skip_reasons"] == {"unknown": 1}
 
     asyncio.run(run())
 

@@ -23,7 +23,7 @@ from .isolated_intake import (
     DemoIntentAssignment,
     insert_assignment,
 )
-from .position_action import CONTRACT_REVIEW_PREFIX
+from .position_action import CONTRACT_REVIEW_PREFIX, ROUTING_SKIP_PREFIX
 from .schema import LATEST_SCHEMA_VERSION
 
 
@@ -628,6 +628,14 @@ class SourceRepositoryImpl(_Store):
             ):
                 raise ValueError("Contract review must be non-executable")
             error = CONTRACT_REVIEW_PREFIX + action.contract_review_reason
+        if action.routing_skip_reason is not None:
+            if (
+                error is not None
+                or action.status is not IntentStatus.SKIPPED
+                or action.approval_mode is not ApprovalMode.SKIPPED
+            ):
+                raise ValueError("Lifecycle routing skip must be terminal")
+            error = ROUTING_SKIP_PREFIX + action.routing_skip_reason.value
 
         await db.execute(
             """

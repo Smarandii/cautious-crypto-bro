@@ -9,6 +9,8 @@ from pathlib import Path
 
 import aiosqlite
 
+from .storage.position_action import lifecycle_routing_skip_reason
+
 
 async def production_decision(
     db: aiosqlite.Connection, channel_id: int, message_id: int
@@ -231,6 +233,7 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
         statuses: Counter[str] = Counter()
         source_statuses: Counter[str] = Counter()
         approval_modes: Counter[str] = Counter()
+        lifecycle_skip_reasons: Counter[str] = Counter()
         missing = 0
         normalized_reviews = 0
         candidate_counts: Counter[str] = Counter()
@@ -243,12 +246,24 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
             records = []
             for table in ("intents", "position_actions"):
                 cursor = await db.execute(
-                    f"SELECT status, approval_mode FROM {table} WHERE channel_id=? AND message_id=?",
+                    f"SELECT status, approval_mode, error FROM {table} WHERE channel_id=? AND message_id=?",
                     (channel_id, message_id),
                 )
-                for record_status, approval_mode in await cursor.fetchall():
+                for (
+                    record_status,
+                    approval_mode,
+                    record_error,
+                ) in await cursor.fetchall():
                     statuses[record_status] += 1
                     approval_modes[approval_mode] += 1
+                    if (
+                        table == "position_actions"
+                        and record_status == approval_mode == "SKIPPED"
+                    ):
+                        key = lifecycle_routing_skip_reason(record_error)
+                        lifecycle_skip_reasons[
+                            key.value if key is not None else "unknown"
+                        ] += 1
                     records.append(
                         record_disposition_status(record_status, approval_mode)
                     )
@@ -285,6 +300,9 @@ async def coverage_summary(database_path: Path, *, since: datetime) -> dict:
             "linked_record_statuses": dict(sorted(statuses.items())),
             "planning_candidate_statuses": dict(sorted(candidate_counts.items())),
             "linked_approval_modes": dict(sorted(approval_modes.items())),
+            "lifecycle_routing_skip_reasons": dict(
+                sorted(lifecycle_skip_reasons.items())
+            ),
             "normalized_entry_reviews": normalized_reviews,
             "linked_entry_review_deliveries": await _entry_review_deliveries(
                 db, since.strftime("%Y-%m-%d %H:%M:%S")
