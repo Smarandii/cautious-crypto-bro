@@ -1,4 +1,4 @@
-"""Reconcile Bybit closed PnL and funding to Strategy V2 positions."""
+"""Reconcile Bybit closed PnL and funding to saved strategy positions."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 # Retain historical analyzer imports while consumers use the shared package.
+from cautious_crypto_bro.domain import MIRROR_STRATEGY_VERSION  # noqa: E402
 from cautious_crypto_bro.forensic_pnl import (  # noqa: E402,F401
     BASELINE_RISK_PER_TRADE_PCT,
     DEMO_ENTRY_TTL_REVIEW_CASES,
@@ -1134,6 +1135,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", type=Path)
     parser.add_argument(
+        "--mirror",
+        action="store_true",
+        help="Report realized primary-account mirror P&L from verified fills.",
+    )
+    parser.add_argument(
         "--prospective-long-risk-shadow",
         action="store_true",
         help=(
@@ -1229,6 +1235,17 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+
+    if args.mirror:
+        mirror_positions = reconcile(
+            args.bundle, strategy_version=MIRROR_STRATEGY_VERSION
+        )
+        complete = [p for p in mirror_positions if p["complete"]]
+        print("mirror_filled_positions=", len(mirror_positions))
+        print("mirror_completed_positions=", len(complete))
+        if complete:
+            print("mirror_completed_performance=", summarize(complete))
+        return
 
     positions = reconcile(args.bundle)
     complete = [position for position in positions if position["complete"]]

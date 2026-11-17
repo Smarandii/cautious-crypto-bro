@@ -13,18 +13,23 @@ from pathlib import Path
 import httpx
 import pytest
 from test_quantity_limited_entry_integration import QuantityLimitedExchange
-from test_remaining_concerns import executor_for, prepare
+from test_remaining_concerns import Exchange, executor_for, make_intent, prepare
 
 from cautious_crypto_bro.bybit.client import DEMO_BASE_URL, BybitClient
+from cautious_crypto_bro.bybit.entry_orders import mirror_entry_link_id
 from cautious_crypto_bro.domain import (
+    MIRROR_STRATEGY_VERSION,
     ApprovalMode,
     Entry,
     EntryType,
+    ExecutionPolicy,
     IntentStatus,
     OpenRelation,
     Side,
     StrategyStatus,
 )
+from cautious_crypto_bro.execution import ExecutionPlanner
+from cautious_crypto_bro.execution_coordinator import ExecutionCoordinator
 from cautious_crypto_bro.forensic_pnl import reconcile
 from cautious_crypto_bro.storage import IntentStore
 from cautious_crypto_bro.zone_ledger import ZoneOrder, zone_group_id
@@ -33,6 +38,71 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import export_forensic_replay as exporter  # noqa: E402
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize(
+    ("owned_close", "close_fraction"), [(True, 1), (False, 1), (True, 0.995)]
+)
+def test_mirror_reconciliation_requires_attached_closing_identity(
+    tmp_path, monkeypatch, owned_close, close_fraction
+):
+    database = tmp_path / "state.db"
+    exchange = Exchange(Side.SHORT)
+
+    async def execute():
+        store = IntentStore(database)
+        await store.initialize()
+        planner = ExecutionPlanner()
+        original = make_intent()
+        with executor_for(exchange) as executor:
+            context = await executor.market_context(original.symbol)
+            policy = ExecutionPolicy(trading_capital_usdt=Decimal("6800"))
+            plan = planner.plan_mirror(planner.plan(original, policy, context), context)
+            intent = original.model_copy(update={"side": plan.side})
+            claim = await store.claim_source(intent.source, lease_seconds=300)
+            assert await store.create_signal_batch_and_complete_source(
+                ((intent, plan),), (), claim
+            )
+            coordinator = ExecutionCoordinator(
+                store=store, executor=executor, planner=planner, max_age_seconds=900
+            )
+            outcome = await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert outcome.status is IntentStatus.EXECUTED, outcome.message
+        return plan
+
+    plan = asyncio.run(execute())
+    exchange.fill_price = plan.take_profit
+    exchange.market_fills_exits = True
+    exchange.create(
+        {
+            "symbol": plan.symbol,
+            "side": "Buy",
+            "orderType": "Market",
+            "qty": str(exchange.size * Decimal(str(close_fraction))),
+            "reduceOnly": True,
+            "orderLinkId": "closing-order",
+        }
+    )
+    exchange.orders["closing-order"].update(
+        orderLinkId="",
+        parentOrderLinkId=mirror_entry_link_id(plan) if owned_close else "unrelated",
+        stopOrderType="TakeProfit",
+    )
+    bundle = tmp_path / "forensic.zip"
+    _, _, pnl, _ = export_attempt(database, exchange, bundle, monkeypatch)
+    assert reconcile(bundle) == []
+    [position] = reconcile(bundle, strategy_version=MIRROR_STRATEGY_VERSION)
+    assert position["entry_orders_settled"]
+    assert position["complete"] is (owned_close and close_fraction == 1)
+    assert position["closed_fraction"] == pytest.approx(
+        close_fraction if owned_close else 0
+    )
+    if close_fraction == 1:
+        assert position["net_pnl"] == pytest.approx(
+            float(pnl["closedPnl"]) if owned_close else 0
+        )
 
 
 async def executed_attempt(
