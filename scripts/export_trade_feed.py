@@ -18,6 +18,7 @@ from cautious_crypto_bro.config import get_settings  # noqa: E402
 from cautious_crypto_bro.dashboard_feed import public_feed_from_snapshot  # noqa: E402
 from cautious_crypto_bro.dashboard_metrics import (  # noqa: E402
     build_channel_analytics,
+    public_strategy_performance,
     public_trade_history,
 )
 from cautious_crypto_bro.forensic_pnl import reconcile  # noqa: E402
@@ -37,6 +38,7 @@ def build_trade_feed(database, bundle: Path, risk: dict) -> dict:
         "generated_at": datetime.now(UTC).isoformat(),
         "trade_history": history,
         "channel_analytics": channels,
+        "strategy_performance": public_strategy_performance(positions, mirrored),
         "risk": {
             **risk,
             "risk_per_trade_pct": float(policy[0]) if policy else None,

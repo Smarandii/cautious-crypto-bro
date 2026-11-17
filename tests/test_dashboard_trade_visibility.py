@@ -12,7 +12,10 @@ from zipfile import ZipFile
 import pytest
 from forensic_fixture import settled_entry_fixture
 
-from cautious_crypto_bro.dashboard_metrics import public_trade_history
+from cautious_crypto_bro.dashboard_metrics import (
+    public_strategy_performance,
+    public_trade_history,
+)
 from cautious_crypto_bro.forensic_pnl import reconcile
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
@@ -161,6 +164,7 @@ def test_export_trims_oldest_details_to_byte_budget(tmp_path, monkeypatch, budge
             "side": "SHORT",
             "strategy_version": 3,
             "closed_at": 1000 * i,
+            "net_pnl": i,
         }
         for i in range(1, 31)
     ]
@@ -185,6 +189,9 @@ def test_export_trims_oldest_details_to_byte_budget(tmp_path, monkeypatch, budge
     assert history["rows"][0]["closed_at"] == "1970-01-01T00:00:30+00:00"
     assert all(row["strategy"] == "mirror" for row in history["rows"])
     assert len(json.dumps(feed).encode()) <= budget
+    assert feed["strategy_performance"][0]["completed_trades"] == 30
+    assert feed["strategy_performance"][0]["net_pnl_usdt"] == 465
+    assert feed["strategy_performance"][1]["expectancy_usdt"] is None
 
 
 def test_public_history_combines_strategies_without_mixing_standard_cohorts(
@@ -196,12 +203,14 @@ def test_public_history_combines_strategies_without_mixing_standard_cohorts(
         "side": "LONG",
         "strategy_version": 2,
         "closed_at": 1000,
+        "net_pnl": -8,
     }
     mirrored = {
         **standard,
         "side": "SHORT",
         "strategy_version": 3,
         "closed_at": 2000,
+        "net_pnl": 12,
     }
     mirror_positions = [mirrored, {**mirrored, "complete": False, "closed_at": 3000}]
     monkeypatch.setattr(
@@ -229,6 +238,61 @@ def test_public_history_combines_strategies_without_mixing_standard_cohorts(
         ("standard", "LONG"),
     ]
     assert decode_public_feed(encode_public_feed(feed)) == feed
+    assert [r["completed_trades"] for r in feed["strategy_performance"]] == [1, 1]
+    assert [r["net_pnl_usdt"] for r in feed["strategy_performance"]] == [-8, 12]
+
+
+def test_strategy_summaries_use_completed_cohorts_and_publish_only_safe_fields():
+    def position(pnl, complete=True):
+        return {"complete": complete, "net_pnl": pnl, "private_source": "CANARY"}
+
+    summaries = public_strategy_performance(
+        [position(10), position(-30), position(1000, False)],
+        [position(40), position(20), position(-10)],
+    )
+    assert summaries[0] == {
+        "strategy": "standard",
+        "completed_trades": 2,
+        "net_pnl_usdt": -20,
+        "expectancy_usdt": -10,
+        "avg_win_usdt": 10,
+        "avg_loss_usdt": -30,
+        "avg_win_to_loss_ratio": 0.3333,
+    }
+    assert summaries[1] == {
+        "strategy": "mirror",
+        "completed_trades": 3,
+        "net_pnl_usdt": 50,
+        "expectancy_usdt": 16.66666667,
+        "avg_win_usdt": 30,
+        "avg_loss_usdt": -10,
+        "avg_win_to_loss_ratio": 3,
+    }
+    assert "CANARY" not in json.dumps(summaries)
+
+
+@pytest.mark.parametrize(
+    "malformation", ["extra", "duplicate", "nan", "count", "empty"]
+)
+def test_public_strategy_summary_contract_rejects_invalid_data(malformation):
+    summaries = public_strategy_performance([], [])
+    if malformation == "extra":
+        summaries[0]["private_source"] = "CANARY"
+    elif malformation == "duplicate":
+        summaries[1]["strategy"] = "standard"
+    elif malformation == "nan":
+        summaries[0]["net_pnl_usdt"] = float("nan")
+    elif malformation == "count":
+        summaries[0]["completed_trades"] = True
+    else:
+        summaries[0]["expectancy_usdt"] = 0
+    snapshot = {
+        "generated_at": "2026-11-18T00:00:00+00:00",
+        "trade_history": public_trade_history([], available=True),
+        "strategy_performance": summaries,
+    }
+    with pytest.raises(ValueError):
+        public_feed_from_snapshot(snapshot)
 
 
 @pytest.mark.parametrize("strategy", ["standard", "mirror", None])

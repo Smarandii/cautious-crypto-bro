@@ -65,6 +65,33 @@ def public_trade_history(
     }
 
 
+def public_strategy_performance(
+    standard: Iterable[Mapping[str, object]],
+    mirrored: Iterable[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Summarize full reconciled cohorts before public detail rows are trimmed."""
+    rows = []
+    for strategy, positions in (("standard", standard), ("mirror", mirrored)):
+        summary = summarize_reconciled_positions(positions)
+        rows.append(
+            {
+                "strategy": strategy,
+                "completed_trades": summary["position_count"],
+                **{
+                    field: summary[field]
+                    for field in (
+                        "net_pnl_usdt",
+                        "expectancy_usdt",
+                        "avg_win_usdt",
+                        "avg_loss_usdt",
+                        "avg_win_to_loss_ratio",
+                    )
+                },
+            }
+        )
+    return rows
+
+
 def summarize_reconciled_positions(
     positions: Iterable[Mapping[str, object]],
 ) -> dict[str, object]:
