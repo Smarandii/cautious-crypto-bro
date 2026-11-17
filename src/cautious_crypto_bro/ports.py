@@ -195,6 +195,10 @@ class ApprovalSender(Protocol):
 
 
 class ManualApprovalExecutor(Protocol):
+    async def refresh_mirror_approval(
+        self, intent_id: UUID
+    ) -> IntentExecutionOutcome: ...
+
     async def execute_intent(
         self,
         intent_id: UUID,
@@ -685,6 +689,12 @@ class ExecutionCoordinatorStore(
     Protocol,
 ):
     """Everything ExecutionCoordinator needs from durable storage."""
+
+    async def mirror_refresh_eligible(self, intent_id: UUID) -> bool: ...
+
+    async def save_mirror_refresh(
+        self, parent_id: UUID, intent: TradingIntent, plan: ExecutionPlan
+    ) -> bool: ...
 
 
 class PositionSupervisorStore(

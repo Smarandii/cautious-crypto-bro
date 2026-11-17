@@ -100,6 +100,8 @@ class EntryPreflightError(TradeExecutionError):
 class MirrorQuoteRiskExceeded(EntryPreflightError):
     """A fresh mirror market approval is required before entry submission."""
 
+    reason = "Current quote exceeds frozen mirrored stop risk"
+
 
 class StoreError(RuntimeError):
     """Durable storage operation failed."""
@@ -749,6 +751,9 @@ class TradingIntent(BaseModel):
     symbol: str
     side: Side
     mirror_enabled: bool = Field(default=False, exclude_if=lambda enabled: not enabled)
+    mirror_refresh_parent_id: UUID | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     entry: Entry
     stop_loss: float | None = Field(default=None, gt=0)
     take_profit: float | None = Field(default=None, gt=0)

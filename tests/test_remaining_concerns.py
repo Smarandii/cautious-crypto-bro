@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from uuid import uuid5
 
 import httpx
 import pytest
@@ -691,6 +692,80 @@ def test_mirror_coordinator_submits_once_and_restart_checks_protection(tmp_path)
                 (alert,) = await restarted.get_pending_strategy_alerts()
                 assert alert.status is StrategyStatus.MANUAL_OVERRIDE
                 assert "protection differs" in alert.pause_reason
+
+    asyncio.run(run())
+
+
+def test_failed_mirror_quote_creates_one_durable_manual_replacement(tmp_path):
+    async def run():
+        path = tmp_path / "state.db"
+        exchange = Exchange(Side.SHORT)
+        with executor_for(exchange) as executor:
+            store = IntentStore(path)
+            await store.initialize()
+            planner = ExecutionPlanner()
+            original = make_intent()
+            context = await executor.market_context(original.symbol)
+            standard = planner.plan(
+                original, ExecutionPolicy(trading_capital_usdt=D("6800")), context
+            )
+            plan = planner.plan_mirror(standard, context)
+            intent = original.model_copy(update={"side": plan.side})
+            claim = await store.claim_source(intent.source, lease_seconds=300)
+            assert await store.create_signal_batch_and_complete_source(
+                ((intent, plan),), (), claim
+            )
+            assert not await store.mirror_refresh_eligible(intent.intent_id)
+            exchange.mark = D("99.9")
+            coordinator = ExecutionCoordinator(
+                store=store, executor=executor, planner=planner, max_age_seconds=900
+            )
+            failed = await coordinator.execute_intent(
+                intent.intent_id, approval_mode=ApprovalMode.MANUAL
+            )
+            assert failed.status is IntentStatus.FAILED
+            assert failed.message.startswith("MirrorQuoteRiskExceeded:")
+            assert not exchange.orders
+            assert await store.mirror_refresh_eligible(intent.intent_id)
+
+            replacement_id = uuid5(intent.intent_id, "mirror-market-refresh")
+            reopened = IntentStore(path)
+            restarted = ExecutionCoordinator(
+                store=reopened, executor=executor, planner=planner, max_age_seconds=900
+            )
+            refreshed, retry = await asyncio.gather(
+                coordinator.refresh_mirror_approval(intent.intent_id),
+                restarted.refresh_mirror_approval(intent.intent_id),
+            )
+            assert refreshed.status is retry.status is IntentStatus.PENDING
+            updated = refreshed.plan
+            assert updated is not None and updated == retry.plan
+            assert await reopened.get_execution_plan(replacement_id) == updated
+            assert (
+                await reopened.get_intent(replacement_id)
+            ).status is IntentStatus.PENDING
+            assert (
+                await reopened.get_intent(intent.intent_id)
+            ).status is IntentStatus.FAILED
+            assert not exchange.orders
+            original_click, new_click = await asyncio.gather(
+                restarted.execute_intent(
+                    intent.intent_id, approval_mode=ApprovalMode.MANUAL
+                ),
+                restarted.execute_intent(
+                    replacement_id, approval_mode=ApprovalMode.MANUAL
+                ),
+            )
+            assert original_click.status is IntentStatus.FAILED
+            assert new_click.status is IntentStatus.EXECUTED
+            [submitted] = [
+                body for url, body in exchange.requests if url == "/v5/order/create"
+            ]
+            assert submitted["orderLinkId"] == mirror_entry_link_id(updated)
+            assert D(submitted["qty"]) < plan.orders[0].quantity
+            assert (
+                await restarted.refresh_mirror_approval(intent.intent_id)
+            ).status is IntentStatus.FAILED
 
     asyncio.run(run())
 
