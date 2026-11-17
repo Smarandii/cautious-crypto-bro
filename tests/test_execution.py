@@ -4,6 +4,7 @@ from datetime import (
     datetime,
 )
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -183,6 +184,34 @@ def test_mirror_rejects_target_collapsed_to_entry_after_rounding():
     coarse_tick = replace(context("100"), tick_size=Decimal("20"))
     with pytest.raises(ExecutionPlanningError, match="Invalid mirrored SHORT"):
         planner.plan_mirror(standard, coarse_tick)
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_refresh_mirror_market_keeps_exits_and_reduces_risk(side):
+    planner = ExecutionPlanner()
+    original = limit_intent(side=side).model_copy(
+        update={"entry": Entry(type=EntryType.MARKET)}
+    )
+    old_context = context("100")
+    plan = planner.plan_mirror(
+        planner.plan(original, policy(), old_context), old_context
+    )
+    quote = "99.95" if plan.side is Side.SHORT else "100.05"
+    replacement_id = uuid4()
+    updated = planner.refresh_mirror_market_plan(
+        plan, context(quote), intent_id=replacement_id
+    )
+    assert updated.intent_id == replacement_id
+    assert updated.standard_comparison_plan.intent_id == replacement_id
+    assert updated.stop_loss == plan.stop_loss
+    assert updated.take_profit == plan.take_profit
+    assert updated.orders[0].quantity < plan.orders[0].quantity
+    assert updated.planned_max_loss_usdt <= plan.planned_max_loss_usdt
+    assert ExecutionPlan.model_validate_json(updated.model_dump_json()) == updated
+    with pytest.raises(ExecutionPlanningError, match="outside the saved protection"):
+        planner.refresh_mirror_market_plan(
+            plan, context(str(plan.stop_loss)), intent_id=uuid4()
+        )
 
 
 @pytest.mark.parametrize("leverage", ["0", "0.5", "NaN", "Infinity"])

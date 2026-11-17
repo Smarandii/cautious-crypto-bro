@@ -19,6 +19,7 @@ from ..domain import (
     ExecutionPlan,
     InstrumentContext,
     MarketPrimaryExecutionResult,
+    MirrorQuoteRiskExceeded,
     PositionActionExecutionResult,
     PositionActionIntent,
     Side,
@@ -877,9 +878,14 @@ class BybitDemoExecutor:
                 order.quantity * abs(worst_entry - plan.stop_loss)
                 > plan.planned_max_loss_usdt
             ):
-                raise EntryPreflightError(
-                    "Current quote exceeds frozen mirrored stop risk"
+                error = (
+                    MirrorQuoteRiskExceeded
+                    if order.order_type is ExecutionOrderType.MARKET
+                    else EntryPreflightError
                 )
+                raise error("Current quote exceeds frozen mirrored stop risk")
+        except EntryPreflightError:
+            raise
         except Exception as exc:
             raise EntryPreflightError(str(exc)) from exc
         return (self._submit_mirror_entry(plan),)

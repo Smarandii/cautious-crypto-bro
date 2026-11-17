@@ -97,6 +97,10 @@ class EntryPreflightError(TradeExecutionError):
     """Entry failed before any order submission was attempted."""
 
 
+class MirrorQuoteRiskExceeded(EntryPreflightError):
+    """A fresh mirror market approval is required before entry submission."""
+
+
 class StoreError(RuntimeError):
     """Durable storage operation failed."""
 
