@@ -21,6 +21,7 @@ from cautious_crypto_bro.dashboard_metrics import (  # noqa: E402
     public_trade_history,
 )
 from cautious_crypto_bro.forensic_pnl import reconcile  # noqa: E402
+from cautious_crypto_bro.strategy_versions import MIRROR_STRATEGY_VERSION  # noqa: E402
 
 
 def build_trade_feed(database, bundle: Path, risk: dict) -> dict:
@@ -28,7 +29,8 @@ def build_trade_feed(database, bundle: Path, risk: dict) -> dict:
         "SELECT risk_per_trade_pct FROM execution_policy WHERE id=1"
     ).fetchone()
     positions = reconcile(bundle)
-    history = public_trade_history(positions, available=True)
+    mirrored = reconcile(bundle, strategy_version=MIRROR_STRATEGY_VERSION)
+    history = public_trade_history([*positions, *mirrored], available=True)
     history["as_of"] = forensic_as_of(bundle)
     channels = build_channel_analytics(database, positions)
     snapshot = {
