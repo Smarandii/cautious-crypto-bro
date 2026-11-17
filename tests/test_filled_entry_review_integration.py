@@ -53,6 +53,8 @@ class ReviewModel:
         "Лимитный ордер на вход по BTCUSDT только что исполнился.",
         "My BTCUSDT entry limit has filled now.",
         "Сейчас исполнилась лимитка на вход по BTCUSDT.",
+        "Лимитка по BTC сработала. Вход по этой монете сейчас актуален.",
+        "Лимитка по BTC сработала. По рынку вход сейчас тоже актуален.",
     ],
 )
 def test_review_reaches_bot_without_plan_order_or_execute(tmp_path, caption):
@@ -66,7 +68,10 @@ def test_review_reaches_bot_without_plan_order_or_execute(tmp_path, caption):
         )
         with executor_for(exchange) as executor:
             service, bot, _ = workflow(
-                store, executor, ReviewModel(caption), mode=AutoApprovalMode.ALL
+                store,
+                executor,
+                ReviewModel(caption, evidence=caption.split(".")[0]),
+                mode=AutoApprovalMode.ALL,
             )
             sender = AsyncMock()
             try:
@@ -161,6 +166,27 @@ def test_review_reaches_bot_without_plan_order_or_execute(tmp_path, caption):
         ),
         ("Лимитка по BTCUSDT не исполнилась.", "Лимитка по BTCUSDT не исполнилась."),
         ("A promotional BTCUSDT results card.", CAPTION),
+        ("Лимитка по BTC сработала.", "Лимитка по BTC сработала"),
+        (
+            "Лимитка по ETH сработала. По рынку вход сейчас актуален.",
+            "Лимитка по ETH сработала",
+        ),
+        (
+            "Лимитка по BTC сработала. Вход по ETH сейчас актуален.",
+            "Лимитка по BTC сработала",
+        ),
+        (
+            "Лимитка по BTC сработала. По рынку вход сейчас не актуален.",
+            "Лимитка по BTC сработала",
+        ),
+        (
+            "Лимитка по BTC сработала. По рынку вход сейчас актуален?",
+            "Лимитка по BTC сработала",
+        ),
+        (
+            "Если лимитка по BTC сработала, по рынку вход сейчас актуален.",
+            "лимитка по BTC сработала",
+        ),
     ],
 )
 def test_model_cannot_invent_review_evidence_or_override_exclusions(caption, evidence):
@@ -171,9 +197,12 @@ def test_model_cannot_invent_review_evidence_or_override_exclusions(caption, evi
     assert not _signals_from_extraction(source, raw).entry_reviews
 
 
-def test_owned_update_and_unknown_context_are_distinct():
-    source = make_intent().source.model_copy(update={"text": CAPTION})
-    raw = IntentExtraction.model_validate(ReviewModel().payload)
+@pytest.mark.parametrize(
+    "caption", [CAPTION, "Лимитка по BTC сработала. По рынку вход сейчас актуален."]
+)
+def test_owned_update_and_unknown_context_are_distinct(caption):
+    source = make_intent().source.model_copy(update={"text": caption})
+    raw = IntentExtraction.model_validate(ReviewModel(caption).payload)
     history = SourceOpenContext(
         symbol="BTCUSDT",
         side=Side.SHORT,
