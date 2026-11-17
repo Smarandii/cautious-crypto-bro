@@ -106,6 +106,7 @@ def test_partial_closes_publish_one_complete_trade_without_private_lineage(
         {
             "symbol": symbol,
             "side": "LONG",
+            "strategy": "standard",
             "quantity": 2.0,
             "net_pnl_usdt": 8.0,
             "net_r": 0.4,
@@ -146,6 +147,57 @@ def test_public_history_preserves_unknown_and_unavailable_values():
     assert public_trade_history([], available=False)["total_completed"] is None
     with pytest.raises(ValueError, match="positive"):
         public_trade_history([], available=True, limit=0)
+
+
+@pytest.mark.parametrize("strategy", ["standard", "mirror", None])
+def test_strategy_identity_survives_public_encoding_with_legacy_rows(strategy):
+    version = 3 if strategy == "mirror" else 2
+    history = public_trade_history(
+        [
+            {
+                "complete": True,
+                "symbol": "BTCUSDT",
+                "side": "SHORT",
+                "strategy_version": version,
+                "intent_id": "PRIVATE_CANARY",
+            }
+        ],
+        available=True,
+    )
+    history["as_of"] = None
+    if strategy is None:
+        del history["rows"][0]["strategy"]
+    feed = public_feed_from_snapshot(
+        {
+            "generated_at": "2026-11-17T00:00:00+00:00",
+            "trade_history": history,
+        }
+    )
+    restored = decode_public_feed(encode_public_feed(feed))
+    assert restored == feed
+    assert restored["trade_history"]["rows"][0].get("strategy", "standard") == (
+        strategy or "standard"
+    )
+    assert "PRIVATE_CANARY" not in json.dumps(restored)
+    restored["trade_history"]["rows"][0]["strategy"] = "unknown"
+    with pytest.raises(ValueError, match="strategy"):
+        validate_public_feed(restored)
+
+
+@pytest.mark.parametrize("version", [1, 4, True, "3"])
+def test_public_history_rejects_unknown_strategy_versions(version):
+    with pytest.raises(ValueError, match="strategy"):
+        public_trade_history(
+            [
+                {
+                    "complete": True,
+                    "symbol": "BTCUSDT",
+                    "side": "SHORT",
+                    "strategy_version": version,
+                }
+            ],
+            available=True,
+        )
 
 
 @pytest.mark.parametrize("unexpected", ["source_text", "order_id", "api_secret"])

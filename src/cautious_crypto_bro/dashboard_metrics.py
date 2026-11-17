@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from math import isfinite
 from statistics import fmean
 
+from .strategy_versions import MIRROR_STRATEGY_VERSION
+
 
 def public_trade_history(
     positions: Iterable[Mapping[str, object]], *, available: bool, limit: int = 100
@@ -25,6 +27,9 @@ def public_trade_history(
             raise ValueError("Invalid public trade symbol")
         if side not in ("LONG", "SHORT"):
             raise ValueError("Invalid public trade side")
+        version = position.get("strategy_version", 2)
+        if type(version) is not int or version not in (2, MIRROR_STRATEGY_VERSION):
+            raise ValueError("Invalid public trade strategy")
         closed_ms = _optional_number(position.get("closed_at"))
         closed_at = None
         if closed_ms is not None and closed_ms > 0:
@@ -38,6 +43,9 @@ def public_trade_history(
             {
                 "symbol": symbol,
                 "side": side,
+                "strategy": "mirror"
+                if version == MIRROR_STRATEGY_VERSION
+                else "standard",
                 "quantity": _optional_number(position.get("entry_qty")),
                 "net_pnl_usdt": _optional_number(position.get("net_pnl")),
                 "net_r": _optional_number(position.get("net_r")),
