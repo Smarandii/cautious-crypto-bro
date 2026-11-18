@@ -627,6 +627,20 @@ def replay(
 
     mfe = 0.0
 
+    opening_funding: dict[int, list[dict]] = {}
+    events = []
+    if use_events:
+        later_openings = {
+            candle["time"]
+            for candle in case["candles"]
+            if candle["time"] > case["start"]
+        }
+        for event in case["events"]:
+            if event["kind"] == "FUNDING" and event["time"] in later_openings:
+                opening_funding.setdefault(event["time"], []).append(event)
+            else:
+                events.append(event)
+
     event_index = 0
     lifecycle_actions = 0
     funding_r = 0.0
@@ -720,6 +734,14 @@ def replay(
         return target_rs
 
     for candle in case["candles"]:
+        # Known opening settlements use the quantity held before this candle's
+        # possible scale-in fills or stop touches. Other events keep the
+        # existing protection-first intrabar ordering below.
+        for event in opening_funding.get(candle["time"], ()):
+            payment = event["rate"] * qty * event["price"]
+            realized += payment
+            funding_r += payment
+
         adverse = candle["low"] if (case["side"] == "LONG") else candle["high"]
 
         favorable = candle["high"] if (case["side"] == "LONG") else candle["low"]
@@ -849,10 +871,9 @@ def replay(
 
         if use_events:
             while (
-                event_index < len(case["events"])
-                and case["events"][event_index]["time"] < candle_end
+                event_index < len(events) and events[event_index]["time"] < candle_end
             ):
-                event = case["events"][event_index]
+                event = events[event_index]
 
                 event_index += 1
 
