@@ -6,6 +6,64 @@ from cautious_crypto_bro.domain import Side
 from cautious_crypto_bro.mirror_replay import MirrorBar, replay_mirror
 
 
+@pytest.mark.parametrize(
+    ("side", "exit_kind", "prices"),
+    [
+        (Side.LONG, "target", ("101", "89")),
+        (Side.SHORT, "target", ("111", "99")),
+        (Side.LONG, "stop", ("106", "99")),
+        (Side.SHORT, "stop", ("101", "94")),
+    ],
+)
+@pytest.mark.parametrize("rate", [D("0.01"), D("-0.01")])
+def test_exit_candle_settles_funding_before_intrabar_exit(
+    side, rate, exit_kind, prices
+):
+    source_long = side is Side.LONG
+    stop, target = (D(90), D(105)) if source_long else (D(110), D(95))
+    high, low = map(D, prices)
+    result = replay_mirror(
+        side,
+        D(100),
+        stop,
+        target,
+        [
+            MirrorBar(D(100), D(101), D(99), D("0.5")),
+            MirrorBar(D(100), D(101), D(99), rate),
+            MirrorBar(D(100), high, low, rate),
+        ],
+        market_entry=True,
+        entry_fee=D(0),
+        exit_fee=D(0),
+    )
+    # Two settlements after entry; the entry-candle rate must be excluded.
+    price_r = D(2) if exit_kind == "target" else D(-1)
+    signed_funding_r = D(40) * rate * (1 if source_long else -1)
+    assert result.status == exit_kind
+    assert result.net_r == price_r + signed_funding_r
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+@pytest.mark.parametrize("opening", [D(89), D(111)])
+def test_funding_at_gap_exit_does_not_invent_settlement_order(side, opening):
+    stop, target = (D(90), D(105)) if side is Side.LONG else (D(110), D(95))
+    result = replay_mirror(
+        side,
+        D(100),
+        stop,
+        target,
+        [
+            MirrorBar(D(100), D(101), D(99)),
+            MirrorBar(opening, opening + 1, opening - 1, D("0.01")),
+        ],
+        market_entry=True,
+        entry_fee=D(0),
+        exit_fee=D(0),
+    )
+    assert result.status == "ambiguous"
+    assert result.net_r is None
+
+
 def test_open_mirror_marks_at_horizon_with_exit_fee():
     outcome = replay_mirror(
         Side.LONG,
