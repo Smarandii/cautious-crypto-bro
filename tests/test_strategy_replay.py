@@ -25,6 +25,123 @@ sys.modules[spec.name] = replay
 spec.loader.exec_module(replay)
 
 
+@pytest.mark.parametrize("side", ["LONG", "SHORT"])
+@pytest.mark.parametrize("rate", [-0.01, 0.01])
+@pytest.mark.parametrize("weights", [(1.0, 0.0, 0.0), (0.6, 0.4, 0.0)])
+def test_opening_funding_precedes_stop_and_uses_pre_scale_in_quantity(
+    side, rate, weights
+):
+    case = {
+        "side": side,
+        "start": 0,
+        "entry": 100.0,
+        "stop": 90.0 if side == "LONG" else 110.0,
+        "trader_tp": None,
+        "candles": [
+            {"time": 0, "high": 101.0, "low": 99.0, "close": 100.0},
+            {
+                "time": 60_000,
+                "high": 101.0 if side == "LONG" else 111.0,
+                "low": 89.0 if side == "LONG" else 99.0,
+                "close": 100.0,
+            },
+        ],
+        "events": [{"kind": "FUNDING", "time": 60_000, "rate": rate, "price": 100.0}],
+    }
+    result = replay.replay(
+        case, replay.Candidate(weights, (0.3, 0.6), 99, 1), 0, use_events=True
+    )
+    payment = weights[0] / 10 * rate * 100
+    assert result.stopped
+    assert result.funding_r == pytest.approx(payment)
+    assert result.net_r == pytest.approx(-1 + payment)
+
+
+def test_first_available_candle_settles_when_entry_precedes_its_opening():
+    case = {
+        "side": "LONG",
+        "start": 1,
+        "entry": 100.0,
+        "stop": 90.0,
+        "trader_tp": None,
+        "candles": [
+            {"time": 60_000, "high": 101.0, "low": 89.0, "close": 90.0},
+        ],
+        "events": [
+            {"kind": "FUNDING", "time": 60_000, "rate": -0.01, "price": 100.0},
+        ],
+    }
+    result = replay.replay(
+        case, replay.Candidate((1, 0, 0), (0.3, 0.6), 99, 1), 0, use_events=True
+    )
+    assert result.funding_r == pytest.approx(-0.1)
+    assert result.net_r == pytest.approx(-1.1)
+
+
+def test_opening_settlements_use_remaining_quantity_after_an_earlier_reduction():
+    case = {
+        "side": "LONG",
+        "start": 0,
+        "entry": 100.0,
+        "stop": 90.0,
+        "trader_tp": None,
+        "candles": [
+            {"time": 0, "high": 101.0, "low": 99.0, "close": 100.0},
+            {"time": 60_000, "high": 101.0, "low": 99.0, "close": 100.0},
+            {"time": 120_000, "high": 101.0, "low": 89.0, "close": 90.0},
+        ],
+        "events": [
+            {"kind": "FUNDING", "time": 60_000, "rate": -0.01, "price": 100.0},
+            {
+                "kind": "LIFECYCLE",
+                "time": 90_000,
+                "action": "REDUCE",
+                "close_pct": 50,
+                "price": 100.0,
+            },
+            {"kind": "FUNDING", "time": 120_000, "rate": -0.01, "price": 100.0},
+        ],
+    }
+    candidate = replay.Candidate((1, 0, 0), (0.3, 0.6), 99, 1)
+    result = replay.replay(case, candidate, 0, use_events=True)
+    assert result.funding_r == pytest.approx(-0.15)
+    assert result.net_r == pytest.approx(-0.65)
+    assert result.lifecycle_actions == 1
+    without_events = replay.replay(case, candidate, 0, use_events=False)
+    assert without_events.funding_r == 0
+    assert without_events.net_r == pytest.approx(-1)
+
+
+def test_opening_funding_does_not_move_lifecycle_close_ahead_of_protection():
+    case = {
+        "side": "LONG",
+        "start": 0,
+        "entry": 100.0,
+        "stop": 90.0,
+        "trader_tp": None,
+        "candles": [
+            {"time": 0, "high": 101.0, "low": 99.0, "close": 100.0},
+            {"time": 60_000, "high": 101.0, "low": 89.0, "close": 90.0},
+        ],
+        "events": [
+            {"kind": "FUNDING", "time": 60_000, "rate": -0.01, "price": 100.0},
+            {
+                "kind": "LIFECYCLE",
+                "time": 60_000,
+                "action": "CLOSE",
+                "close_pct": None,
+                "price": 100.0,
+            },
+        ],
+    }
+    result = replay.replay(
+        case, replay.Candidate((1, 0, 0), (0.3, 0.6), 99, 1), 0, use_events=True
+    )
+    assert result.stopped
+    assert result.lifecycle_actions == 0
+    assert result.net_r == pytest.approx(-1.1)
+
+
 def test_summary_uses_closed_r_results_and_chronological_drawdown() -> None:
     results = [
         replay.Result(start=1, net_r=1.0, mfe_r=1.0, stopped=False),

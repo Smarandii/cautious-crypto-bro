@@ -159,6 +159,25 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(
     assert historical_report["by_source_side"]["LONG"]["all"]["mirror"][
         "expectancy_r"
     ] == pytest.approx(float(expected_r))
+    weights = (
+        standard.policy.strategy_v2.primary_entry_risk_pct,
+        standard.policy.strategy_v2.secondary_entry_risk_pct,
+        standard.policy.strategy_v2.tertiary_entry_risk_pct,
+    )
+    fee_rate = Decimal("0.00055")
+    standard_fees_r = sum(
+        weight
+        / 100
+        / abs(order.reference_price - standard.stop_loss)
+        * (order.reference_price + standard.stop_loss)
+        * fee_rate
+        for weight, order in zip(weights, standard.orders, strict=True)
+    )
+    primary_qty_r = weights[0] / 100 / abs(entry_price - standard.stop_loss)
+    standard_funding_r = primary_qty_r * entry_price * Decimal("0.0001")
+    assert historical_report["by_source_side"]["LONG"]["all"]["standard"][
+        "expectancy_r"
+    ] == pytest.approx(float(-1 - standard_fees_r - standard_funding_r))
     assert source_long["latest_30_percent"]["paired_delta"]["count"] == 1
     for partition in source_long.values():
         assert (

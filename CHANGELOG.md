@@ -10,6 +10,28 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.138] - 2026-11-18
+
+### Fixed
+
+- Settle standard replay funding at known post-entry candle openings before
+  possible scale-in fills or stop exits. Use the position quantity already
+  held at settlement, account for prior reductions, and charge each event
+  once. Other intrabar events retain the existing protection-first ordering
+  (#618).
+
+### Verification and rollback
+
+- Synthetic regressions cover both directions and funding signs, pre-fill
+  quantity, partial reductions, repeated payments and lifecycle precedence.
+  Saved-plan ZIP-to-CLI comparison checks verify exact standard net returns
+  including fees and funding on holding and stop candles.
+- No live execution, risk policy or schema changes. Keep state when rolling
+  back to v2.2.137 and rerun affected offline reports after upgrading.
+- Candle-resolution event ordering remains a modeling limitation. Corrected
+  accounting does not establish a profitable strategy; matched comparison
+  and dedicated-account IOC validation remain pending (#554, #581).
+
 ## [2.2.137] - 2026-11-18
 
 ### Fixed
