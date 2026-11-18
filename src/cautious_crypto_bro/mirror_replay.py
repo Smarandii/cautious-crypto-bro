@@ -14,7 +14,7 @@ class MirrorBar:
     opening: Decimal
     high: Decimal
     low: Decimal
-    # Positive rates are paid by longs to shorts.
+    # Settlement at the candle opening; positive rates are paid by longs to shorts.
     funding_rate: Decimal = Decimal(0)
 
 
@@ -57,10 +57,12 @@ def replay_mirror(
 
     funding = Decimal(0)
     for bar in remaining:
+        payment = _funding_payment(bar, first_bar, sign, stop, target)
+        if payment is None:
+            return MirrorOutcome("ambiguous")
+        funding += payment
         exit_hit = _exit_hit(bar, sign, stop, target)
         if exit_hit is None:
-            if bar is not first_bar:
-                funding -= sign * bar.opening * bar.funding_rate
             continue
         status, exit_price = exit_hit
         if exit_price is None:
@@ -83,6 +85,21 @@ def replay_mirror(
         )
         / abs(entry - stop),
     )
+
+
+def _funding_payment(
+    bar: MirrorBar,
+    first_bar: MirrorBar,
+    sign: Decimal,
+    stop: Decimal,
+    target: Decimal,
+) -> Decimal | None:
+    if bar is first_bar or not bar.funding_rate:
+        return Decimal(0)
+    # A gap exit at the settlement timestamp has no known event order.
+    if not sign * (stop - bar.opening) < 0 < sign * (target - bar.opening):
+        return None
+    return -sign * bar.opening * bar.funding_rate
 
 
 def _validate_inputs(

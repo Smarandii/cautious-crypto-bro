@@ -10,6 +10,27 @@ edge; see [STRATEGY.md](STRATEGY.md) for behavior and limitations.
 
 ## [Unreleased]
 
+## [2.2.137] - 2026-11-18
+
+### Fixed
+
+- Include signed funding settlements before later intrabar mirror replay
+  exits. Continue excluding entry-candle funding. Treat a settlement
+  coincident with a gap exit as ambiguous because candle data cannot
+  establish the event order (#616).
+
+### Verification and rollback
+
+- Synthetic regressions cover both directions, positive and negative rates,
+  repeated settlements, target and stop exits, entry-candle exclusion and
+  funding/gap ambiguity. ZIP-to-CLI report checks cover a settlement on the
+  exit candle.
+- No live order behavior, risk policy or schema changes. Preserve state when
+  rolling back to v2.2.136; rerun affected offline reports after upgrading.
+- This accounting correction does not establish a profitable mirror edge.
+  Dedicated-account IOC validation and matched strategy comparisons remain
+  pending (#581, #554).
+
 ## [2.2.136] - 2026-11-18
 
 ### Added

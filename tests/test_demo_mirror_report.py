@@ -12,7 +12,10 @@ from test_execution import context, limit_intent, market_intent, policy
 from cautious_crypto_bro.execution import ExecutionPlanner
 
 
-def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path):
+@pytest.mark.parametrize("funding_on_exit", [False, True])
+def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(
+    tmp_path, funding_on_exit
+):
     planner = ExecutionPlanner()
     instrument = context("100")
     standard = planner.plan(market_intent(), policy(), instrument)
@@ -90,7 +93,12 @@ def test_mirror_report_compares_saved_plans_and_counts_missing_coverage(tmp_path
         archive.writestr(
             "forensic/market_funding/BTCUSDT.jsonl",
             json.dumps(
-                {"fundingRateTimestamp": str(settlement), "fundingRate": "0.0001"}
+                {
+                    "fundingRateTimestamp": str(
+                        settlement + (60_000 if funding_on_exit else 0)
+                    ),
+                    "fundingRate": "0.0001",
+                }
             ),
         )
 
